@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+athena.db
+qdrant_data/
+voices/
+node_modules/
+dist/
+.venv/
+venv/

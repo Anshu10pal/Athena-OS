@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink: #0b0e14;
+  --brass: #d4b36a;
+}
+
+html,
+body {
+  @apply bg-ink text-snow font-body antialiased;
+}
+
+::selection {
+  background: rgba(212, 179, 106, 0.3);
+}
+
+.card {
+  @apply bg-panel border border-line rounded-xl;
+}
+
+.btn-brass {
+  @apply bg-brass text-ink font-display font-semibold rounded-lg px-4 py-2 hover:bg-brassdim transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.input {
+  @apply w-full bg-panel2 border border-line rounded-lg px-3 py-2 text-snow placeholder-fog focus:outline-none focus:border-brass transition-colors;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --- v3 sci-fi pass --- */
+.card:not(.absolute) {
+  position: relative;
+}
+.card::before,
+.card::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-color: rgba(212, 179, 106, 0.55);
+  border-style: solid;
+  pointer-events: none;
+}
+.card::before {
+  top: -1px;
+  left: -1px;
+  border-width: 1.5px 0 0 1.5px;
+  border-top-left-radius: 4px;
+}
+.card::after {
+  bottom: -1px;
+  right: -1px;
+  border-width: 0 1.5px 1.5px 0;
+  border-bottom-right-radius: 4px;
+}
+
+@keyframes scanmount {
+  from {
+    top: 0;
+    opacity: 0.7;
+  }
+  to {
+    top: 100%;
+    opacity: 0;
+  }
+}
+.scan-mount {
+  position: relative;
+  overflow: hidden;
+}
+.scan-mount > .scanline {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent, rgba(212, 179, 106, 0.8), transparent);
+  animation: scanmount 0.6s ease-out forwards;
+  pointer-events: none;
+}
