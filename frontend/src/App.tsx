@@ -11,6 +11,8 @@ import Login from "./pages/Login";
 import Missions from "./pages/Missions";
 import OratoryDeck from "./pages/OratoryDeck";
 import PresentationArena from "./pages/PresentationArena";
+import Review from "./pages/Review";
+import Achievements from "./pages/Achievements";
 import Roadmap from "./pages/Roadmap";
 import Settings from "./pages/Settings";
 import Vault from "./pages/Vault";
@@ -59,6 +61,8 @@ export default function App() {
           <Route path="/presentation" element={<PresentationArena />} />
           <Route path="/vault" element={<Vault />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/review" element={<Review />} />
+          <Route path="/achievements" element={<Achievements />} />
         </Route>
       </Routes>
     </BrowserRouter>

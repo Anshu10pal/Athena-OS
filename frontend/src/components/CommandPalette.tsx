@@ -11,7 +11,9 @@ const COMMANDS = [
   { label: "Oratory Deck — speak", path: "/oratory" },
   { label: "Analyze a Presentation", path: "/presentation" },
   { label: "Search Knowledge Vault", path: "/vault" },
-  { label: "Settings — voice & password", path: "/settings" },
+  { label: "Review Queue — spaced repetition", path: "/review" },
+  { label: "Achievements", path: "/achievements" },
+  { label: "Settings — voice, wake word & password", path: "/settings" },
 ];
 
 export default function CommandPalette() {

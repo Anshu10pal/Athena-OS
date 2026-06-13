@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GROQ_API_KEY: str = ""
     SECRET_KEY: str = "dev-secret-change-me"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200  # 30 days (feedback phase)
     DATABASE_URL: str = "sqlite:///./athena.db"
     QDRANT_PATH: str = "./qdrant_data"
 

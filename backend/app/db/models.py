@@ -146,3 +146,27 @@ class SpeechSession(Base):
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     scores: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Achievement(Base):
+    __tablename__ = "achievements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    code: Mapped[str] = mapped_column(String(50), index=True)
+    unlocked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ReviewItem(Base):
+    __tablename__ = "review_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    roadmap_id: Mapped[int] = mapped_column(Integer)
+    node_id: Mapped[str] = mapped_column(String(40))
+    node_title: Mapped[str] = mapped_column(String(255))
+    interval_idx: Mapped[int] = mapped_column(Integer, default=0)
+    due_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    last_reviewed: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)
+    last_score: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

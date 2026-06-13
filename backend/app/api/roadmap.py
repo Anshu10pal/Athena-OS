@@ -222,6 +222,8 @@ def submit_assessment(assessment_id: int, payload: dict, user: User = Depends(ge
             roadmap.nodes = nodes
             flag_modified(roadmap, "nodes")
             nodes_out = nodes
+            from app.api.review import schedule_review
+            schedule_review(db, user.id, assessment.roadmap_id, node["id"], node["title"])
     db.commit()
     parent_bonus = None
     if passed:
@@ -230,7 +232,25 @@ def submit_assessment(assessment_id: int, payload: dict, user: User = Depends(ge
         if parent_bonus:
             xp_gained += parent_bonus["bonus_xp"]
     weak = sorted({r["topic"] for r in results if not r["ok"]})
-    return {"score": score, "passed": passed, "xp": user.xp, "xp_gained": xp_gained, "results": results, "weak_topics": weak, "nodes": nodes_out, "parent_bonus": parent_bonus}
+    new_badges = []
+    try:
+        from app.api.achievements import check_and_award, DEFS
+        from app.db.models import Achievement
+        if score == 100 and passed:
+            if not db.query(Achievement).filter(Achievement.user_id == user.id, Achievement.code == "perfect_score").first():
+                db.add(Achievement(user_id=user.id, code="perfect_score"))
+                db.commit()
+                new_badges.append("perfect_score")
+        new_badges += check_and_award(db, user)
+    except Exception:
+        pass
+    badges_meta = []
+    try:
+        from app.api.achievements import DEFS
+        badges_meta = [{"code": c, "title": DEFS[c][0]} for c in new_badges if c in DEFS]
+    except Exception:
+        pass
+    return {"score": score, "passed": passed, "xp": user.xp, "xp_gained": xp_gained, "results": results, "weak_topics": weak, "nodes": nodes_out, "parent_bonus": parent_bonus, "new_badges": badges_meta}
 
 
 MAX_DEPTH = 2  # root(0) -> sub(1) -> sub-sub(2)

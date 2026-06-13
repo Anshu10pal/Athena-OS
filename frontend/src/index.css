@@ -3,30 +3,100 @@
 @tailwind utilities;
 
 :root {
-  --ink: #0b0e14;
+  --ink: #06080C;
   --brass: #d4b36a;
+  --cyan: #5fd3e0;
+  --cyan-bright: #7fe9f0;
 }
 
 html,
 body {
-  @apply bg-ink text-snow font-body antialiased;
+  @apply bg-ink text-softwhite font-body antialiased;
+}
+
+/* radial brass + cyan glow bleeding into the page background */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 78% 12%, rgba(95, 211, 224, 0.06), transparent 45%),
+    radial-gradient(circle at 15% 88%, rgba(212, 179, 106, 0.05), transparent 45%);
 }
 
 ::selection {
-  background: rgba(212, 179, 106, 0.3);
+  background: rgba(95, 211, 224, 0.3);
 }
 
+/* glass card — backdrop blur, brass-tinted hairline border */
 .card {
-  @apply bg-panel border border-line rounded-xl;
+  position: relative;
+  background: rgba(12, 17, 25, 0.55);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(212, 179, 106, 0.2);
+  border-radius: 14px;
 }
 
+/* brass primary action with glow */
 .btn-brass {
-  @apply bg-brass text-ink font-display font-semibold rounded-lg px-4 py-2 hover:bg-brassdim transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  background: linear-gradient(135deg, #d4b36a, #b8954a);
+  color: #06080c;
+  border-radius: 10px;
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  box-shadow: 0 0 20px rgba(212, 179, 106, 0.25);
+  transition: box-shadow 0.2s, transform 0.1s;
+}
+.btn-brass:hover {
+  box-shadow: 0 0 28px rgba(212, 179, 106, 0.45);
+}
+.btn-brass:active {
+  transform: scale(0.98);
+}
+.btn-brass:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* cyan secondary / ghost action */
+.btn-cyan {
+  background: rgba(95, 211, 224, 0.1);
+  color: #7fe9f0;
+  border: 1px solid rgba(95, 211, 224, 0.4);
+  border-radius: 10px;
+  padding: 0.5rem 1rem;
+  font-weight: 500;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.btn-cyan:hover {
+  background: rgba(95, 211, 224, 0.18);
+  box-shadow: 0 0 22px rgba(95, 211, 224, 0.3);
 }
 
 .input {
-  @apply w-full bg-panel2 border border-line rounded-lg px-3 py-2 text-snow placeholder-fog focus:outline-none focus:border-brass transition-colors;
+  width: 100%;
+  background: rgba(16, 23, 31, 0.7);
+  border: 1px solid rgba(212, 179, 106, 0.2);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  color: #fff;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
+.input::placeholder { color: #9aa4b4; }
+.input:focus {
+  outline: none;
+  border-color: rgba(95, 211, 224, 0.6);
+  box-shadow: 0 0 0 3px rgba(95, 211, 224, 0.12);
+}
+
+/* utility glows */
+.glow-cyan { box-shadow: 0 0 24px rgba(95, 211, 224, 0.25); }
+.glow-brass { box-shadow: 0 0 24px rgba(212, 179, 106, 0.25); }
+.text-glow-cyan { text-shadow: 0 0 12px rgba(95, 211, 224, 0.5); }
 
 @media (prefers-reduced-motion: reduce) {
   * {
@@ -45,7 +115,7 @@ body {
   position: absolute;
   width: 12px;
   height: 12px;
-  border-color: rgba(212, 179, 106, 0.55);
+  border-color: rgba(95, 211, 224, 0.45);
   border-style: solid;
   pointer-events: none;
 }

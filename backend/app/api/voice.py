@@ -42,24 +42,14 @@ async def speak(payload: dict, user=Depends(get_current_user)):
         raise HTTPException(400, "No text provided")
     # Primary: Edge-TTS (free Microsoft neural voices, no key). Fallback: Piper (fully local).
     try:
-        import aiohttp
         import edge_tts
-        import ssl
 
         voice_name = getattr(user, "voice", None) or "en-US-AriaNeural"
-        # Corporate-proxy bypass: skip cert verification for the bing speech websocket
-        ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
-        connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-
         communicate = edge_tts.Communicate(text[:1500], voice=voice_name)
         buf = io.BytesIO()
-        async with aiohttp.ClientSession(connector=connector) as session:
-            communicate.session = session  # force edge-tts to reuse our patched session
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    buf.write(chunk["data"])
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                buf.write(chunk["data"])
         if buf.getbuffer().nbytes > 0:
             return Response(content=buf.getvalue(), media_type="audio/mpeg")
     except ImportError:

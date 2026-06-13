@@ -23,6 +23,7 @@ export default function Settings() {
   const [newPw, setNewPw] = useState("");
   const [pwMsg, setPwMsg] = useState("");
   const [testing, setTesting] = useState(false);
+  const [wakeWord, setWakeWord] = useState(localStorage.getItem("athena_wakeword") === "1");
 
   const saveProfile = async () => {
     await api("/api/profile", { method: "PATCH", body: JSON.stringify({ voice, target_role: targetRole, experience_level: level }) });
@@ -89,6 +90,25 @@ export default function Settings() {
           ))}
         </select>
         <button className="btn-brass" onClick={saveProfile}>Save profile</button>
+      </section>
+
+      <section className="card p-5 space-y-3">
+        <p className="font-mono text-[10px] tracking-[0.3em] text-fog">WAKE WORD</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-snow">Say “Hey Athena” to open chat</p>
+            <p className="text-fog text-[11px] mt-0.5">Uses your browser’s speech recognition (Chrome/Edge). Listens only while ATHENA is open.</p>
+          </div>
+          <button
+            onClick={() => { const v = !wakeWord; setWakeWord(v); localStorage.setItem("athena_wakeword", v ? "1" : "0"); }}
+            className="shrink-0 rounded-full transition-colors"
+            style={{ width: 46, height: 26, background: wakeWord ? "#5FD3E0" : "#1E2738", position: "relative" }}
+            aria-label="Toggle wake word"
+          >
+            <span style={{ position: "absolute", top: 3, left: wakeWord ? 23 : 3, width: 20, height: 20, borderRadius: "50%", background: "#06080C", transition: "left .2s" }} />
+          </button>
+        </div>
+        <p className="font-mono text-[10px] text-fog">reload the page after enabling so the listener starts</p>
       </section>
 
       <section className="card p-5 space-y-3">

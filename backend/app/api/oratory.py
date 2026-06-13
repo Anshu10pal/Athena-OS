@@ -210,7 +210,13 @@ async def analyze(
     except Exception:
         pass
 
-    return {"transcript": transcript, "metrics": metrics, "scores": scores, "xp_gained": xp_gained, "improved": improved}
+    new_badges = []
+    try:
+        from app.api.achievements import check_and_award, DEFS
+        new_badges = [{"code": c, "title": DEFS[c][0]} for c in check_and_award(db, user) if c in DEFS]
+    except Exception:
+        pass
+    return {"transcript": transcript, "metrics": metrics, "scores": scores, "xp_gained": xp_gained, "improved": improved, "new_badges": new_badges}
 
 
 @router.get("/history")

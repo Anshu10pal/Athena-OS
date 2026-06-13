@@ -1,4 +1,4 @@
-import { Database, Flame, Hexagon, MessageCircle, Mic2, Presentation, Route, Settings as SettingsIcon, Sparkles, Speech, Target, Volume2, VolumeX } from "lucide-react";
+import { Award, Database, Flame, Hexagon, MessageCircle, Mic2, Presentation, RefreshCw, Route, Settings as SettingsIcon, Sparkles, Speech, Target, Volume2, VolumeX } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { isMuted, toggleMute } from "../lib/sound";
@@ -14,8 +14,10 @@ const nav = [
   { to: "/missions", label: "Missions", icon: Target },
   { to: "/interview", label: "Interview Arena", icon: Mic2 },
   { to: "/oratory", label: "Oratory Deck", icon: Speech },
+  { to: "/review", label: "Review Queue", icon: RefreshCw },
   { to: "/presentation", label: "Presentation Arena", icon: Presentation },
   { to: "/vault", label: "Knowledge Vault", icon: Database },
+  { to: "/achievements", label: "Achievements", icon: Award },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
