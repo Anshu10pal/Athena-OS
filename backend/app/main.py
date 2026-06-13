@@ -46,6 +46,14 @@ for module in (auth, profile, chat, roadmap, interview, presentation, vault, mis
     app.include_router(module.router)
 
 
+@app.get("/")
+async def root():
+    return {
+        "status": "healthy",
+        "message": "API is running"
+    }
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "athena-os"}
