@@ -18,10 +18,6 @@ with engine.connect() as _conn:
         "ALTER TABLE roadmaps ADD COLUMN parent_node_id VARCHAR(40)",
         "ALTER TABLE users ADD COLUMN voice VARCHAR(60) DEFAULT 'en-US-AriaNeural'",
         "ALTER TABLE interview_sessions ADD COLUMN jd TEXT DEFAULT ''",
-        "ALTER TABLE roadmaps ADD COLUMN parent_roadmap_id INTEGER",
-        "ALTER TABLE roadmaps ADD COLUMN parent_node_id VARCHAR(40)",
-        "ALTER TABLE users ADD COLUMN voice VARCHAR(60) DEFAULT 'en-US-AriaNeural'",
-        "ALTER TABLE interview_sessions ADD COLUMN jd TEXT DEFAULT ''",
         "ALTER TABLE roadmaps ADD COLUMN depth INTEGER DEFAULT 0",
         "ALTER TABLE node_content ADD COLUMN meaning TEXT DEFAULT ''",
         "ALTER TABLE node_content ADD COLUMN eli5 TEXT DEFAULT ''",
@@ -46,14 +42,6 @@ for module in (auth, profile, chat, roadmap, interview, presentation, vault, mis
     app.include_router(module.router)
 
 
-@app.get("/")
-async def root():
-    return {
-        "status": "healthy",
-        "message": "API is running"
-    }
-
-
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "athena-os"}
@@ -67,9 +55,24 @@ def warmup():
     def _warm():
         try:
             from app.services.vector_store import client
-
             client()
         except Exception:
             pass
 
     threading.Thread(target=_warm, daemon=True).start()
+
+
+# --- Serve the built React frontend (MUST be last — the catch-all swallows everything below it) ---
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
+
+_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+if _dist.exists():
+    app.mount("/assets", StaticFiles(directory=_dist / "assets"), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        if full_path.startswith(("api", "docs")) or full_path == "openapi.json":
+            return {"detail": "Not Found"}
+        return FileResponse(_dist / "index.html")
