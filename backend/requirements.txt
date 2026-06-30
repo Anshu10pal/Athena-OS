@@ -1,6 +1,7 @@
 fastapi==0.115.12
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.40
+psycopg2-binary==2.9.10
 pydantic-settings==2.8.1
 openai==1.75.0
 langgraph==0.3.34
