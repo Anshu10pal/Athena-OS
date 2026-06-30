@@ -58,6 +58,11 @@ for module in (auth, profile, chat, roadmap, interview, presentation, vault, mis
     app.include_router(module.router)
 
 
+@app.get("/")
+def root():
+    return {"service": "athena-os", "status": "ok", "docs": "/docs", "health": "/api/health"}
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "athena-os"}
