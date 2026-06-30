@@ -11,6 +11,7 @@ import Login from "./pages/Login";
 import Missions from "./pages/Missions";
 import OratoryDeck from "./pages/OratoryDeck";
 import PresentationArena from "./pages/PresentationArena";
+import Communication from "./pages/Communication";
 import Review from "./pages/Review";
 import Achievements from "./pages/Achievements";
 import Roadmap from "./pages/Roadmap";
@@ -51,8 +52,8 @@ export default function App() {
       <LevelUpOverlay />
       <Routes>
         <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
-        <Route path="/" element={user ? <Hub /> : <Navigate to="/login" />} />
         <Route element={user ? <Layout /> : <Navigate to="/login" />}>
+          <Route path="/" element={<Hub />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/roadmap" element={<Roadmap />} />
           <Route path="/missions" element={<Missions />} />
@@ -62,6 +63,7 @@ export default function App() {
           <Route path="/vault" element={<Vault />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/review" element={<Review />} />
+          <Route path="/communication" element={<Communication />} />
           <Route path="/achievements" element={<Achievements />} />
         </Route>
       </Routes>

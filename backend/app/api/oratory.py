@@ -204,6 +204,18 @@ async def analyze(
     session = SpeechSession(user_id=user.id, topic=topic, mode=mode, target_secs=target_secs, transcript=transcript, metrics=metrics, scores=scores)
     db.add(session)
     db.add(VaultEntry(user_id=user.id, kind="speech", title=f"Speech: {topic[:60]}", content=transcript[:4000], extra={"metrics": metrics, "scores": scores}))
+    # Unify into the Communication gym (Speaking pillar) so the radar reads from one place.
+    try:
+        from app.api.communication import speaking_overall
+        from app.db.models import CommunicationSession
+        db.add(CommunicationSession(
+            user_id=user.id, modality="speaking", difficulty=mode,
+            prompt=topic, response=transcript[:2000], metrics=metrics,
+            scores={k: v for k, v in (scores or {}).items() if isinstance(v, (int, float))},
+            overall=speaking_overall(scores),
+        ))
+    except Exception:
+        pass
     db.commit()
     try:
         add_memory(user.id, f"Practiced impromptu speaking on '{topic}'. Filler rate {filler_rate}/min, WPM {wpm}. Tip: {scores.get('tip', '')}", kind="speech")

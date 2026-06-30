@@ -165,8 +165,25 @@ class ReviewItem(Base):
     roadmap_id: Mapped[int] = mapped_column(Integer)
     node_id: Mapped[str] = mapped_column(String(40))
     node_title: Mapped[str] = mapped_column(String(255))
+    kind: Mapped[str] = mapped_column(String(20), default="node")  # node|vocab|concept
+    detail: Mapped[str] = mapped_column(Text, default="")           # definition/context for vocab & concept cards
     interval_idx: Mapped[int] = mapped_column(Integer, default=0)
     due_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     last_reviewed: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)
     last_score: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CommunicationSession(Base):
+    __tablename__ = "communication_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    modality: Mapped[str] = mapped_column(String(20), index=True)  # writing|listening|reading|speaking
+    difficulty: Mapped[str] = mapped_column(String(20), default="Intermediate")
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    response: Mapped[str] = mapped_column(Text, default="")
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    scores: Mapped[dict] = mapped_column(JSON, default=dict)
+    overall: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

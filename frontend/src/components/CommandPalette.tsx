@@ -11,6 +11,7 @@ const COMMANDS = [
   { label: "Oratory Deck — speak", path: "/oratory" },
   { label: "Analyze a Presentation", path: "/presentation" },
   { label: "Search Knowledge Vault", path: "/vault" },
+  { label: "Communication Gym — listening, speaking, reading, writing", path: "/communication" },
   { label: "Review Queue — spaced repetition", path: "/review" },
   { label: "Achievements", path: "/achievements" },
   { label: "Settings — voice, wake word & password", path: "/settings" },

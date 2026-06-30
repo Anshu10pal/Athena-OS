@@ -12,18 +12,20 @@ from app.services.vector_store import search_memory
 
 
 def detect_intent(message: str) -> str:
-    try:
-        result = chat_json(
-            [
-                {"role": "system", "content": prompts.COMMANDER_INTENT},
-                {"role": "user", "content": message},
-            ],
-            fast=True,
-        )
-        intent = result.get("intent", "general")
-    except Exception:
-        intent = "general"
-    return intent if intent in {"learn", "interview", "presentation", "research", "memory", "general"} else "general"
+    """Instant keyword-based routing. Kept off the LLM critical path so streaming
+    starts immediately — the agent badge is cosmetic, so a heuristic is plenty."""
+    m = message.lower()
+    if any(w in m for w in ("interview", "hiring", "recruiter", "screening round")):
+        return "interview"
+    if any(w in m for w in ("present", "deck", "slide", "pitch")):
+        return "presentation"
+    if any(w in m for w in ("remember", "recall", "what did i", "last time", "previously", "my notes", "from the vault", "we discussed")):
+        return "memory"
+    if any(w in m for w in ("research", "compare", "trade-off", "tradeoff", " vs ", "versus", "deep dive", "pros and cons")):
+        return "research"
+    if any(w in m for w in ("explain", "teach", "learn", "how do", "how does", "what is", "what are", "why does", "concept", "understand", "difference between")):
+        return "learn"
+    return "general"
 
 
 def build_context(user, message: str) -> tuple[str, str]:
@@ -46,13 +48,8 @@ def route(user, message: str) -> dict:
 
     Intent detection and memory retrieval are independent -> run them in parallel.
     """
-    from concurrent.futures import ThreadPoolExecutor
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        intent_f = pool.submit(detect_intent, message)
-        context_f = pool.submit(build_context, user, message)
-        intent = intent_f.result()
-        profile_str, mem_str = context_f.result()
+    intent = detect_intent(message)  # instant heuristic
+    profile_str, mem_str = build_context(user, message)
 
     if intent == "learn":
         system = prompts.LEARNING.format(profile=profile_str, memories=mem_str)

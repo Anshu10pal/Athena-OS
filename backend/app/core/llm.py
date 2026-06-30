@@ -31,6 +31,8 @@ PROVIDERS = [
 
 # Fast lane for short internal calls (intent detection, scoring). Groq first: low latency.
 FAST_ORDER = ["groq", "gemini"]
+# Chat streaming: Groq first for far lower time-to-first-token; Gemini as quality fallback.
+STREAM_ORDER = ["groq", "gemini"]
 
 
 def _clients():
@@ -85,10 +87,9 @@ def chat_stream(messages: list[dict], temperature: float = 0.7) -> Generator[str
     if not clients:
         raise RuntimeError("No LLM API keys configured. Copy .env.example to .env and add keys.")
     last_err: Exception = RuntimeError("No provider available")
-    for p in PROVIDERS:
-        if p["name"] not in clients:
-            continue
-        client, model = clients[p["name"]]
+    order = [n for n in STREAM_ORDER if n in clients] or list(clients.keys())
+    for name in order:
+        client, model = clients[name]
         try:
             stream = client.chat.completions.create(
                 model=model, messages=messages, temperature=temperature, stream=True
@@ -99,7 +100,7 @@ def chat_stream(messages: list[dict], temperature: float = 0.7) -> Generator[str
                     yield delta
             return
         except Exception as e:
-            logger.warning("Provider %s stream failed (%s); falling back.", p["name"], e)
+            logger.warning("Provider %s stream failed (%s); falling back.", name, e)
             last_err = e
     raise last_err
 

@@ -1,6 +1,6 @@
-import { Award, Database, Flame, Hexagon, MessageCircle, Mic2, Presentation, RefreshCw, Route, Settings as SettingsIcon, Sparkles, Speech, Target, Volume2, VolumeX } from "lucide-react";
+import { Award, Database, Flame, Hexagon, MessageCircle, MessagesSquare, Mic2, Presentation, RefreshCw, Route, Settings as SettingsIcon, Sparkles, Speech, Target, Volume2, VolumeX } from "lucide-react";
 import { useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { isMuted, toggleMute } from "../lib/sound";
 import { useAuth } from "../store/auth";
 import HudTelemetry from "./HudTelemetry";
@@ -14,6 +14,7 @@ const nav = [
   { to: "/missions", label: "Missions", icon: Target },
   { to: "/interview", label: "Interview Arena", icon: Mic2 },
   { to: "/oratory", label: "Oratory Deck", icon: Speech },
+  { to: "/communication", label: "Communication Gym", icon: MessagesSquare },
   { to: "/review", label: "Review Queue", icon: RefreshCw },
   { to: "/presentation", label: "Presentation Arena", icon: Presentation },
   { to: "/vault", label: "Knowledge Vault", icon: Database },
@@ -22,6 +23,8 @@ const nav = [
 ];
 
 export default function Layout() {
+  const { pathname } = useLocation();
+  const immersive = pathname === "/" || pathname === "/chat";
   const { user, logout } = useAuth();
   const [muted, setMuted] = useState(isMuted());
   const xp = user?.xp ?? 0;
@@ -30,7 +33,7 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen flex relative">
-      <ParticleField />
+      {!immersive && <ParticleField />}
       <aside
         className="w-60 shrink-0 border-r border-line flex flex-col relative overflow-hidden"
         style={{ zIndex: 10, background: "linear-gradient(180deg, #131825 0%, #0E121B 55%, #0B0E14 100%)" }}
@@ -116,7 +119,7 @@ export default function Layout() {
             </button>
           </div>
         </header>
-        <main className="flex-1 overflow-y-auto px-8 py-6">
+        <main className={immersive ? "flex-1 relative overflow-hidden" : "flex-1 overflow-y-auto px-8 py-6"}>
           <Outlet />
         </main>
       </div>

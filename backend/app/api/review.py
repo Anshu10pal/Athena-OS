@@ -98,6 +98,33 @@ def start_review(review_id: int, user: User = Depends(get_current_user), db: Ses
     item = db.get(ReviewItem, review_id)
     if not item or item.user_id != user.id:
         raise HTTPException(404, "Review not found")
+
+    # Vocab/concept cards (from the Communication gym) generate a fresh recall question.
+    if getattr(item, "kind", "node") in ("vocab", "concept"):
+        try:
+            q = chat_json(
+                [
+                    {"role": "system", "content": (
+                        "Create ONE multiple-choice recall question to test whether the user knows this "
+                        f"{item.kind}: '{item.node_title}'. Context: {item.detail or 'general usage'}. "
+                        "Return ONLY JSON: {\"q\": str, \"options\": [4 strings], \"answer\": int index}."
+                    )},
+                    {"role": "user", "content": "Generate it."},
+                ],
+                fast=True,
+            )
+            opts = q.get("options", [])
+            if len(opts) >= 2:
+                return {"review_id": item.id, "node_title": item.node_title,
+                        "questions": [{"q": q.get("q", f"What does '{item.node_title}' mean?"),
+                                       "options": opts, "answer": int(q.get("answer", 0))}]}
+        except Exception:
+            pass
+        return {"review_id": item.id, "node_title": item.node_title,
+                "questions": [{"q": f"Recall: what does '{item.node_title}' mean?",
+                               "options": [item.detail or "the correct meaning", "an unrelated meaning", "none of these", "not sure"],
+                               "answer": 0}]}
+
     # Reuse the node's most recent assessment question pool; sample 5.
     import random
 

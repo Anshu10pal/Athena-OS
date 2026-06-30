@@ -48,6 +48,14 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
     last_speech = db.query(SpeechSession).filter(SpeechSession.user_id == user.id).order_by(SpeechSession.id.desc()).first()
     vault_count = db.query(VaultEntry).filter(VaultEntry.user_id == user.id).count()
 
+    _comm_score = None
+    try:
+        from app.db.models import CommunicationSession
+        _cs = db.query(CommunicationSession).filter(CommunicationSession.user_id == user.id).order_by(CommunicationSession.id.desc()).limit(8).all()
+        if _cs:
+            _comm_score = round(sum(c.overall for c in _cs) / len(_cs))
+    except Exception:
+        pass
     review_info = {"reviews_due": 0, "memory_strength": 1.0}
     achievements_unlocked = 0
     try:
@@ -65,6 +73,7 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
         "reviews_due": review_info.get("reviews_due", 0),
         "memory_strength": review_info.get("memory_strength", 1.0),
         "achievements_unlocked": achievements_unlocked,
+        "communication_score": _comm_score,
         "oratory_filler_rate": (last_speech.metrics or {}).get("filler_rate_per_min") if last_speech else None,
         "speeches": db.query(SpeechSession).filter(SpeechSession.user_id == user.id).count(),
         "vault_entries": vault_count,

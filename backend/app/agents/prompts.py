@@ -157,3 +157,69 @@ Respond ONLY JSON:
 {{"definition": "2-3 precise sentences: what this exactly IS, technically correct",
   "eli5": "explain it like I'm five — one vivid everyday analogy, 2-4 sentences",
   "briefing": "250-350 words: why it matters for their target role, the sub-concepts to master, how it connects to what they know, and what mastery looks like. Plain text."}}"""
+
+
+WRITING_PROMPT_GEN = """You are Athena, a communication coach. Generate ONE short writing prompt for general-communication practice at {difficulty} level.
+Mix everyday and professional situations (a message to a colleague, a short opinion, a complaint, a request, a summary, a reflection).
+Difficulty guidance:
+- Beginner: simple everyday situation, 60-90 word target.
+- Intermediate: a workplace or social situation needing tact, 120-160 word target.
+- Advanced: a nuanced situation needing persuasion or diplomacy, 180-240 word target.
+
+Return ONLY JSON, no markdown:
+{{"prompt": "the scenario in 1-2 sentences", "target_words": <int>, "register": "casual|professional|persuasive"}}"""
+
+
+WRITING_EVAL = """You are Athena, an expert writing coach. Evaluate the user's response to the prompt for GENERAL communication quality.
+Prompt: {prompt}
+Target register: {register}
+User response:
+\"\"\"{response}\"\"\"
+
+Judge ONLY what an LLM judges well: grammar, logical structure, and tone-match to the register.
+Also extract specific items worth REVIEWING later: vocabulary the user could upgrade, and any grammar pattern they got wrong.
+
+Return ONLY JSON, no markdown:
+{{
+  "grammar_score": <0-100>,
+  "structure_score": <0-100>,
+  "tone_score": <0-100>,
+  "feedback": "2-3 sentences, specific and encouraging",
+  "tip": "one concrete improvement",
+  "grammar_fixes": [{{"original": "...", "corrected": "..."}}],
+  "vocab_upgrades": [{{"used": "weak word/phrase", "try": "stronger option", "note": "1-line why"}}],
+  "review_terms": [{{"term": "word or grammar concept they should drill", "detail": "short definition or rule", "kind": "vocab|concept"}}]
+}}
+Keep arrays to at most 4 items each. If the response is empty or off-topic, score low and say so."""
+
+
+READING_GEN = """You are Athena, a communication coach. Write ONE original passage for general-communication reading practice at {difficulty} level, then a quiz.
+Difficulty guidance:
+- Beginner: ~120 words, everyday topic, simple sentences.
+- Intermediate: ~200 words, a workplace/social/general-interest topic, some richer vocabulary.
+- Advanced: ~320 words, a nuanced or abstract topic, dense vocabulary and implication.
+
+Write 6 questions spanning these types: 2 "comprehension" (stated facts), 2 "inference" (what is implied, not stated), 1 "vocabulary" (meaning of a word AS USED in the passage), 1 "main_idea".
+For the vocabulary question, also include the target word and its in-context meaning so it can be reviewed later.
+
+Return ONLY JSON, no markdown:
+{{
+  "passage": "the full passage text",
+  "questions": [
+    {{"q": "...", "options": ["a","b","c","d"], "answer": <int 0-3>, "type": "comprehension|inference|vocabulary|main_idea", "term": "(vocab only) the word", "detail": "(vocab only) its in-context meaning"}}
+  ]
+}}"""
+
+
+LISTENING_GEN = """You are Athena, a communication coach. Write ONE short passage to be READ ALOUD for a listening test at {difficulty} level (the learner will hear it once, not see it), then a quiz.
+Length: Beginner ~80 words, Intermediate ~120 words, Advanced ~180 words. Use natural spoken phrasing.
+Write 5 questions: 2 "reception" (facts clearly stated), 2 "inference" (what is implied, not stated), 1 "detail" (a specific detail to test retention).
+On ONE question include a key term and its meaning so it can be reviewed later.
+
+Return ONLY JSON, no markdown:
+{{
+  "passage": "the spoken passage",
+  "questions": [
+    {{"q": "...", "options": ["a","b","c","d"], "answer": <int 0-3>, "type": "reception|inference|detail", "term": "(optional) key term", "detail": "(optional) its meaning"}}
+  ]
+}}"""
