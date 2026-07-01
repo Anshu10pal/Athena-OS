@@ -1,5 +1,9 @@
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api import achievements, analytics, auth, briefing, chat, communication, interview, missions, oratory, presentation, profile, review, roadmap, vault, voice
 from app.db import models  # noqa: F401  (register models)
@@ -58,11 +62,6 @@ for module in (auth, profile, chat, roadmap, interview, presentation, vault, mis
     app.include_router(module.router)
 
 
-@app.get("/")
-def root():
-    return {"service": "athena-os", "status": "ok", "docs": "/docs", "health": "/api/health"}
-
-
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "athena-os"}
@@ -82,3 +81,21 @@ def warmup():
             pass
 
     threading.Thread(target=_warm, daemon=True).start()
+
+
+frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if frontend_dist.exists():
+    assets_dir = frontend_dist / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_frontend(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+
+        requested_file = frontend_dist / full_path
+        if requested_file.is_file():
+            return FileResponse(requested_file)
+
+        return FileResponse(frontend_dist / "index.html")
