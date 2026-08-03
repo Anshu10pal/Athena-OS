@@ -56,7 +56,7 @@ export default function Vault() {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && search()}
         />
-        <button className="btn-brass shrink-0" onClick={search}>
+        <button className="btn-accent shrink-0" onClick={search}>
           <Search size={18} />
         </button>
       </div>
@@ -69,7 +69,7 @@ export default function Vault() {
           ) : (
             <ul className="space-y-3">
               {hits.map((h, i) => (
-                <li key={i} className="text-sm border-l-2 border-brass pl-3">
+                <li key={i} className="text-sm border-l-2 border-accent pl-3">
                   <p className="whitespace-pre-wrap">{h.text}</p>
                   <p className="text-xs font-mono text-fog mt-1">
                     {h.kind} · relevance {h.score.toFixed(2)}
@@ -85,7 +85,7 @@ export default function Vault() {
         <h3 className="font-display text-sm text-fog">Save a note</h3>
         <input className="input" placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
         <textarea className="input min-h-24" placeholder="What did you learn?" value={content} onChange={(e) => setContent(e.target.value)} />
-        <button className="btn-brass" onClick={saveNote}>
+        <button className="btn-accent" onClick={saveNote}>
           Save to vault
         </button>
       </div>
@@ -95,7 +95,7 @@ export default function Vault() {
           <div key={e.id} className="card px-4 py-3">
             <div className="flex items-center justify-between">
               <p className="font-medium text-sm">{e.title}</p>
-              <span className="text-[10px] font-mono uppercase tracking-widest text-brass">{e.kind}</span>
+              <span className="text-[10px] font-mono uppercase tracking-widest text-accent">{e.kind}</span>
             </div>
             <p className="text-fog text-sm mt-1 line-clamp-2">{e.content}</p>
           </div>

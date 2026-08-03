@@ -1,6 +1,4 @@
 let ctx: AudioContext | null = null;
-let humOsc: OscillatorNode | null = null;
-let humGain: GainNode | null = null;
 let muted = localStorage.getItem("athena_muted") === "1";
 
 function ac(): AudioContext {
@@ -13,7 +11,6 @@ export const isMuted = () => muted;
 export function toggleMute(): boolean {
   muted = !muted;
   localStorage.setItem("athena_muted", muted ? "1" : "0");
-  if (muted) stopHum();
   return muted;
 }
 
@@ -33,43 +30,20 @@ function blip(freq: number, t0: number, dur: number, vol = 0.06) {
 
 export function chime() {
   if (muted) return;
-  blip(660, 0, 0.25);
-  blip(990, 0.12, 0.3);
+  blip(660, 0, 0.2, 0.05);
 }
 
 export function unlock() {
   if (muted) return;
-  blip(440, 0, 0.18, 0.05);
-  blip(554, 0.1, 0.18, 0.05);
-  blip(659, 0.2, 0.35, 0.06);
+  blip(660, 0, 0.2, 0.05);
 }
 
 export function levelUpSound() {
   if (muted) return;
-  [523, 659, 784, 1046].forEach((f, i) => blip(f, i * 0.1, 0.4, 0.07));
+  blip(660, 0, 0.2, 0.05);
 }
 
-export function startHum() {
-  if (muted || humOsc) return;
-  const a = ac();
-  humOsc = a.createOscillator();
-  humGain = a.createGain();
-  humOsc.type = "sine";
-  humOsc.frequency.value = 110;
-  humGain.gain.value = 0.015;
-  humOsc.connect(humGain).connect(a.destination);
-  humOsc.start();
-}
-
-export function stopHum() {
-  if (humOsc) {
-    try {
-      humOsc.stop();
-    } catch {
-      /* already stopped */
-    }
-    humOsc.disconnect();
-    humOsc = null;
-    humGain = null;
-  }
-}
+// No-ops kept so existing call sites (e.g. Chat.tsx while awaiting a response)
+// don't need to change — the ambient "thinking" drone has been removed.
+export function startHum() {}
+export function stopHum() {}

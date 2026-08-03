@@ -1,7 +1,6 @@
 import { Mic, Send, Square, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import GeoCore from "../components/GeoCore";
 import { getToken, streamChat } from "../lib/api";
 import { startHum, stopHum } from "../lib/sound";
 import { useAudioReactive } from "../lib/useMicLevel";
@@ -22,7 +21,6 @@ export default function Chat() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const sentFromUrl = useRef(false);
-  const mouse = useRef({ x: 0, y: 0 });
   const orb = useOrb();
   const { attach, detach } = useAudioReactive();
   const [params, setParams] = useSearchParams();
@@ -207,46 +205,40 @@ export default function Chat() {
   };
 
   const chatting = messages.length > 0;
-  const onMove = (e: React.MouseEvent) => {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    mouse.current = { x: (e.clientX - r.left) / r.width - 0.5, y: (e.clientY - r.top) / r.height - 0.5 };
-  };
 
   return (
-    <div onMouseMove={onMove} style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
-      <GeoCore mouse={mouse} dim={chatting} />
-
-      {/* state label, top-center */}
-      <div style={{ position: "absolute", top: chatting ? 14 : "26%", left: 0, right: 0, textAlign: "center", zIndex: 10, pointerEvents: "none", transition: "top .5s" }}>
-        <p style={{ fontFamily: "monospace", fontSize: 11, letterSpacing: 6, color: "#5FD3E0", textTransform: "uppercase" }}>{orb.state}</p>
-        {!chatting && (
-          <p style={{ margin: "14px auto 0", maxWidth: 460, color: "#E6ECF4", fontSize: 15, lineHeight: 1.7 }}>
-            Ask Athena to teach a topic, plan your roadmap, or recall what you've learned. <span style={{ color: "#9AA4B4" }}>(Ctrl+K works anywhere.)</span>
+    <div className="h-full flex flex-col bg-ink">
+      {!chatting ? (
+        <div className="flex-1 flex flex-col items-center justify-center text-center px-4">
+          <p className="mx-auto max-w-md text-fog text-sm leading-relaxed">
+            Ask Athena to teach a topic, plan your roadmap, or recall what you've learned.{" "}
+            <span className="text-fog/70">(Ctrl+K works anywhere.)</span>
           </p>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="text-center pt-4 pb-1 shrink-0">
+          <p className="font-mono text-[11px] tracking-[0.3em] text-accent uppercase">{orb.state}</p>
+        </div>
+      )}
 
-      {/* messages — translucent glass column over the dimmed core */}
       {chatting && (
-        <div style={{ position: "absolute", top: 60, bottom: 96, left: 0, right: 0, overflowY: "auto", zIndex: 10 }}>
-          <div style={{ maxWidth: 760, margin: "0 auto", padding: "0 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className="flex-1 overflow-y-auto flex flex-col justify-end">
+          <div className="max-w-3xl mx-auto px-6 py-4 flex flex-col gap-3 w-full">
             {messages.map((m, i) => {
               const isLast = i === messages.length - 1;
               const streaming = isLast && m.role === "assistant" && orb.state === "speaking" && !voiceReplies;
               return (
-                <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
-                  <div style={{
-                    maxWidth: "82%", borderRadius: 14, padding: "12px 16px", fontSize: 14, whiteSpace: "pre-wrap", lineHeight: 1.6,
-                    background: m.role === "user" ? "rgba(95,211,224,0.1)" : "rgba(16,23,33,0.66)",
-                    backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)",
-                    border: m.role === "user" ? "1px solid rgba(95,211,224,0.35)" : "1px solid rgba(212,179,106,0.22)",
-                    color: "#fff",
-                  }}>
+                <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed border ${
+                      m.role === "user" ? "bg-accent/10 border-accent/30 text-snow" : "card text-snow"
+                    }`}
+                  >
                     {m.intent && m.role === "assistant" && (
-                      <p style={{ fontSize: 10, fontFamily: "monospace", letterSpacing: 2, color: "#5FD3E0", textTransform: "uppercase", margin: "0 0 6px" }}>{m.intent} agent</p>
+                      <p className="text-[10px] font-mono tracking-wider text-accent uppercase mb-1.5">{m.intent} agent</p>
                     )}
-                    {m.content || <span style={{ color: "#9AA4B4" }}>…</span>}
-                    {streaming && <span style={{ display: "inline-block", width: 6, height: 14, background: "#5FD3E0", marginLeft: 2, verticalAlign: "middle" }} className="animate-pulse" />}
+                    {m.content || <span className="text-fog">…</span>}
+                    {streaming && <span className="inline-block w-1.5 h-3.5 bg-accent ml-0.5 align-middle animate-pulse" />}
                   </div>
                 </div>
               );
@@ -256,34 +248,32 @@ export default function Chat() {
         </div>
       )}
 
-      {/* docked input bar */}
-      <div style={{ position: "absolute", bottom: 22, left: 0, right: 0, zIndex: 20, display: "flex", justifyContent: "center", padding: "0 24px" }}>
-        <div style={{
-          display: "flex", alignItems: "center", gap: 10, width: "100%", maxWidth: 760,
-          background: "rgba(12,17,25,0.7)", backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)",
-          border: "1px solid rgba(95,211,224,0.3)", borderRadius: 16, padding: "10px 12px",
-          boxShadow: "0 0 30px rgba(95,211,224,0.12)",
-        }}>
-          <button onClick={toggleMic} title={recording ? "Stop (auto-stops on pause)" : "Speak to Athena"}
-            style={{ borderRadius: 10, border: "1px solid rgba(95,211,224,0.25)", padding: "8px 10px", cursor: "pointer",
-              background: recording ? "#D98A6A" : "rgba(95,211,224,0.08)", color: recording ? "#06080C" : "#5FD3E0" }}>
+      <div className="shrink-0 px-6 pb-6 pt-2">
+        <div className="max-w-3xl mx-auto flex items-center gap-2 card p-2.5">
+          <button
+            onClick={toggleMic}
+            title={recording ? "Stop (auto-stops on pause)" : "Speak to Athena"}
+            className={`rounded-lg p-2 border transition-colors ${
+              recording ? "bg-danger text-ink border-danger" : "bg-panel2 text-accent border-line hover:border-accent/50"
+            }`}
+          >
             {recording ? <Square size={18} /> : <Mic size={18} />}
           </button>
-          <button onClick={() => setVoiceReplies((v) => !v)} title={voiceReplies ? "Voice replies on" : "Voice replies off"}
-            style={{ borderRadius: 10, border: "1px solid rgba(95,211,224,0.25)", padding: "8px 10px", cursor: "pointer",
-              background: "rgba(95,211,224,0.08)", color: voiceReplies ? "#5FD3E0" : "#9AA4B4" }}>
+          <button
+            onClick={() => setVoiceReplies((v) => !v)}
+            title={voiceReplies ? "Voice replies on" : "Voice replies off"}
+            className={`rounded-lg p-2 border border-line bg-panel2 transition-colors ${voiceReplies ? "text-accent" : "text-fog"}`}
+          >
             {voiceReplies ? <Volume2 size={18} /> : <VolumeX size={18} />}
           </button>
           <input
-            style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#fff", fontSize: 14, padding: "0 6px" }}
+            className="flex-1 bg-transparent border-none outline-none text-snow text-sm px-1.5"
             placeholder="Ask Athena anything…"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
           />
-          <button onClick={() => send()} disabled={orb.state === "thinking"}
-            style={{ borderRadius: 12, border: "none", cursor: "pointer", padding: "9px 14px",
-              background: "linear-gradient(135deg,#D4B36A,#b8954a)", color: "#06080C", boxShadow: "0 0 18px rgba(212,179,106,0.35)" }}>
+          <button onClick={() => send()} disabled={orb.state === "thinking"} className="btn-accent px-3.5 py-2.5 rounded-lg">
             <Send size={18} />
           </button>
         </div>

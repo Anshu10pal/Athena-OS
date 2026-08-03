@@ -4,11 +4,12 @@ import { api } from "../lib/api";
 import { AnimatedNumber, DecryptText } from "../lib/fx";
 import { unlock } from "../lib/sound";
 import { useAuth } from "../store/auth";
+import ScoreBar from "../components/ScoreBar";
 
 type Modality = "listening" | "speaking" | "reading" | "writing";
 type Difficulty = "Beginner" | "Intermediate" | "Advanced";
 
-const ACCENT: Record<Modality, string> = { listening: "#5FD3E0", speaking: "#D4B36A", reading: "#8B7FD6", writing: "#7FB58C" };
+const ACCENT: Record<Modality, string> = { listening: "#38BDF8", speaking: "#FBBF24", reading: "#A78BFA", writing: "#34D399" };
 const TILES: { mode: Modality; icon: string; desc: string }[] = [
   { mode: "listening", icon: "∿", desc: "Athena reads a passage aloud — then tests reception, inference & recall." },
   { mode: "speaking", icon: "◉", desc: "Impromptu speech with pacing, fillers, structure & delivery scoring." },
@@ -65,7 +66,7 @@ export default function Communication() {
           <div className="flex gap-1 bg-panel/60 p-1 rounded-lg border border-line">
             {(["Beginner", "Intermediate", "Advanced"] as Difficulty[]).map((d) => (
               <button key={d} onClick={() => setDifficulty(d)}
-                className={`text-[11px] px-3 py-1.5 rounded-md transition-colors ${difficulty === d ? "bg-cyan/15 text-cyanbright" : "text-fog hover:text-softwhite"}`}>{d}</button>
+                className={`text-[11px] px-3 py-1.5 rounded-md transition-colors ${difficulty === d ? "bg-info/15 text-info" : "text-fog hover:text-softwhite"}`}>{d}</button>
             ))}
           </div>
         </div>
@@ -75,8 +76,8 @@ export default function Communication() {
         <div className="grid grid-cols-2 gap-4">
           {TILES.map((t) => (
             <button key={t.mode} onClick={() => setView(t.mode)}
-              className="card p-4 text-left transition-transform hover:-translate-y-1 hover:border-cyan/50 group">
-              <div className="text-2xl mb-2" style={{ color: ACCENT[t.mode], textShadow: `0 0 11px ${ACCENT[t.mode]}99` }}>{t.icon}</div>
+              className="card p-4 text-left transition-transform hover:-translate-y-1 hover:border-info/50 group">
+              <div className="text-2xl mb-2" style={{ color: ACCENT[t.mode] }}>{t.icon}</div>
               <p className="text-[15px] font-medium text-snow capitalize">{t.mode}</p>
               <p className="text-[11px] text-fog mt-1.5 leading-snug min-h-[46px]">{t.desc}</p>
               <div className="flex items-center gap-2 mt-2.5 font-mono text-[9.5px] text-fog">
@@ -98,11 +99,11 @@ export default function Communication() {
           <p className="font-display text-4xl font-semibold text-snow mt-1 mb-1">{radar?.communication != null ? <AnimatedNumber value={radar.communication} /> : "—"}</p>
           <svg viewBox="0 0 220 220" className="w-[210px] h-[210px]" role="img" aria-label="Communication radar">
             {[90, 60, 30].map((r) => (
-              <polygon key={r} points={`110,${110 - r} ${110 + r},110 110,${110 + r} ${110 - r},110`} fill="none" stroke="#1E2738" strokeWidth="1" />
+              <polygon key={r} points={`110,${110 - r} ${110 + r},110 110,${110 + r} ${110 - r},110`} fill="none" stroke="#475569" strokeWidth="1" />
             ))}
-            <line x1="110" y1="20" x2="110" y2="200" stroke="#1E2738" strokeWidth="1" />
-            <line x1="20" y1="110" x2="200" y2="110" stroke="#1E2738" strokeWidth="1" />
-            <polygon points={poly} fill="rgba(95,211,224,0.15)" stroke="#5FD3E0" strokeWidth="1.5" />
+            <line x1="110" y1="20" x2="110" y2="200" stroke="#475569" strokeWidth="1" />
+            <line x1="20" y1="110" x2="200" y2="110" stroke="#475569" strokeWidth="1" />
+            <polygon points={poly} fill="rgba(34,197,94,0.15)" stroke="#22C55E" strokeWidth="1.5" />
             <circle cx={pt(radar?.listening ?? 0, "t").split(",")[0]} cy={pt(radar?.listening ?? 0, "t").split(",")[1]} r="3" fill={ACCENT.listening} />
             <circle cx={pt(radar?.speaking ?? 0, "r").split(",")[0]} cy={pt(radar?.speaking ?? 0, "r").split(",")[1]} r="3" fill={ACCENT.speaking} />
             <circle cx={pt(radar?.reading ?? 0, "b").split(",")[0]} cy={pt(radar?.reading ?? 0, "b").split(",")[1]} r="3" fill={ACCENT.reading} />
@@ -159,7 +160,8 @@ function Writing({ difficulty, onBack, refresh }: { difficulty: Difficulty; onBa
   };
 
   const ORDER = ["grammar", "vocabulary", "structure", "precision", "clarity", "tone"];
-  const color = (v: number) => (v >= 75 ? "#7FB58C" : v >= 55 ? "#D4B36A" : "#D98A6A");
+  const color = (v: number) => (v >= 75 ? "#22C55E" : v >= 55 ? "#F59E0B" : "#EF4444");
+  const tone = (v: number) => (v >= 75 ? "accent" : v >= 55 ? "warning" : "danger") as "accent" | "warning" | "danger";
 
   return (
     <div className="w-full max-w-3xl mx-auto space-y-4">
@@ -177,8 +179,8 @@ function Writing({ difficulty, onBack, refresh }: { difficulty: Difficulty; onBa
           <div className="flex items-center justify-between">
             <span className="font-mono text-[10px] text-fog">{words} / {prompt?.target_words ?? 0} words</span>
             <div className="flex gap-2">
-              <button className="btn-cyan text-sm" onClick={load} disabled={busy}>New prompt</button>
-              <button className="btn-brass" onClick={analyze} disabled={busy || words < 5}>{busy ? "Analyzing…" : "Analyze response"}</button>
+              <button className="btn-secondary text-sm" onClick={load} disabled={busy}>New prompt</button>
+              <button className="btn-accent" onClick={analyze} disabled={busy || words < 5}>{busy ? "Analyzing…" : "Analyze response"}</button>
             </div>
           </div>
         </>
@@ -195,22 +197,14 @@ function Writing({ difficulty, onBack, refresh }: { difficulty: Difficulty; onBa
             {ORDER.map((k) => {
               const cell = result.scores[k];
               return (
-                <div key={k}>
-                  <div className="flex justify-between text-[11px]">
-                    <span className="text-softwhite capitalize">{k} <span className="font-mono text-[8px] text-fog/60 tracking-wider">{cell.source.toUpperCase()}</span></span>
-                    <span className="font-mono" style={{ color: color(cell.value) }}>{cell.value}</span>
-                  </div>
-                  <div className="h-1.5 bg-panel2 rounded-full overflow-hidden mt-1.5">
-                    <div className="h-full rounded-full" style={{ width: `${cell.value}%`, background: color(cell.value) }} />
-                  </div>
-                </div>
+                <ScoreBar key={k} label={`${k[0].toUpperCase()}${k.slice(1)} — ${cell.source}`} value={cell.value} tone={tone(cell.value)} valueLabel={`${cell.value}`} />
               );
             })}
           </div>
 
           {result.feedback && (
-            <div className="card p-4 border-cyan/25">
-              <p className="text-[13px] text-softwhite leading-relaxed"><b className="text-cyanbright">Athena:</b> {result.feedback}</p>
+            <div className="card p-4 border-info/25">
+              <p className="text-[13px] text-softwhite leading-relaxed"><b className="text-info">Athena:</b> {result.feedback}</p>
               {result.tip && <p className="text-[12px] text-fog mt-2">💡 {result.tip}</p>}
               {result.review_added > 0 && <p className="font-mono text-[9.5px] mt-2" style={{ color: ACCENT.writing }}>↻ {result.review_added} item{result.review_added > 1 ? "s" : ""} added to Review Queue</p>}
             </div>
@@ -220,7 +214,7 @@ function Writing({ difficulty, onBack, refresh }: { difficulty: Difficulty; onBa
             <div className="card p-4">
               <p className="font-mono text-[10px] tracking-widest text-fog mb-2">GRAMMAR FIXES</p>
               {result.grammar_fixes.map((f, i) => (
-                <p key={i} className="text-[12px] mb-1"><span className="text-ember line-through">{f.original}</span> <span className="text-fog">→</span> <span className="text-sage">{f.corrected}</span></p>
+                <p key={i} className="text-[12px] mb-1"><span className="text-danger line-through">{f.original}</span> <span className="text-fog">→</span> <span className="text-accent">{f.corrected}</span></p>
               ))}
             </div>
           )}
@@ -229,14 +223,14 @@ function Writing({ difficulty, onBack, refresh }: { difficulty: Difficulty; onBa
             <div className="card p-4">
               <p className="font-mono text-[10px] tracking-widest text-fog mb-2">VOCABULARY UPGRADES</p>
               {result.vocab_upgrades.map((v, i) => (
-                <p key={i} className="text-[12px] mb-1"><span className="text-fog">{v.used}</span> <span className="text-fog">→</span> <span className="text-cyan">{v.try}</span> <span className="text-fog/60">— {v.note}</span></p>
+                <p key={i} className="text-[12px] mb-1"><span className="text-fog">{v.used}</span> <span className="text-fog">→</span> <span className="text-info">{v.try}</span> <span className="text-fog/60">— {v.note}</span></p>
               ))}
             </div>
           )}
 
           <div className="flex justify-center gap-2">
-            <button className="btn-cyan" onClick={onBack}>Done</button>
-            <button className="btn-brass" onClick={load}>Another drill</button>
+            <button className="btn-secondary" onClick={onBack}>Done</button>
+            <button className="btn-accent" onClick={load}>Another drill</button>
           </div>
         </div>
       )}
@@ -297,7 +291,8 @@ function Reading({ difficulty, onBack, refresh }: { difficulty: Difficulty; onBa
     } finally { setBusy(false); }
   };
 
-  const color = (v: number) => (v >= 75 ? "#7FB58C" : v >= 55 ? "#D4B36A" : "#D98A6A");
+  const color = (v: number) => (v >= 75 ? "#22C55E" : v >= 55 ? "#F59E0B" : "#EF4444");
+  const tone = (v: number) => (v >= 75 ? "accent" : v >= 55 ? "warning" : "danger") as "accent" | "warning" | "danger";
   const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
   return (
@@ -318,7 +313,7 @@ function Reading({ difficulty, onBack, refresh }: { difficulty: Difficulty; onBa
           </div>
           <div className="flex items-center justify-between">
             <span className="font-mono text-[10px] text-fog">read at your natural pace — WPM is measured</span>
-            <button className="btn-brass" onClick={doneReading}>Done reading → quiz</button>
+            <button className="btn-accent" onClick={doneReading}>Done reading → quiz</button>
           </div>
         </>
       )}
@@ -336,8 +331,8 @@ function Reading({ difficulty, onBack, refresh }: { difficulty: Difficulty; onBa
           <div className="space-y-2">
             {data.questions[qIdx].options.map((o, i) => (
               <button key={i} onClick={() => pick(i)}
-                className={`w-full text-left text-xs px-3 py-2.5 rounded-lg border transition-colors ${picks[qIdx] === i ? "border-cyan bg-cyan/10 text-snow" : "border-line bg-panel2 text-fog hover:border-cyan/40 hover:text-snow"}`}>
-                <span className="font-mono text-cyan mr-2">{String.fromCharCode(65 + i)}</span>{o}
+                className={`w-full text-left text-xs px-3 py-2.5 rounded-lg border transition-colors ${picks[qIdx] === i ? "border-info bg-info/10 text-snow" : "border-line bg-panel2 text-fog hover:border-info/40 hover:text-snow"}`}>
+                <span className="font-mono text-info mr-2">{String.fromCharCode(65 + i)}</span>{o}
               </button>
             ))}
           </div>
@@ -345,10 +340,10 @@ function Reading({ difficulty, onBack, refresh }: { difficulty: Difficulty; onBa
             <div className="flex gap-1">
               {data.questions.map((_, i) => (
                 <button key={i} onClick={() => setQIdx(i)} className="w-6 h-6 rounded text-[10px] font-mono"
-                  style={{ background: i === qIdx ? "rgba(95,211,224,0.2)" : picks[i] >= 0 ? "rgba(127,181,140,0.15)" : "#10171F", color: picks[i] >= 0 ? "#7FB58C" : "#9AA4B4" }}>{i + 1}</button>
+                  style={{ background: i === qIdx ? "rgba(56,189,248,0.2)" : picks[i] >= 0 ? "rgba(34,197,94,0.15)" : "#272F42", color: picks[i] >= 0 ? "#22C55E" : "#94A3B8" }}>{i + 1}</button>
               ))}
             </div>
-            <button className="btn-brass" disabled={picks.some((p) => p < 0) || busy} onClick={submit}>{busy ? "Scoring…" : "Submit quiz"}</button>
+            <button className="btn-accent" disabled={picks.some((p) => p < 0) || busy} onClick={submit}>{busy ? "Scoring…" : "Submit quiz"}</button>
           </div>
         </div>
       )}
@@ -367,25 +362,17 @@ function Reading({ difficulty, onBack, refresh }: { difficulty: Difficulty; onBa
           </div>
           <div className="grid sm:grid-cols-2 gap-x-5 gap-y-3">
             {Object.entries(result.dimensions).filter(([, v]) => v !== null).map(([k, v]) => (
-              <div key={k}>
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-softwhite capitalize">{k.replace("_", " ")} <span className="font-mono text-[8px] text-fog/60 tracking-wider">GRADED</span></span>
-                  <span className="font-mono" style={{ color: color(v as number) }}>{v}</span>
-                </div>
-                <div className="h-1.5 bg-panel2 rounded-full overflow-hidden mt-1.5">
-                  <div className="h-full rounded-full" style={{ width: `${v}%`, background: color(v as number) }} />
-                </div>
-              </div>
+              <ScoreBar key={k} label={`${k.replace("_", " ")} — graded`} value={v as number} tone={tone(v as number)} valueLabel={`${v}`} />
             ))}
           </div>
           {result.review_added > 0 && (
-            <div className="card p-4 border-cyan/25">
+            <div className="card p-4 border-info/25">
               <p className="font-mono text-[9.5px]" style={{ color: ACCENT.writing }}>↻ {result.review_added} vocab item{result.review_added > 1 ? "s" : ""} added to Review Queue</p>
             </div>
           )}
           <div className="flex justify-center gap-2">
-            <button className="btn-cyan" onClick={onBack}>Done</button>
-            <button className="btn-brass" onClick={load}>Another passage</button>
+            <button className="btn-secondary" onClick={onBack}>Done</button>
+            <button className="btn-accent" onClick={load}>Another passage</button>
           </div>
         </div>
       )}
@@ -448,7 +435,8 @@ function Listening({ difficulty, onBack, refresh }: { difficulty: Difficulty; on
     } finally { setBusy(false); }
   };
 
-  const color = (v: number) => (v >= 75 ? "#7FB58C" : v >= 55 ? "#D4B36A" : "#D98A6A");
+  const color = (v: number) => (v >= 75 ? "#22C55E" : v >= 55 ? "#F59E0B" : "#EF4444");
+  const tone = (v: number) => (v >= 75 ? "accent" : v >= 55 ? "warning" : "danger") as "accent" | "warning" | "danger";
 
   return (
     <div className="w-full max-w-3xl mx-auto space-y-4">
@@ -459,12 +447,12 @@ function Listening({ difficulty, onBack, refresh }: { difficulty: Difficulty; on
 
       {(phase === "ready" || phase === "playing") && (
         <div className="card p-8 text-center space-y-3">
-          <div className="text-4xl" style={{ color: ACCENT.listening, textShadow: "0 0 16px rgba(95,211,224,0.6)" }}>∿</div>
+          <div className="text-4xl" style={{ color: ACCENT.listening }}>∿</div>
           <p className="text-[14px] text-softwhite max-w-md mx-auto leading-relaxed">
             Athena will read a passage aloud <b>once</b> — you can't replay it. Listen closely, then answer.
           </p>
-          {data?.tts_unavailable && <p className="font-mono text-[9.5px] text-ember">audio service blocked — using your browser's voice</p>}
-          <button className="btn-brass mt-2" disabled={phase === "playing"} onClick={play}>
+          {data?.tts_unavailable && <p className="font-mono text-[9.5px] text-danger">audio service blocked — using your browser's voice</p>}
+          <button className="btn-accent mt-2" disabled={phase === "playing"} onClick={play}>
             {phase === "playing" ? "▶ Playing… listen" : "▶ Play passage (once)"}
           </button>
           <p className="font-mono text-[9.5px] text-fog/60">reception &amp; inference scored separately</p>
@@ -484,8 +472,8 @@ function Listening({ difficulty, onBack, refresh }: { difficulty: Difficulty; on
           <div className="space-y-2">
             {data.questions[qIdx].options.map((o, i) => (
               <button key={i} onClick={() => pick(i)}
-                className={`w-full text-left text-xs px-3 py-2.5 rounded-lg border transition-colors ${picks[qIdx] === i ? "border-cyan bg-cyan/10 text-snow" : "border-line bg-panel2 text-fog hover:border-cyan/40 hover:text-snow"}`}>
-                <span className="font-mono text-cyan mr-2">{String.fromCharCode(65 + i)}</span>{o}
+                className={`w-full text-left text-xs px-3 py-2.5 rounded-lg border transition-colors ${picks[qIdx] === i ? "border-info bg-info/10 text-snow" : "border-line bg-panel2 text-fog hover:border-info/40 hover:text-snow"}`}>
+                <span className="font-mono text-info mr-2">{String.fromCharCode(65 + i)}</span>{o}
               </button>
             ))}
           </div>
@@ -493,10 +481,10 @@ function Listening({ difficulty, onBack, refresh }: { difficulty: Difficulty; on
             <div className="flex gap-1">
               {data.questions.map((_, i) => (
                 <button key={i} onClick={() => setQIdx(i)} className="w-6 h-6 rounded text-[10px] font-mono"
-                  style={{ background: i === qIdx ? "rgba(95,211,224,0.2)" : picks[i] >= 0 ? "rgba(127,181,140,0.15)" : "#10171F", color: picks[i] >= 0 ? "#7FB58C" : "#9AA4B4" }}>{i + 1}</button>
+                  style={{ background: i === qIdx ? "rgba(56,189,248,0.2)" : picks[i] >= 0 ? "rgba(34,197,94,0.15)" : "#272F42", color: picks[i] >= 0 ? "#22C55E" : "#94A3B8" }}>{i + 1}</button>
               ))}
             </div>
-            <button className="btn-brass" disabled={picks.some((p) => p < 0) || busy} onClick={submit}>{busy ? "Scoring…" : "Submit quiz"}</button>
+            <button className="btn-accent" disabled={picks.some((p) => p < 0) || busy} onClick={submit}>{busy ? "Scoring…" : "Submit quiz"}</button>
           </div>
         </div>
       )}
@@ -509,25 +497,17 @@ function Listening({ difficulty, onBack, refresh }: { difficulty: Difficulty; on
           </div>
           <div className="grid sm:grid-cols-2 gap-x-5 gap-y-3">
             {Object.entries(result.dimensions).filter(([, v]) => v !== null).map(([k, v]) => (
-              <div key={k}>
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-softwhite capitalize">{k} <span className="font-mono text-[8px] text-fog/60 tracking-wider">GRADED</span></span>
-                  <span className="font-mono" style={{ color: color(v as number) }}>{v}</span>
-                </div>
-                <div className="h-1.5 bg-panel2 rounded-full overflow-hidden mt-1.5">
-                  <div className="h-full rounded-full" style={{ width: `${v}%`, background: color(v as number) }} />
-                </div>
-              </div>
+              <ScoreBar key={k} label={`${k} — graded`} value={v as number} tone={tone(v as number)} valueLabel={`${v}`} />
             ))}
           </div>
           {result.review_added > 0 && (
-            <div className="card p-4 border-cyan/25">
+            <div className="card p-4 border-info/25">
               <p className="font-mono text-[9.5px]" style={{ color: ACCENT.writing }}>↻ {result.review_added} item{result.review_added > 1 ? "s" : ""} added to Review Queue</p>
             </div>
           )}
           <div className="flex justify-center gap-2">
-            <button className="btn-cyan" onClick={onBack}>Done</button>
-            <button className="btn-brass" onClick={load}>Another passage</button>
+            <button className="btn-secondary" onClick={onBack}>Done</button>
+            <button className="btn-accent" onClick={load}>Another passage</button>
           </div>
         </div>
       )}
@@ -541,7 +521,7 @@ function Speaking({ radar, onBack, onLaunch }: { radar: Radar | null; onBack: ()
       <button onClick={onBack} className="text-fog text-sm hover:text-snow">← back to gym</button>
       <p className="font-mono text-[10px] tracking-[0.2em]" style={{ color: ACCENT.speaking }}>SPEAKING · ORATORY DECK</p>
       <div className="card p-8 text-center space-y-3">
-        <div className="text-3xl" style={{ color: ACCENT.speaking, textShadow: "0 0 14px rgba(212,179,106,0.6)" }}>◉</div>
+        <div className="text-3xl" style={{ color: ACCENT.speaking }}>◉</div>
         <p className="text-snow text-lg">The Speaking pillar</p>
         <p className="text-fog text-sm max-w-md mx-auto leading-relaxed">
           Impromptu speaking with topic draw, a 30-second think timer, and live scoring of pacing,
@@ -550,7 +530,7 @@ function Speaking({ radar, onBack, onLaunch }: { radar: Radar | null; onBack: ()
         {radar?.speaking != null && (
           <p className="font-mono text-[11px]" style={{ color: ACCENT.speaking }}>last speaking score · {radar.speaking}</p>
         )}
-        <button className="btn-brass mt-2" onClick={onLaunch}>Draw a topic → start speaking</button>
+        <button className="btn-accent mt-2" onClick={onLaunch}>Draw a topic → start speaking</button>
       </div>
     </div>
   );

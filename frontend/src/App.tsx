@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import BootSequence from "./components/BootSequence";
 import CommandPalette from "./components/CommandPalette";
 import Layout from "./components/Layout";
 import LevelUpOverlay from "./components/LevelUpOverlay";
@@ -37,16 +36,10 @@ function EscToHub() {
 
 export default function App() {
   const { user, loading } = useAuth();
-  const [booted, setBooted] = useState(() => sessionStorage.getItem("athena_booted") === "1");
-  const finishBoot = () => {
-    sessionStorage.setItem("athena_booted", "1");
-    setBooted(true);
-  };
 
   if (loading) return <div className="min-h-screen grid place-items-center text-fog">Loading ATHENA OS…</div>;
   return (
     <BrowserRouter>
-      {!booted && <BootSequence onDone={finishBoot} />}
       <EscToHub />
       <CommandPalette />
       <LevelUpOverlay />

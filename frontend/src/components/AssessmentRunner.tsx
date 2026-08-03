@@ -81,7 +81,7 @@ export default function AssessmentRunner({
   if (error)
     return (
       <div className="flex-1 p-5">
-        <p className="text-ember text-sm">{error}</p>
+        <p className="text-danger text-sm">{error}</p>
         <button onClick={onBack} className="text-fog text-xs mt-3 hover:text-snow font-mono">← back to dossier</button>
       </div>
     );
@@ -91,7 +91,7 @@ export default function AssessmentRunner({
       <div className="flex-1 overflow-y-auto p-5 space-y-4">
         <div className="text-center py-4">
           <p className="font-mono text-[10px] tracking-[0.3em] text-fog">ASSESSMENT RESULT</p>
-          <p className={`font-display text-5xl mt-2 ${result.passed ? "text-brass" : "text-ember"}`}>
+          <p className={`font-display text-5xl mt-2 ${result.passed ? "text-accent" : "text-danger"}`}>
             <AnimatedNumber value={result.score} />%
           </p>
           <p className="font-mono text-xs mt-2 text-fog">
@@ -106,14 +106,14 @@ export default function AssessmentRunner({
         )}
         <div className="space-y-1.5">
           {result.results.map((r, i) => (
-            <div key={i} className={`text-xs px-3 py-2 rounded-lg border ${r.ok ? "border-sage/30 text-fog" : "border-ember/40 text-snow bg-panel2"}`}>
-              <span className={`font-mono mr-2 ${r.ok ? "text-sage" : "text-ember"}`}>{r.ok ? "✓" : "✗"}</span>
+            <div key={i} className={`text-xs px-3 py-2 rounded-lg border ${r.ok ? "border-accent/30 text-fog" : "border-danger/40 text-snow bg-panel2"}`}>
+              <span className={`font-mono mr-2 ${r.ok ? "text-accent" : "text-danger"}`}>{r.ok ? "✓" : "✗"}</span>
               {r.q}
             </div>
           ))}
         </div>
         <button
-          className="btn-brass w-full"
+          className="btn-accent w-full"
           onClick={() => onDone(result.nodes, result.xp, result.xp_gained)}
         >
           {result.passed ? "Continue" : "Back to study material"}
@@ -136,7 +136,7 @@ export default function AssessmentRunner({
         <button onClick={onBack} className="font-mono text-[10px] text-fog hover:text-snow">exit</button>
       </div>
       <div className="h-1 bg-panel2 rounded-full mb-4 overflow-hidden">
-        <div className="h-full bg-brass rounded-full transition-all" style={{ width: `${(answered / questions.length) * 100}%` }} />
+        <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${(answered / questions.length) * 100}%` }} />
       </div>
       <p className="text-sm text-snow leading-relaxed mb-4">{q.q}</p>
       <div className="space-y-2">
@@ -145,10 +145,10 @@ export default function AssessmentRunner({
             key={i}
             onClick={() => pick(i)}
             className={`w-full text-left text-xs px-3 py-2.5 rounded-lg border transition-colors ${
-              answers[idx] === i ? "border-brass bg-brass/10 text-snow" : "border-line bg-panel2 text-fog hover:border-brass/40 hover:text-snow"
+              answers[idx] === i ? "border-accent bg-accent/10 text-snow" : "border-line bg-panel2 text-fog hover:border-accent/40 hover:text-snow"
             }`}
           >
-            <span className="font-mono text-brass mr-2">{String.fromCharCode(65 + i)}</span>
+            <span className="font-mono text-accent mr-2">{String.fromCharCode(65 + i)}</span>
             {opt}
           </button>
         ))}
@@ -160,7 +160,7 @@ export default function AssessmentRunner({
         <button disabled={idx >= questions.length - 1} onClick={() => setIdx(idx + 1)} className="text-fog text-xs font-mono disabled:opacity-30 hover:text-snow">
           next →
         </button>
-        <button className="btn-brass ml-auto text-sm" disabled={answered < questions.length || busy} onClick={submit}>
+        <button className="btn-accent ml-auto text-sm" disabled={answered < questions.length || busy} onClick={submit}>
           {busy ? "Grading…" : `Submit (${answered}/${questions.length})`}
         </button>
       </div>

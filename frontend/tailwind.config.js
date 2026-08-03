@@ -4,24 +4,27 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: "#06080C",
-        ink2: "#0A0D14",
-        panel: "#0C1119",
-        panel2: "#10171F",
-        line: "#1E2738",
-        fog: "#9AA4B4",
-        snow: "#FFFFFF",
-        softwhite: "#E6ECF4",
-        brass: "#D4B36A",
-        brassdim: "#B8954A",
-        cyan: "#5FD3E0",
-        cyanbright: "#7FE9F0",
-        sage: "#7FB58C",
-        ember: "#D98A6A",
+        // Values must stay in sync with docs/athena-homepage-wireframe.html's :root block.
+        ink: "#070B0A",
+        ink2: "#0B1110",
+        panel: "#101614",
+        panel2: "#161D1A",
+        // Function form so Tailwind's opacity modifier (e.g. text-fog/60) actually
+        // overrides the alpha channel instead of silently ignoring it — a plain
+        // "rgba(...)" string can't be re-modulated by Tailwind's opacity utilities.
+        line: ({ opacityValue }) => `rgba(255, 255, 255, ${opacityValue ?? 0.09})`,
+        fog: ({ opacityValue }) => `rgba(233, 241, 238, ${opacityValue ?? 0.62})`,
+        snow: "#E9F1EE",
+        softwhite: "#E9F1EE",
+        accent: "#3DDC97",
+        accentdim: "#2FBE82",
+        info: "#4FC7D4",
+        warning: "#E0B450",
+        danger: "#E2646E",
       },
       fontFamily: {
-        display: ["'Space Grotesk'", "sans-serif"],
-        body: ["Inter", "sans-serif"],
+        display: ["'Instrument Sans'", "sans-serif"],
+        body: ["'Instrument Sans'", "sans-serif"],
         mono: ["'JetBrains Mono'", "monospace"],
       },
     },

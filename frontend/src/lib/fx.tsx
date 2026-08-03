@@ -1,26 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
-const GLYPHS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#@$%&";
-
-/** Heading text that scrambles through glyphs before resolving. */
-export function DecryptText({ text, className = "", speed = 28 }: { text: string; className?: string; speed?: number }) {
-  const [display, setDisplay] = useState("");
-  useEffect(() => {
-    let frame = 0;
-    const t = setInterval(() => {
-      frame++;
-      const resolved = Math.floor(frame / 2);
-      setDisplay(
-        text
-          .split("")
-          .map((ch, i) => (i < resolved ? ch : ch === " " ? " " : GLYPHS[Math.floor(Math.random() * GLYPHS.length)]))
-          .join("")
-      );
-      if (resolved >= text.length) clearInterval(t);
-    }, speed);
-    return () => clearInterval(t);
-  }, [text, speed]);
-  return <span className={className}>{display || "\u00A0"}</span>;
+/** Heading text. */
+export function DecryptText({ text, className = "" }: { text: string; className?: string; speed?: number }) {
+  return <span className={className}>{text}</span>;
 }
 
 /** Number that counts up with a digit shuffle. */

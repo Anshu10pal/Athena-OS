@@ -49,7 +49,7 @@ export default function Login() {
         <div className="flex flex-col items-center mb-8">
           <VoiceOrb state="idle" size={110} />
           <h1 className="font-display text-2xl font-semibold mt-5 tracking-wide">
-            ATHENA <span className="text-brass">OS</span>
+            ATHENA <span className="text-accent">OS</span>
           </h1>
           <p className="text-fog text-sm mt-1">Your personal AI academy</p>
         </div>
@@ -66,8 +66,8 @@ export default function Login() {
             onChange={(e) => setPassword(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submit()}
           />
-          {error && <p className="text-ember text-sm">{error}</p>}
-          <button className="btn-brass w-full" onClick={submit} disabled={busy}>
+          {error && <p className="text-danger text-sm">{error}</p>}
+          <button className="btn-accent w-full" onClick={submit} disabled={busy}>
             {busy ? "One moment…" : mode === "login" ? "Sign in" : "Create account"}
           </button>
           <button

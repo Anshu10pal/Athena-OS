@@ -1,7 +1,6 @@
 import { motion } from "framer-motion";
-import { CheckCircle2, Circle, List, Lock, PlayCircle, Sparkles } from "lucide-react";
+import { CheckCircle2, Circle, Lock, PlayCircle } from "lucide-react";
 import { useEffect, useState } from "react";
-import ConstellationRoadmap from "../components/ConstellationRoadmap";
 import NodeDossier from "../components/NodeDossier";
 import { api } from "../lib/api";
 import { DecryptText } from "../lib/fx";
@@ -30,9 +29,9 @@ interface RoadmapT {
 
 const icons: Record<string, JSX.Element> = {
   locked: <Lock size={18} className="text-fog" />,
-  available: <Circle size={18} className="text-brass" />,
-  in_progress: <PlayCircle size={18} className="text-sage" />,
-  completed: <CheckCircle2 size={18} className="text-sage" />,
+  available: <Circle size={18} className="text-accent" />,
+  in_progress: <PlayCircle size={18} className="text-accent" />,
+  completed: <CheckCircle2 size={18} className="text-accent" />,
   skipped: <CheckCircle2 size={18} className="text-fog" />,
 };
 
@@ -44,7 +43,6 @@ export default function Roadmap() {
   const [role, setRole] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [view, setView] = useState<"constellation" | "list">("constellation");
   const [selected, setSelected] = useState<Node | null>(null);
   const [newTopic, setNewTopic] = useState("");
   const [adding, setAdding] = useState(false);
@@ -140,11 +138,11 @@ export default function Roadmap() {
             onChange={(e) => setRole(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && generate()}
           />
-          <button className="btn-brass shrink-0" onClick={generate} disabled={busy}>
-            {busy ? "Charting…" : "Generate"}
+          <button className="btn-accent shrink-0" onClick={generate} disabled={busy}>
+            {busy ? "Generating…" : "Generate"}
           </button>
         </div>
-        {error && <p className="text-ember text-sm mt-2">{error}</p>}
+        {error && <p className="text-danger text-sm mt-2">{error}</p>}
         {roots.length > 1 && (
           <div className="flex gap-2 mt-3 flex-wrap">
             {roots.map((r) => (
@@ -152,7 +150,7 @@ export default function Roadmap() {
                 key={r.id}
                 onClick={() => setCurrentId(r.id)}
                 className={`font-mono text-[10px] border rounded px-2 py-1 transition-colors ${
-                  current?.id === r.id ? "border-brass text-brass" : "border-line text-fog hover:text-snow"
+                  current?.id === r.id ? "border-accent text-accent" : "border-line text-fog hover:text-snow"
                 }`}
               >
                 {r.title}
@@ -169,23 +167,14 @@ export default function Roadmap() {
               {crumbs.map((c, i) => (
                 <span key={c.id} className="flex items-center gap-1.5">
                   {i > 0 && <span className="text-fog">›</span>}
-                  <button onClick={() => setCurrentId(c.id)} className={i === crumbs.length - 1 ? "text-brass" : "text-fog hover:text-snow"}>
+                  <button onClick={() => setCurrentId(c.id)} className={i === crumbs.length - 1 ? "text-accent" : "text-fog hover:text-snow"}>
                     {c.title.replace(" — deep dive", "")}
                   </button>
                 </span>
               ))}
             </div>
           )}
-          <div className="flex items-center justify-between mb-1">
-            <h3 className="font-display text-lg">{current.title}</h3>
-            <button
-              className="flex items-center gap-1.5 text-xs text-fog hover:text-brass border border-line rounded-md px-2 py-1"
-              onClick={() => setView(view === "list" ? "constellation" : "list")}
-            >
-              {view === "list" ? <Sparkles size={13} /> : <List size={13} />}
-              {view === "list" ? "Constellation" : "List"}
-            </button>
-          </div>
+          <h3 className="font-display text-lg mb-1">{current.title}</h3>
           <p className="text-fog text-sm mb-3">Target: {current.target_role}</p>
           <div className="flex gap-2 mb-5">
             <input
@@ -198,47 +187,39 @@ export default function Roadmap() {
             <span className="font-mono text-[10px] text-fog self-center shrink-0">{adding ? "adding…" : "Enter to add"}</span>
           </div>
 
-          {view === "constellation" ? (
-            <ConstellationRoadmap nodes={current.nodes} onSelect={(node) => openNode(node as Node)} />
-          ) : (
-            <div className="relative pl-7">
-              <div className="absolute left-[8px] top-2 bottom-2 w-px bg-line" />
-              {current.nodes.map((node, i) => (
-                <motion.div
-                  key={node.id}
-                  initial={{ opacity: 0, x: -12 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.04 }}
-                  className="relative pb-5"
+          <div className="relative pl-7">
+            <div className="absolute left-[8px] top-2 bottom-2 w-px bg-line" />
+            {current.nodes.map((node, i) => (
+              <motion.div
+                key={node.id}
+                initial={{ opacity: 0, x: -12 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.04 }}
+                className="relative pb-5"
+              >
+                <span className="absolute -left-7 top-1 bg-ink">{icons[node.status]}</span>
+                <div
+                  className={`rounded-lg border px-4 py-3 ${
+                    node.status === "locked" ? "border-line opacity-50" : "border-accent/40 bg-panel2"
+                  }`}
                 >
-                  <span className="absolute -left-7 top-1 bg-ink">{icons[node.status]}</span>
-                  <div
-                    className={`rounded-lg border px-4 py-3 ${
-                      node.status === "completed" || node.status === "skipped"
-                        ? "border-sage/40 bg-panel2"
-                        : node.status === "locked"
-                        ? "border-line opacity-50"
-                        : "border-brass/40 bg-panel2"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="font-medium">
-                        {node.title}
-                        {node.custom && <span className="font-mono text-[8px] text-brass ml-2">CUSTOM</span>}
-                      </p>
-                      {node.status !== "locked" && (
-                        <button className="text-xs text-brass hover:underline shrink-0" onClick={() => openNode(node)}>
-                          {node.status === "completed" ? "Review dossier" : "Open dossier"}
-                        </button>
-                      )}
-                    </div>
-                    <p className="text-fog text-sm mt-1">{node.description}</p>
-                    {node.skills?.length > 0 && <p className="text-xs font-mono text-fog mt-2">{node.skills.join(" · ")}</p>}
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-medium">
+                      {node.title}
+                      {node.custom && <span className="font-mono text-[8px] text-accent ml-2">CUSTOM</span>}
+                    </p>
+                    {node.status !== "locked" && (
+                      <button className="text-xs text-accent hover:underline shrink-0" onClick={() => openNode(node)}>
+                        {node.status === "completed" ? "Review dossier" : "Open dossier"}
+                      </button>
+                    )}
                   </div>
-                </motion.div>
-              ))}
-            </div>
-          )}
+                  <p className="text-fog text-sm mt-1">{node.description}</p>
+                  {node.skills?.length > 0 && <p className="text-xs font-mono text-fog mt-2">{node.skills.join(" · ")}</p>}
+                </div>
+              </motion.div>
+            ))}
+          </div>
         </div>
       )}
 

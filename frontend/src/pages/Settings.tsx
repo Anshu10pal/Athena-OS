@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, getToken } from "../lib/api";
 import { DecryptText } from "../lib/fx";
 import { useAuth } from "../store/auth";
+import Toggle from "../components/Toggle";
 
 const VOICES = [
   { id: "en-IN-NeerjaNeural", label: "Neerja — Indian English, female" },
@@ -72,11 +73,11 @@ export default function Settings() {
           ))}
         </select>
         <div className="flex gap-2">
-          <button className="btn-brass" onClick={saveProfile}>Save</button>
-          <button className="border border-line rounded-lg px-4 text-sm text-fog hover:text-brass hover:border-brass/40 transition-colors" onClick={testVoice} disabled={testing}>
+          <button className="btn-accent" onClick={saveProfile}>Save</button>
+          <button className="border border-line rounded-lg px-4 text-sm text-fog hover:text-accent hover:border-accent/40 transition-colors" onClick={testVoice} disabled={testing}>
             {testing ? "Speaking…" : "Test voice"}
           </button>
-          {savedMsg && <span className="text-sage text-xs self-center font-mono">{savedMsg}</span>}
+          {savedMsg && <span className="text-accent text-xs self-center font-mono">{savedMsg}</span>}
         </div>
         <p className="font-mono text-[10px] text-fog">one voice, everywhere — chat replies, briefings, every spoken word</p>
       </section>
@@ -89,7 +90,7 @@ export default function Settings() {
             <option key={l} value={l}>{l}</option>
           ))}
         </select>
-        <button className="btn-brass" onClick={saveProfile}>Save profile</button>
+        <button className="btn-accent" onClick={saveProfile}>Save profile</button>
       </section>
 
       <section className="card p-5 space-y-3">
@@ -99,14 +100,11 @@ export default function Settings() {
             <p className="text-sm text-snow">Say “Hey Athena” to open chat</p>
             <p className="text-fog text-[11px] mt-0.5">Uses your browser’s speech recognition (Chrome/Edge). Listens only while ATHENA is open.</p>
           </div>
-          <button
-            onClick={() => { const v = !wakeWord; setWakeWord(v); localStorage.setItem("athena_wakeword", v ? "1" : "0"); }}
-            className="shrink-0 rounded-full transition-colors"
-            style={{ width: 46, height: 26, background: wakeWord ? "#5FD3E0" : "#1E2738", position: "relative" }}
-            aria-label="Toggle wake word"
-          >
-            <span style={{ position: "absolute", top: 3, left: wakeWord ? 23 : 3, width: 20, height: 20, borderRadius: "50%", background: "#06080C", transition: "left .2s" }} />
-          </button>
+          <Toggle
+            checked={wakeWord}
+            onChange={(v) => { setWakeWord(v); localStorage.setItem("athena_wakeword", v ? "1" : "0"); }}
+            label="Toggle wake word"
+          />
         </div>
         <p className="font-mono text-[10px] text-fog">reload the page after enabling so the listener starts</p>
       </section>
@@ -116,8 +114,8 @@ export default function Settings() {
         <input className="input" type="password" placeholder="Current password" value={curPw} onChange={(e) => setCurPw(e.target.value)} />
         <input className="input" type="password" placeholder="New password (min 6 chars)" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
         <div className="flex gap-3 items-center">
-          <button className="btn-brass" onClick={changePassword} disabled={!curPw || !newPw}>Update password</button>
-          {pwMsg && <span className={`text-xs font-mono ${pwMsg.includes("updated") ? "text-sage" : "text-ember"}`}>{pwMsg}</span>}
+          <button className="btn-accent" onClick={changePassword} disabled={!curPw || !newPw}>Update password</button>
+          {pwMsg && <span className={`text-xs font-mono ${pwMsg.includes("updated") ? "text-accent" : "text-danger"}`}>{pwMsg}</span>}
         </div>
       </section>
     </div>

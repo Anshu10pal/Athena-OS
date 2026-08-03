@@ -41,8 +41,8 @@ export default function PresentationArena() {
   return (
     <div className="w-full max-w-none space-y-6">
       <h2 className="font-display text-2xl font-semibold">Presentation Arena</h2>
-      <label className="card p-10 flex flex-col items-center gap-3 cursor-pointer hover:border-brass transition-colors">
-        <Upload className="text-brass" />
+      <label className="card p-10 flex flex-col items-center gap-3 cursor-pointer hover:border-accent transition-colors">
+        <Upload className="text-accent" />
         <p className="text-sm">{busy ? "Athena is reviewing your deck…" : "Upload a .pptx or .pdf deck"}</p>
         <p className="text-xs text-fog">Slide feedback, storytelling review, speaker notes, executive summary</p>
         <input
@@ -53,13 +53,13 @@ export default function PresentationArena() {
           onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])}
         />
       </label>
-      {error && <p className="text-ember text-sm">{error}</p>}
+      {error && <p className="text-danger text-sm">{error}</p>}
 
       {result && (
         <div className="space-y-4">
           <div className="card p-5">
             <p className="font-display text-lg">
-              Overall: <span className="text-brass font-mono">{result.overall_score}/10</span>
+              Overall: <span className="text-accent font-mono">{result.overall_score}/10</span>
             </p>
             <p className="text-sm text-fog mt-2">{result.executive_summary}</p>
           </div>
@@ -76,7 +76,7 @@ export default function PresentationArena() {
             <ul className="space-y-2 text-sm">
               {result.slide_feedback?.map((s) => (
                 <li key={s.slide} className="flex gap-3">
-                  <span className="font-mono text-brass shrink-0">S{s.slide}</span>
+                  <span className="font-mono text-accent shrink-0">S{s.slide}</span>
                   <span className="text-fog">{s.feedback}</span>
                 </li>
               ))}
@@ -87,7 +87,7 @@ export default function PresentationArena() {
             <ul className="space-y-2 text-sm">
               {result.speaker_notes?.map((s) => (
                 <li key={s.slide} className="flex gap-3">
-                  <span className="font-mono text-brass shrink-0">S{s.slide}</span>
+                  <span className="font-mono text-accent shrink-0">S{s.slide}</span>
                   <span className="text-fog">{s.notes}</span>
                 </li>
               ))}

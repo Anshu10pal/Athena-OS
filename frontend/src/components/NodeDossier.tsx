@@ -28,9 +28,9 @@ interface Dossier {
 }
 
 const TYPE_COLORS: Record<string, string> = {
-  official: "text-ember bg-ember/10",
-  article: "text-brass bg-brass/10",
-  video: "text-sage bg-sage/10",
+  official: "text-danger bg-danger/10",
+  article: "text-accent bg-accent/10",
+  video: "text-info bg-info/10",
   course: "text-snow bg-panel2",
   opensource: "text-fog bg-panel2",
 };
@@ -87,21 +87,21 @@ export default function NodeDossier({
     <AnimatePresence>
       <motion.div
         className="fixed inset-0 flex justify-end"
-        style={{ zIndex: 40, background: "rgba(11,14,20,0.6)" }}
+        style={{ zIndex: 40, background: "rgba(15,23,42,0.6)" }}
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={onClose}
       >
         <motion.div
-          className="w-full max-w-md h-full bg-panel border-l border-brass/30 flex flex-col"
+          className="w-full max-w-md h-full bg-panel border-l border-accent/30 flex flex-col"
           initial={{ x: 60 }}
           animate={{ x: 0 }}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-5 py-4 border-b border-line">
             <div className="flex items-start justify-between">
-              <p className="font-mono text-[10px] tracking-[0.25em] text-brass">
+              <p className="font-mono text-[10px] tracking-[0.25em] text-accent">
                 NODE DOSSIER · {node.id.toUpperCase()} · {node.status.replace("_", " ").toUpperCase()}
               </p>
               <button onClick={onClose} className="text-fog hover:text-snow">
@@ -114,7 +114,7 @@ export default function NodeDossier({
             <div className="flex gap-1.5 mt-2 flex-wrap">
               <span className="font-mono text-[9px] text-fog border border-line rounded px-1.5 py-0.5">{node.skills?.length ?? 0} skills</span>
               {dossier && (
-                <span className="font-mono text-[9px] text-brass border border-brass/40 rounded px-1.5 py-0.5">
+                <span className="font-mono text-[9px] text-accent border border-accent/40 rounded px-1.5 py-0.5">
                   {dossier.question_count} Q assessment · pass ≥ {dossier.pass_threshold}%
                 </span>
               )}
@@ -134,7 +134,7 @@ export default function NodeDossier({
           ) : (
             <>
               <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-                {error && <p className="text-ember text-sm">{error}</p>}
+                {error && <p className="text-danger text-sm">{error}</p>}
                 {!dossier && !error && <p className="text-fog text-sm font-mono animate-pulse">Athena is compiling your briefing…</p>}
                 {dossier && (
                   <>
@@ -145,15 +145,15 @@ export default function NodeDossier({
                       </section>
                     )}
                     {dossier.eli5 && (
-                      <section className="border border-brass/30 bg-brass/5 rounded-lg p-3">
-                        <p className="font-mono text-[10px] tracking-widest text-brass mb-1.5">ELI5 — LIKE YOU'RE FIVE</p>
+                      <section className="border border-accent/30 bg-accent/5 rounded-lg p-3">
+                        <p className="font-mono text-[10px] tracking-widest text-accent mb-1.5">ELI5 — LIKE YOU'RE FIVE</p>
                         <p className="text-sm text-snow leading-relaxed">{dossier.eli5}</p>
                       </section>
                     )}
                     <button
                       onClick={expand}
                       disabled={expanding}
-                      className="w-full border border-brass/40 bg-brass/10 rounded-lg px-3 py-2.5 font-mono text-[11px] text-brass hover:bg-brass/20 transition-colors disabled:opacity-60"
+                      className="w-full border border-accent/40 bg-accent/10 rounded-lg px-3 py-2.5 font-mono text-[11px] text-accent hover:bg-accent/20 transition-colors disabled:opacity-60"
                     >
                       {expanding ? "CHARTING SUB-MAP…" : dossier.submap_id ? "◈ OPEN SUB-MAP — GRANULAR GRAPH" : "◈ EXPAND INTO SUB-MAP — GO GRANULAR"}
                     </button>
@@ -171,19 +171,19 @@ export default function NodeDossier({
                             href={r.url}
                             target="_blank"
                             rel="noreferrer"
-                            className="flex items-center gap-2.5 bg-panel2 border border-line rounded-lg px-3 py-2.5 hover:border-brass/40 transition-colors group"
+                            className="flex items-center gap-2.5 bg-panel2 border border-line rounded-lg px-3 py-2.5 hover:border-accent/40 transition-colors group"
                           >
                             <span className={`font-mono text-[8px] uppercase rounded px-1.5 py-0.5 ${TYPE_COLORS[r.type] ?? "text-fog bg-panel2"}`}>{r.type}</span>
                             <span className="text-xs text-snow flex-1 truncate">{r.title}</span>
                             {r.added_by && <span className="font-mono text-[8px] text-fog">community · {r.added_by}</span>}
-                            <ExternalLink size={11} className="text-fog group-hover:text-brass shrink-0" />
+                            <ExternalLink size={11} className="text-fog group-hover:text-accent shrink-0" />
                           </a>
                         ))}
                         <a
                           href={dossier.suggest_url}
                           target="_blank"
                           rel="noreferrer"
-                          className="block text-center border border-dashed border-line rounded-lg px-3 py-2 font-mono text-[10px] text-fog hover:text-brass hover:border-brass/40 transition-colors"
+                          className="block text-center border border-dashed border-line rounded-lg px-3 py-2 font-mono text-[10px] text-fog hover:text-accent hover:border-accent/40 transition-colors"
                         >
                           + suggest a resource (opens GitHub)
                         </a>
@@ -195,9 +195,9 @@ export default function NodeDossier({
               <div className="px-5 py-4 border-t border-line space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="font-mono text-[10px] tracking-widest text-fog">ASSESSMENT GATE</span>
-                  <span className="font-mono text-[10px] text-brass">+150–225 XP</span>
+                  <span className="font-mono text-[10px] text-accent">+150–225 XP</span>
                 </div>
-                <button className="btn-brass w-full" disabled={!dossier || node.status === "completed"} onClick={() => setAssessing(true)}>
+                <button className="btn-accent w-full" disabled={!dossier || node.status === "completed"} onClick={() => setAssessing(true)}>
                   {node.status === "completed" ? "Completed" : `Begin assessment — ${dossier?.question_count ?? "…"} questions`}
                 </button>
                 {node.status !== "completed" && node.status !== "skipped" && (
@@ -209,7 +209,7 @@ export default function NodeDossier({
                   onClick={() => {
                     if (window.confirm(`Remove "${node.title}" from your journey? Dependents re-wire automatically.`)) onRemove();
                   }}
-                  className="w-full text-fog/60 text-[10px] hover:text-ember font-mono"
+                  className="w-full text-fog/60 text-[10px] hover:text-danger font-mono"
                 >
                   ✕ remove from my journey — not relevant to me
                 </button>

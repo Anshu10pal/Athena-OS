@@ -16,7 +16,7 @@ interface Mission {
   isNew?: boolean;
 }
 
-const DIFF_COLOR: Record<string, string> = { easy: "text-sage", medium: "text-brass", hard: "text-ember" };
+const DIFF_COLOR: Record<string, string> = { easy: "text-accent", medium: "text-warning", hard: "text-danger" };
 
 export default function Missions() {
   const { refresh } = useAuth();
@@ -72,14 +72,14 @@ export default function Missions() {
             className="card p-4 flex items-center justify-between gap-4"
           >
             <div className="min-w-0">
-              {m.isNew && <p className="font-mono text-[9px] tracking-[0.3em] text-brass mb-1">NEW DIRECTIVE</p>}
+              {m.isNew && <p className="font-mono text-[9px] tracking-[0.3em] text-accent mb-1">NEW DIRECTIVE</p>}
               <p className="text-sm text-snow">{m.objective}</p>
               <p className="font-mono text-[10px] text-fog mt-1.5">
                 <span className={DIFF_COLOR[m.difficulty] ?? "text-fog"}>{m.difficulty}</span> · +{m.xp_reward} XP
                 {m.skills_gained?.length > 0 && <> · {m.skills_gained.join(", ")}</>}
               </p>
             </div>
-            <button className="btn-brass text-sm shrink-0" onClick={() => complete(m.id)}>
+            <button className="btn-accent text-sm shrink-0" onClick={() => complete(m.id)}>
               Complete
             </button>
           </motion.div>

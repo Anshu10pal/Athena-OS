@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { AnimatedNumber, DecryptText } from "../lib/fx";
 import { unlock } from "../lib/sound";
 import { useAuth } from "../store/auth";
+import ScoreBar from "../components/ScoreBar";
 
 interface DueItem {
   id: number;
@@ -64,31 +65,32 @@ export default function Review() {
     } finally { setBusy(false); }
   };
 
-  const strengthColor = (s: number) => (s > 0.7 ? "#7FB58C" : s > 0.4 ? "#D4B36A" : "#D98A6A");
+  const strengthColor = (s: number) => (s > 0.7 ? "#22C55E" : s > 0.4 ? "#F59E0B" : "#EF4444");
+  const strengthTone = (s: number): "accent" | "warning" | "danger" => (s > 0.7 ? "accent" : s > 0.4 ? "warning" : "danger");
 
   if (active && !result) {
     const q = active.qs[idx];
     const answered = answers.filter((a) => a >= 0).length;
     return (
       <div className="w-full max-w-2xl mx-auto space-y-5">
-        <p className="font-mono text-[10px] tracking-widest text-cyan">RECALL · {active.title}</p>
+        <p className="font-mono text-[10px] tracking-widest text-info">RECALL · {active.title}</p>
         <div className="card p-5 space-y-4">
           <div className="flex justify-between font-mono text-[10px] text-fog">
             <span>Q{idx + 1} / {active.qs.length}</span>
             <button onClick={() => setActive(null)} className="hover:text-snow">exit</button>
           </div>
           <div className="h-1 bg-panel2 rounded-full overflow-hidden">
-            <div className="h-full rounded-full" style={{ width: `${(answered / active.qs.length) * 100}%`, background: "linear-gradient(90deg,#D4B36A,#5FD3E0)" }} />
+            <div className="h-full rounded-full" style={{ width: `${(answered / active.qs.length) * 100}%`, background: "linear-gradient(90deg,#22C55E,#38BDF8)" }} />
           </div>
           <p className="text-sm text-snow leading-relaxed">{q.q}</p>
           <div className="space-y-2">
             {q.options.map((o, i) => (
-              <button key={i} onClick={() => pick(i)} className={`w-full text-left text-xs px-3 py-2.5 rounded-lg border transition-colors ${answers[idx] === i ? "border-cyan bg-cyan/10 text-snow" : "border-line bg-panel2 text-fog hover:border-cyan/40 hover:text-snow"}`}>
-                <span className="font-mono text-cyan mr-2">{String.fromCharCode(65 + i)}</span>{o}
+              <button key={i} onClick={() => pick(i)} className={`w-full text-left text-xs px-3 py-2.5 rounded-lg border transition-colors ${answers[idx] === i ? "border-info bg-info/10 text-snow" : "border-line bg-panel2 text-fog hover:border-info/40 hover:text-snow"}`}>
+                <span className="font-mono text-info mr-2">{String.fromCharCode(65 + i)}</span>{o}
               </button>
             ))}
           </div>
-          <button className="btn-brass w-full" disabled={answered < active.qs.length || busy} onClick={submit}>
+          <button className="btn-accent w-full" disabled={answered < active.qs.length || busy} onClick={submit}>
             {busy ? "Grading…" : `Submit recall (${answered}/${active.qs.length})`}
           </button>
         </div>
@@ -101,13 +103,13 @@ export default function Review() {
       <div className="w-full max-w-2xl mx-auto">
         <div className="card p-6 text-center space-y-3">
           <p className="font-mono text-[10px] tracking-[0.3em] text-fog">RECALL RESULT</p>
-          <p className="font-display text-5xl" style={{ color: result.passed ? "#5FD3E0" : "#D98A6A" }}>
+          <p className="font-display text-5xl" style={{ color: result.passed ? "#38BDF8" : "#EF4444" }}>
             <AnimatedNumber value={result.score} />%
           </p>
           <p className="font-mono text-xs text-fog">
             {result.passed ? `memory reinforced · next review ${result.next_due}` : `interval reset · review again ${result.next_due}`}
           </p>
-          <button className="btn-brass" onClick={() => { setActive(null); setResult(null); }}>Done</button>
+          <button className="btn-accent" onClick={() => { setActive(null); setResult(null); }}>Done</button>
         </div>
       </div>
     );
@@ -123,7 +125,7 @@ export default function Review() {
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <div className="card p-4">
           <p className="font-mono text-[10px] text-fog tracking-widest">DUE NOW</p>
-          <p className="font-display text-3xl mt-1" style={{ color: dueCount > 0 ? "#5FD3E0" : "#7FB58C" }}><AnimatedNumber value={dueCount} /></p>
+          <p className="font-display text-3xl mt-1" style={{ color: dueCount > 0 ? "#38BDF8" : "#22C55E" }}><AnimatedNumber value={dueCount} /></p>
         </div>
         <div className="card p-4">
           <p className="font-mono text-[10px] text-fog tracking-widest">MEMORY STRENGTH</p>
@@ -145,15 +147,10 @@ export default function Review() {
         {items.map((it) => (
           <div key={it.id} className="card p-4 flex items-center justify-between gap-4">
             <div className="min-w-0 flex-1">
-              <p className="text-sm text-snow truncate">{it.node_title}</p>
-              <div className="flex items-center gap-3 mt-2">
-                <div className="h-1.5 w-28 bg-panel2 rounded-full overflow-hidden">
-                  <div className="h-full rounded-full" style={{ width: `${it.strength * 100}%`, background: strengthColor(it.strength) }} />
-                </div>
-                <span className="font-mono text-[10px] text-fog">stage {it.interval_stage} · {it.is_due ? "due now" : `due ${it.due_at}`}</span>
-              </div>
+              <ScoreBar label={it.node_title} value={it.strength * 100} tone={strengthTone(it.strength)} />
+              <span className="font-mono text-[10px] text-fog mt-1 block">stage {it.interval_stage} · {it.is_due ? "due now" : `due ${it.due_at}`}</span>
             </div>
-            <button className={it.is_due ? "btn-brass text-sm shrink-0" : "btn-cyan text-sm shrink-0"} disabled={busy} onClick={() => start(it)}>
+            <button className={it.is_due ? "btn-accent text-sm shrink-0" : "btn-secondary text-sm shrink-0"} disabled={busy} onClick={() => start(it)}>
               {it.is_due ? "Review" : "Review early"}
             </button>
           </div>

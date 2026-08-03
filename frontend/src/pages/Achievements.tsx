@@ -6,7 +6,7 @@ interface Badge {
   code: string; title: string; description: string; icon: string; tier: string;
   unlocked: boolean; unlocked_at: string | null;
 }
-const TIER: Record<string, string> = { bronze: "#C77B4A", silver: "#9AA4B4", gold: "#D4B36A" };
+const TIER: Record<string, string> = { bronze: "#C77B4A", silver: "#94A3B8", gold: "#22C55E" };
 
 export default function Achievements() {
   const [badges, setBadges] = useState<Badge[]>([]);
@@ -29,9 +29,8 @@ export default function Achievements() {
         {badges.map((b) => (
           <div key={b.code} className="card p-4 text-center" style={{ opacity: b.unlocked ? 1 : 0.4 }}>
             <div className="mx-auto w-14 h-14 rounded-full grid place-items-center mb-3" style={{
-              border: `1.5px solid ${b.unlocked ? TIER[b.tier] : "#1E2738"}`,
+              border: `1.5px solid ${b.unlocked ? TIER[b.tier] : "#475569"}`,
               background: b.unlocked ? `${TIER[b.tier]}1a` : "transparent",
-              boxShadow: b.unlocked ? `0 0 18px ${TIER[b.tier]}55` : "none",
             }}>
               <span style={{ fontSize: 22, filter: b.unlocked ? "none" : "grayscale(1)" }}>{b.unlocked ? "★" : "🔒"}</span>
             </div>

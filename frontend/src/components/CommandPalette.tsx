@@ -56,7 +56,7 @@ export default function CommandPalette() {
       {open && (
         <motion.div
           className="fixed inset-0 z-40 flex items-start justify-center pt-32"
-          style={{ background: "rgba(11,14,20,0.7)" }}
+          style={{ background: "rgba(15,23,42,0.7)" }}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -87,7 +87,7 @@ export default function CommandPalette() {
               {filtered.map((c, i) => (
                 <button
                   key={c.path}
-                  className={`w-full text-left px-4 py-2 text-sm ${i === cursor ? "bg-panel2 text-brass" : "text-fog"}`}
+                  className={`w-full text-left px-4 py-2 text-sm ${i === cursor ? "bg-panel2 text-accent" : "text-fog"}`}
                   onMouseEnter={() => setCursor(i)}
                   onClick={() => run(i)}
                 >
@@ -95,7 +95,7 @@ export default function CommandPalette() {
                 </button>
               ))}
               {filtered.length === 0 && query.trim() && (
-                <button className="w-full text-left px-4 py-2 text-sm text-brass" onClick={() => run(-1)}>
+                <button className="w-full text-left px-4 py-2 text-sm text-accent" onClick={() => run(-1)}>
                   Ask Athena: "{query}"
                 </button>
               )}

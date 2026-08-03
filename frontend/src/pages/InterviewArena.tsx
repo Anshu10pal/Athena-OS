@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, getToken } from "../lib/api";
 import { AnimatedNumber, DecryptText } from "../lib/fx";
 import { useAuth } from "../store/auth";
+import ScoreBar from "../components/ScoreBar";
 
 const ROLES = ["AI Engineer", "ML Engineer", "Data Scientist", "Architect", "Product Manager", "Behavioral"];
 const SECS = 30;
@@ -187,7 +188,7 @@ export default function InterviewArena() {
           <p className="text-fog text-sm mb-4">Pick a track to begin the two-stage interview.</p>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {ROLES.map((r) => (
-              <button key={r} className="bg-panel2 border border-line rounded-lg py-3 text-sm hover:border-brass transition-colors" onClick={() => start(r)} disabled={busy}>
+              <button key={r} className="bg-panel2 border border-line rounded-lg py-3 text-sm hover:border-accent transition-colors" onClick={() => start(r)} disabled={busy}>
                 {r}
               </button>
             ))}
@@ -196,7 +197,7 @@ export default function InterviewArena() {
             <p className="font-mono text-[10px] tracking-widest text-fog">OR TARGET A SPECIFIC JOB</p>
             <input className="input" placeholder="Job title, e.g. Senior GenAI Engineer — Fintech" value={customRole} onChange={(e) => setCustomRole(e.target.value)} />
             <textarea className="input min-h-24" placeholder="Paste the job description (optional) — every question gets tailored to it" value={jd} onChange={(e) => setJd(e.target.value)} />
-            <button className="btn-brass" disabled={busy || (!customRole.trim() && !jd.trim())} onClick={() => start(customRole.trim() || "the role in this job description", jd)}>
+            <button className="btn-accent" disabled={busy || (!customRole.trim() && !jd.trim())} onClick={() => start(customRole.trim() || "the role in this job description", jd)}>
               Start tailored interview
             </button>
           </div>
@@ -208,16 +209,16 @@ export default function InterviewArena() {
         <div className="card p-5 space-y-4">
           <div className="flex justify-between items-center">
             <span className="font-mono text-[10px] text-fog">RAPID SCREEN · Q{mcqIdx + 1}/{mcqs.length}</span>
-            <span className={`font-mono text-sm ${timeLeft <= 10 ? "text-ember" : "text-brass"}`}>{timeLeft}s</span>
+            <span className={`font-mono text-sm ${timeLeft <= 10 ? "text-danger" : "text-accent"}`}>{timeLeft}s</span>
           </div>
           <div className="h-1 bg-panel2 rounded-full overflow-hidden">
-            <div className="h-full bg-brass transition-all duration-1000" style={{ width: `${(timeLeft / SECS) * 100}%` }} />
+            <div className="h-full bg-accent transition-all duration-1000" style={{ width: `${(timeLeft / SECS) * 100}%` }} />
           </div>
           <p className="text-sm text-snow leading-relaxed">{mcqs[mcqIdx].q}</p>
           <div className="space-y-2">
             {mcqs[mcqIdx].options.map((opt, i) => (
-              <button key={i} onClick={() => advance(i)} className="w-full text-left text-xs px-3 py-2.5 rounded-lg border border-line bg-panel2 text-fog hover:border-brass/50 hover:text-snow transition-colors">
-                <span className="font-mono text-brass mr-2">{String.fromCharCode(65 + i)}</span>
+              <button key={i} onClick={() => advance(i)} className="w-full text-left text-xs px-3 py-2.5 rounded-lg border border-line bg-panel2 text-fog hover:border-accent/50 hover:text-snow transition-colors">
+                <span className="font-mono text-accent mr-2">{String.fromCharCode(65 + i)}</span>
                 {opt}
               </button>
             ))}
@@ -229,25 +230,25 @@ export default function InterviewArena() {
         <div className="card p-5 space-y-4">
           <div className="flex justify-between items-center">
             <span className="font-mono text-[10px] text-fog">DEEP DIVE · Q{qNum}/{total}</span>
-            {mcqScore !== null && <span className="font-mono text-[10px] text-brass">SCREEN: {mcqScore}%</span>}
+            {mcqScore !== null && <span className="font-mono text-[10px] text-accent">SCREEN: {mcqScore}%</span>}
           </div>
           <p className="text-lg text-snow">{question}</p>
           <textarea className="input min-h-32" placeholder="Click the mic and answer out loud — or type…" value={answer} onChange={(e) => setAnswer(e.target.value)} />
           <div className="flex gap-2">
             <button
               onClick={toggleMic}
-              className={`rounded-lg border border-line px-3 py-2 transition-colors ${recording ? "bg-ember text-ink" : "bg-panel2 text-fog hover:text-brass"}`}
+              className={`rounded-lg border border-line px-3 py-2 transition-colors ${recording ? "bg-danger text-ink" : "bg-panel2 text-fog hover:text-accent"}`}
               title={recording ? "Stop and transcribe" : "Answer by voice"}
             >
               {recording ? <Square size={16} /> : <Mic size={16} />}
             </button>
             {qNum >= total ? (
               <>
-                <button className="btn-brass flex-1" onClick={() => submitAnswer(true)} disabled={busy || recording}>
+                <button className="btn-accent flex-1" onClick={() => submitAnswer(true)} disabled={busy || recording}>
                   {busy ? "Evaluating…" : "Submit & get scorecard"}
                 </button>
                 <button
-                  className="border border-brass/40 text-brass rounded-lg px-4 text-sm hover:bg-brass/10 transition-colors disabled:opacity-50"
+                  className="border border-accent/40 text-accent rounded-lg px-4 text-sm hover:bg-accent/10 transition-colors disabled:opacity-50"
                   onClick={() => submitAnswer(false)}
                   disabled={busy || recording}
                   title="Keep going — up to 10 questions total"
@@ -256,13 +257,13 @@ export default function InterviewArena() {
                 </button>
               </>
             ) : (
-              <button className="btn-brass flex-1" onClick={() => submitAnswer(false)} disabled={busy || recording}>
+              <button className="btn-accent flex-1" onClick={() => submitAnswer(false)} disabled={busy || recording}>
                 {busy ? "Evaluating…" : "Submit answer"}
               </button>
             )}
           </div>
-          {qNum > total && <p className="font-mono text-[10px] text-brass">EXTENDED ROUND · Q{qNum} of max 10</p>}
-          {recording && <p className="font-mono text-[10px] text-ember animate-pulse">RECORDING — click the square when done, your words become the answer</p>}
+          {qNum > total && <p className="font-mono text-[10px] text-accent">EXTENDED ROUND · Q{qNum} of max 10</p>}
+          {recording && <p className="font-mono text-[10px] text-danger animate-pulse">RECORDING — click the square when done, your words become the answer</p>}
         </div>
       )}
 
@@ -270,27 +271,27 @@ export default function InterviewArena() {
         <div className="card p-5 space-y-4">
           <div className="flex items-baseline justify-between">
             <h3 className="font-display text-lg text-snow">Scorecard</h3>
-            <span className="font-mono text-xs text-brass">+200 XP · screen <AnimatedNumber value={scores.mcq_score ?? 0} />%</span>
+            <span className="font-mono text-xs text-accent">+200 XP · screen <AnimatedNumber value={scores.mcq_score ?? 0} />%</span>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-3">
             {(["communication", "technical_accuracy", "confidence", "depth", "leadership"] as const).map((k) => (
-              <div key={k} className="flex items-center gap-3 text-sm">
-                <span className="w-44 text-fog capitalize text-xs">{k.replace(/_/g, " ")}{k === "technical_accuracy" && <span className="font-mono text-[8px] text-brass ml-1">MCQ-blended</span>}</span>
-                <div className="flex-1 h-1.5 bg-panel2 rounded-full overflow-hidden">
-                  <div className="h-full bg-brass rounded-full" style={{ width: `${(scores[k] ?? 0) * 10}%` }} />
-                </div>
-                <span className="font-mono text-xs w-9 text-right">{scores[k]}/10</span>
-              </div>
+              <ScoreBar
+                key={k}
+                label={k.replace(/_/g, " ") + (k === "technical_accuracy" ? " (MCQ-blended)" : "")}
+                value={(scores[k] ?? 0) * 10}
+                valueLabel={`${scores[k]}/10`}
+                tone="accent"
+              />
             ))}
           </div>
           <p className="text-sm text-fog">{scores.feedback}</p>
           <div className="grid sm:grid-cols-2 gap-4 text-sm">
             <div>
-              <p className="text-sage font-medium mb-1 text-xs font-mono uppercase tracking-wider">Strengths</p>
+              <p className="text-accent font-medium mb-1 text-xs font-mono uppercase tracking-wider">Strengths</p>
               <ul className="text-fog space-y-1 text-xs">{scores.strengths?.map((s, i) => <li key={i}>· {s}</li>)}</ul>
             </div>
             <div>
-              <p className="text-ember font-medium mb-1 text-xs font-mono uppercase tracking-wider">Improve next</p>
+              <p className="text-danger font-medium mb-1 text-xs font-mono uppercase tracking-wider">Improve next</p>
               <ul className="text-fog space-y-1 text-xs">{scores.improvements?.map((s, i) => <li key={i}>· {s}</li>)}</ul>
             </div>
           </div>
@@ -298,14 +299,14 @@ export default function InterviewArena() {
             <summary className="font-mono text-[10px] tracking-widest text-fog cursor-pointer">RAPID SCREEN REVIEW — YOUR ANSWERS</summary>
             <div className="space-y-2 mt-3">
               {mcqReview.map((r, i) => (
-                <div key={i} className={`text-xs px-3 py-2 rounded-lg border ${r.ok ? "border-sage/30" : "border-ember/40 bg-panel2"}`}>
+                <div key={i} className={`text-xs px-3 py-2 rounded-lg border ${r.ok ? "border-accent/30" : "border-danger/40 bg-panel2"}`}>
                   <p className="text-snow">
-                    <span className={`font-mono mr-2 ${r.ok ? "text-sage" : "text-ember"}`}>{r.ok ? "✓" : "✗"}</span>
+                    <span className={`font-mono mr-2 ${r.ok ? "text-accent" : "text-danger"}`}>{r.ok ? "✓" : "✗"}</span>
                     {r.q}
                   </p>
                   <p className="font-mono text-[10px] text-fog mt-1">
                     you: {r.given >= 0 ? `${String.fromCharCode(65 + r.given)} — ${r.options[r.given]}` : "no answer (timed out)"}
-                    {!r.ok && <span className="text-sage"> · correct: {String.fromCharCode(65 + r.correct)} — {r.options[r.correct]}</span>}
+                    {!r.ok && <span className="text-accent"> · correct: {String.fromCharCode(65 + r.correct)} — {r.options[r.correct]}</span>}
                   </p>
                 </div>
               ))}
@@ -316,13 +317,13 @@ export default function InterviewArena() {
             <div className="space-y-3 mt-3">
               {transcript.map((t, i) => (
                 <div key={i} className="text-xs">
-                  <p className="text-brass font-mono mb-1">Q{i + 1}: {t.q}</p>
+                  <p className="text-accent font-mono mb-1">Q{i + 1}: {t.q}</p>
                   <p className="text-fog leading-relaxed">{t.a || "—"}</p>
                 </div>
               ))}
             </div>
           </details>
-          <button className="btn-brass w-full" onClick={() => setStage("pick")}>New interview</button>
+          <button className="btn-accent w-full" onClick={() => setStage("pick")}>New interview</button>
         </div>
       )}
     </div>

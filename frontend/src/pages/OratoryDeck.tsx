@@ -147,7 +147,7 @@ export default function OratoryDeck() {
   };
 
   // Toastmasters timing cards: green at min, amber at warning, red at limit
-  const cardColor = phase !== "speak" ? "border-line" : elapsed >= target ? "border-ember" : elapsed >= target - 15 ? "border-brass" : elapsed >= Math.max(15, target - 45) ? "border-sage" : "border-line";
+  const cardColor = phase !== "speak" ? "border-line" : elapsed >= target ? "border-danger" : elapsed >= target - 15 ? "border-warning" : elapsed >= Math.max(15, target - 45) ? "border-accent" : "border-line";
 
   return (
     <div className={`w-full max-w-none space-y-6`}>
@@ -155,7 +155,7 @@ export default function OratoryDeck() {
         <h2 className="font-display text-2xl font-semibold text-snow"><DecryptText text="Oratory deck" /></h2>
         <p className="text-fog text-sm mt-1 font-mono">table topics · 30s to think · speak your way to clarity</p>
       </div>
-      {error && <p className="text-ember text-sm">{error}</p>}
+      {error && <p className="text-danger text-sm">{error}</p>}
 
       {phase === "setup" && (
         <div className="card p-5 space-y-4">
@@ -163,7 +163,7 @@ export default function OratoryDeck() {
             <p className="font-mono text-[10px] tracking-widest text-fog mb-2">MODE</p>
             <div className="flex gap-2">
               {["classic", "professional", "wildcard"].map((m) => (
-                <button key={m} onClick={() => setMode(m)} className={`px-3 py-2 rounded-lg border text-xs capitalize transition-colors ${mode === m ? "border-brass text-brass bg-brass/10" : "border-line text-fog hover:text-snow"}`}>
+                <button key={m} onClick={() => setMode(m)} className={`px-3 py-2 rounded-lg border text-xs capitalize transition-colors ${mode === m ? "border-accent text-accent bg-accent/10" : "border-line text-fog hover:text-snow"}`}>
                   {m}
                 </button>
               ))}
@@ -173,19 +173,19 @@ export default function OratoryDeck() {
             <p className="font-mono text-[10px] tracking-widest text-fog mb-2">SPEAKING TIME</p>
             <div className="flex gap-2">
               {[60, 120, 180].map((t) => (
-                <button key={t} onClick={() => setTarget(t)} className={`px-3 py-2 rounded-lg border text-xs transition-colors ${target === t ? "border-brass text-brass bg-brass/10" : "border-line text-fog hover:text-snow"}`}>
+                <button key={t} onClick={() => setTarget(t)} className={`px-3 py-2 rounded-lg border text-xs transition-colors ${target === t ? "border-accent text-accent bg-accent/10" : "border-line text-fog hover:text-snow"}`}>
                   {t / 60} min
                 </button>
               ))}
             </div>
           </div>
-          <button className="btn-brass w-full" onClick={draw}>Draw a topic</button>
+          <button className="btn-accent w-full" onClick={draw}>Draw a topic</button>
           {history.length > 1 && (
             <div className="pt-2">
               <p className="font-mono text-[10px] tracking-widest text-fog mb-1.5">FILLER RATE TREND (PER MIN)</p>
               <svg viewBox="0 0 300 40" className="w-full h-10" role="img" aria-label="Filler rate over sessions">
                 <polyline
-                  fill="none" stroke="#D4B36A" strokeWidth="1.5"
+                  fill="none" stroke="#22C55E" strokeWidth="1.5"
                   points={history.filter((h) => h.filler_rate != null).map((h, i, arr) => `${(i / Math.max(1, arr.length - 1)) * 290 + 5},${35 - Math.min(30, (h.filler_rate ?? 0) * 3)}`).join(" ")}
                 />
               </svg>
@@ -199,7 +199,7 @@ export default function OratoryDeck() {
           <p className="font-mono text-[10px] tracking-[0.3em] text-fog">YOUR TOPIC</p>
           <p className="font-display text-xl text-snow leading-snug min-h-14">{topic ? <DecryptText text={topic} speed={20} /> : "…"}</p>
           {hint && <p className="text-fog text-xs font-mono">angle: {hint}</p>}
-          <button className="btn-brass" onClick={startThink} disabled={!topic}>Start 30s think timer</button>
+          <button className="btn-accent" onClick={startThink} disabled={!topic}>Start 30s think timer</button>
         </div>
       )}
 
@@ -209,7 +209,7 @@ export default function OratoryDeck() {
           <div className="flex justify-center"><VoiceOrb state={orb.state} size={110} /></div>
           {phase === "think" ? (
             <>
-              <p className="font-mono text-4xl text-brass">{countdown}</p>
+              <p className="font-mono text-4xl text-accent">{countdown}</p>
               <p className="font-mono text-[10px] tracking-widest text-fog">THINK — NO NOTES</p>
               <button className="text-fog text-xs font-mono hover:text-snow" onClick={() => { window.clearInterval(timerRef.current); startSpeak(); }}>
                 ready early — start speaking →
@@ -219,7 +219,7 @@ export default function OratoryDeck() {
             <>
               <p className="font-mono text-4xl text-snow">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}</p>
               <p className="font-mono text-[10px] tracking-widest text-fog">SPEAKING · TARGET {target / 60} MIN · BORDER = TIMING CARD</p>
-              <button className="btn-brass" onClick={stopSpeak}>Finish speech</button>
+              <button className="btn-accent" onClick={stopSpeak}>Finish speech</button>
             </>
           )}
         </div>
@@ -246,13 +246,13 @@ export default function OratoryDeck() {
               {(analysis.metrics.filler_breakdown?.length ?? 0) > 0 ? (
                 <div className="flex flex-wrap gap-1.5 justify-center">
                   {analysis.metrics.filler_breakdown.map((f) => (
-                    <span key={f.word} className="font-mono text-[10px] text-ember border border-ember/30 bg-ember/10 rounded px-2 py-0.5">
+                    <span key={f.word} className="font-mono text-[10px] text-danger border border-danger/30 bg-danger/10 rounded px-2 py-0.5">
                       "{f.word}" ×{f.count}
                     </span>
                   ))}
                 </div>
               ) : (
-                <p className="font-mono text-[10px] text-sage">no core fillers detected this round — clean run</p>
+                <p className="font-mono text-[10px] text-accent">no core fillers detected this round — clean run</p>
               )}
             </div>
             {analysis.metrics.crutch_words.length > 0 && (
@@ -265,7 +265,7 @@ export default function OratoryDeck() {
                 <p className="font-mono text-[9px] tracking-widest text-fog mb-1.5">CONFIDENCE HEDGES — SOUND LESS SURE THAN YOU ARE</p>
                 <div className="flex flex-wrap gap-1.5 justify-center">
                   {analysis.metrics.hedge_breakdown.map((h) => (
-                    <span key={h.word} className="font-mono text-[10px] text-brass border border-brass/30 bg-brass/10 rounded px-2 py-0.5">
+                    <span key={h.word} className="font-mono text-[10px] text-accent border border-accent/30 bg-accent/10 rounded px-2 py-0.5">
                       "{h.word}" ×{h.count}
                     </span>
                   ))}
@@ -281,15 +281,15 @@ export default function OratoryDeck() {
               <div className="mt-4">
                 <p className="font-mono text-[9px] tracking-widest text-fog mb-1">PACE OVER TIME (WPM · 110–150 = SWEET SPOT)</p>
                 <svg viewBox="0 0 300 50" className="w-full h-12" role="img" aria-label="Words per minute over time">
-                  <rect x="0" y={50 - (150 / 220) * 50} width="300" height={((150 - 110) / 220) * 50} fill="rgba(127,181,140,0.12)" />
+                  <rect x="0" y={50 - (150 / 220) * 50} width="300" height={((150 - 110) / 220) * 50} fill="rgba(34,197,94,0.12)" />
                   <polyline
-                    fill="none" stroke="#D4B36A" strokeWidth="1.5"
+                    fill="none" stroke="#22C55E" strokeWidth="1.5"
                     points={analysis.metrics.wpm_timeline.map((p, i, arr) => `${(i / Math.max(1, arr.length - 1)) * 294 + 3},${50 - Math.min(48, (p.wpm / 220) * 50)}`).join(" ")}
                   />
                 </svg>
               </div>
             )}
-            {analysis.improved && <p className="font-mono text-[10px] text-sage mt-2">IMPROVED OVER LAST SESSION +25 XP BONUS</p>}
+            {analysis.improved && <p className="font-mono text-[10px] text-accent mt-2">IMPROVED OVER LAST SESSION +25 XP BONUS</p>}
           </div>
 
           <div className="card p-5">
@@ -299,14 +299,14 @@ export default function OratoryDeck() {
                 <div key={k} className="flex items-center gap-3 text-sm">
                   <span className="w-28 text-fog capitalize text-xs">{k}</span>
                   <div className="flex-1 h-1.5 bg-panel2 rounded-full overflow-hidden">
-                    <div className="h-full bg-brass rounded-full" style={{ width: `${(analysis.scores[k] ?? 0) * 10}%` }} />
+                    <div className="h-full bg-accent rounded-full" style={{ width: `${(analysis.scores[k] ?? 0) * 10}%` }} />
                   </div>
                   <span className="font-mono text-xs w-9 text-right">{analysis.scores[k] ?? "—"}/10</span>
                 </div>
               ))}
             </div>
             {analysis.scores.feedback && <p className="text-fog text-xs mt-3 leading-relaxed">{analysis.scores.feedback}</p>}
-            {analysis.scores.tip && <p className="text-brass text-xs mt-2 font-mono">next time → {analysis.scores.tip}</p>}
+            {analysis.scores.tip && <p className="text-accent text-xs mt-2 font-mono">next time → {analysis.scores.tip}</p>}
           </div>
 
           {(analysis.scores.grammar_fixes?.length ?? 0) > 0 && (
@@ -315,8 +315,8 @@ export default function OratoryDeck() {
               <div className="space-y-2">
                 {analysis.scores.grammar_fixes!.map((g, i) => (
                   <div key={i} className="text-xs">
-                    <p className="text-ember line-through">"{g.original}"</p>
-                    <p className="text-sage mt-0.5">→ "{g.corrected}"</p>
+                    <p className="text-danger line-through">"{g.original}"</p>
+                    <p className="text-accent mt-0.5">→ "{g.corrected}"</p>
                   </div>
                 ))}
               </div>
@@ -328,7 +328,7 @@ export default function OratoryDeck() {
               <div className="flex flex-wrap gap-2">
                 {analysis.scores.vocab_suggestions!.map((v, i) => (
                   <span key={i} className="font-mono text-[10px] border border-line rounded px-2 py-1">
-                    <span className="text-fog">{v.used}</span> <span className="text-brass">→ {v.try}</span>
+                    <span className="text-fog">{v.used}</span> <span className="text-accent">→ {v.try}</span>
                   </span>
                 ))}
               </div>
@@ -340,7 +340,7 @@ export default function OratoryDeck() {
             <p className="text-xs text-fog mt-2 leading-relaxed whitespace-pre-wrap">{analysis.transcript}</p>
           </details>
 
-          <button className="btn-brass w-full" onClick={() => { setAnalysis(null); setPhase("setup"); }}>
+          <button className="btn-accent w-full" onClick={() => { setAnalysis(null); setPhase("setup"); }}>
             Another round (+{analysis.xp_gained} XP earned)
           </button>
         </div>
@@ -354,7 +354,7 @@ function Metric({ label, value, sub }: { label: string; value: number; sub: stri
     <div>
       <p className="font-display text-2xl text-snow"><AnimatedNumber value={value} /></p>
       <p className="font-mono text-[9px] uppercase tracking-wider text-fog">{label}</p>
-      <p className="font-mono text-[9px] text-brass mt-0.5">{sub}</p>
+      <p className="font-mono text-[9px] text-accent mt-0.5">{sub}</p>
     </div>
   );
 }
