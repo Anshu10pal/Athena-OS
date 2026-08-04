@@ -49,22 +49,11 @@ def update_node(roadmap_id: int, payload: NodeStatusIn, user: User = Depends(get
     node = by_id.get(payload.node_id)
     if not node:
         raise HTTPException(404, "Node not found")
-    if node["status"] == "locked":
-        raise HTTPException(400, "Node is locked — complete its prerequisites first")
     if payload.status == "completed":
         raise HTTPException(400, "Nodes are completed by passing the assessment, not manually")
 
     leveled_up = False
-    if payload.status == "skipped" and node["status"] not in ("completed", "skipped"):
-        pass  # skip: unlocks dependents, no XP — "I already know this"
     node["status"] = payload.status
-
-    # Unlock nodes whose dependencies are all complete
-    for n in nodes:
-        if n["status"] == "locked":
-            deps = n.get("depends_on", [])
-            if all(by_id.get(d, {}).get("status") in ("completed", "skipped") for d in deps):
-                n["status"] = "available"
 
     roadmap.nodes = nodes
     flag_modified(roadmap, "nodes")
@@ -149,8 +138,6 @@ def dossier(roadmap_id: int, node_id: str, user: User = Depends(get_current_user
 @router.post("/{roadmap_id}/node/{node_id}/assessment/start")
 def start_assessment(roadmap_id: int, node_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     _roadmap, node = _find_node(db, user, roadmap_id, node_id)
-    if node["status"] in ("locked",):
-        raise HTTPException(400, "Node is locked")
     total = _question_count(node)
     questions: list[dict] = []
     while len(questions) < total:
@@ -214,11 +201,6 @@ def submit_assessment(assessment_id: int, payload: dict, user: User = Depends(ge
             for s in node.get("skills", []):
                 skills[s] = min(5, skills.get(s, 0) + 1)
             user.skills = skills
-            for n in nodes:
-                if n["status"] == "locked":
-                    deps = n.get("depends_on", [])
-                    if all(by_id.get(d, {}).get("status") in ("completed", "skipped") for d in deps):
-                        n["status"] = "available"
             roadmap.nodes = nodes
             flag_modified(roadmap, "nodes")
             nodes_out = nodes
@@ -304,83 +286,6 @@ def expand_node(roadmap_id: int, node_id: str, user: User = Depends(get_current_
 
 
 def _maybe_complete_parent(db: Session, user: User, child: Roadmap) -> dict | None:
-    """When every node in a sub-roadmap is completed/skipped, auto-complete its parent node."""
-    if not child.parent_roadmap_id:
-        return None
-    nodes = child.nodes or []
-    if not nodes or not all(n["status"] in ("completed", "skipped") for n in nodes):
-        return None
-    parent = db.get(Roadmap, child.parent_roadmap_id)
-    if not parent:
-        return None
-    pnodes = parent.nodes or []
-    by_id = {n["id"]: n for n in pnodes}
-    pnode = by_id.get(child.parent_node_id)
-    if not pnode or pnode["status"] == "completed":
-        return None
-    pnode["status"] = "completed"
-    user.xp += 150
-    for n in pnodes:
-        if n["status"] == "locked":
-            deps = n.get("depends_on", [])
-            if all(by_id.get(d, {}).get("status") in ("completed", "skipped") for d in deps):
-                n["status"] = "available"
-    parent.nodes = pnodes
-    flag_modified(parent, "nodes")
-    db.commit()
-    return {"parent_completed": pnode["title"], "bonus_xp": 150}
-
-
-
-@router.post("/{roadmap_id}/node/{node_id}/expand")
-def expand_node(roadmap_id: int, node_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Generate (or return) the granular sub-roadmap for one node — graph after graph."""
-    import json as _json
-
-    roadmap, node = _find_node(db, user, roadmap_id, node_id)
-    existing = db.query(Roadmap).filter(
-        Roadmap.parent_roadmap_id == roadmap_id, Roadmap.parent_node_id == node_id, Roadmap.user_id == user.id
-    ).first()
-    if existing:
-        return {"id": existing.id, "title": existing.title, "nodes": existing.nodes, "existing": True}
-
-    profile = _json.dumps({"level": user.experience_level, "target_role": user.target_role, "skills": list((user.skills or {}).keys())})
-    result = _chat_json(
-        [
-            {
-                "role": "system",
-                "content": _prompts.SUBMAP_GENERATOR.format(
-                    title=node["title"], description=node.get("description", ""), skills=", ".join(node.get("skills", [])), profile=profile
-                ),
-            },
-            {"role": "user", "content": "Generate the sub-roadmap JSON now."},
-        ],
-        fast=False,
-    )
-    nodes = result.get("nodes", [])
-    if not nodes:
-        raise HTTPException(500, "Could not expand this topic — try again")
-    for i, n in enumerate(nodes):
-        n["status"] = "available" if i == 0 else "locked"
-    # unlock any node with no dependencies
-    for n in nodes:
-        if not n.get("depends_on"):
-            n["status"] = "available" if n["status"] == "locked" else n["status"]
-    sub = Roadmap(
-        user_id=user.id,
-        title=result.get("title", f"{node['title']} — deep dive"),
-        target_role=roadmap.target_role,
-        nodes=nodes,
-        parent_roadmap_id=roadmap_id,
-        parent_node_id=node_id,
-    )
-    db.add(sub)
-    db.commit()
-    db.refresh(sub)
-    return {"id": sub.id, "title": sub.title, "nodes": sub.nodes, "existing": False}
-
-
-def _maybe_complete_parent(db: Session, user: User, child: Roadmap) -> dict | None:
     """When a sub-map is fully cleared, auto-complete its parent node (+100 bonus XP)."""
     if not child.parent_roadmap_id:
         return None
@@ -396,11 +301,6 @@ def _maybe_complete_parent(db: Session, user: User, child: Roadmap) -> dict | No
         return None
     pnode["status"] = "completed"
     user.xp += 100
-    for n in nodes:
-        if n["status"] == "locked":
-            deps = n.get("depends_on", [])
-            if all(by_id.get(d, {}).get("status") in ("completed", "skipped") for d in deps):
-                n["status"] = "available"
     parent.nodes = nodes
     flag_modified(parent, "nodes")
     db.commit()
@@ -457,8 +357,6 @@ def remove_node(roadmap_id: int, node_id: str, user: User = Depends(get_current_
     by_id = {n["id"]: n for n in nodes}
     for n in nodes:
         n["depends_on"] = [d for d in n.get("depends_on", []) if d in by_id]
-        if n["status"] == "locked" and all(by_id.get(d, {}).get("status") in ("completed", "skipped") for d in n["depends_on"]):
-            n["status"] = "available"
     roadmap.nodes = nodes
     flag_modified(roadmap, "nodes")
     db.commit()

@@ -1,0 +1,74 @@
+slug: palantir-foundry
+title: Palantir Foundry
+target: Palantir Foundry Tool
+category: tool
+aliases:
+  - palantir foundry tool
+  - foundry
+  - palantir
+summary: >
+  The general-purpose data and programming skills Foundry work is built
+  on, plus the platform-specific concepts — ontology, pipelines, and
+  applications — that don't map onto any generic module.
+stages:
+  - title: Foundations
+    nodes:
+      - title: A Programming Language
+        blurb: >
+          Python is what most Foundry code repositories and transforms
+          are actually written in.
+        module: python
+      - title: Databases & SQL
+        blurb: >
+          The query language underneath most of Foundry's data
+          transforms and Contour analyses.
+        module: sql
+      - title: Version Control
+        blurb: >
+          Foundry's code repositories are Git-backed — branching,
+          committing, and reviewing work the same way.
+        module: git
+      - title: Data Fundamentals
+        blurb: >
+          Schemas, data quality, and the ETL/ELT vocabulary Foundry's
+          pipelines are built around.
+        module: data-fundamentals
+
+  - title: The Foundry Platform
+    nodes:
+      - title: Foundry Ontology
+        blurb: >
+          The semantic layer that maps raw datasets onto objects,
+          properties, and links your applications actually reason about.
+      - title: Pipeline Builder & Code Repositories
+        blurb: >
+          Building data transforms visually or in code, and how Foundry
+          tracks lineage from raw input to finished dataset.
+      - title: Contour & Quiver Analysis
+        blurb: >
+          Foundry's interactive tools for exploring and visualizing data
+          without leaving the platform.
+
+  - title: Building on Foundry
+    nodes:
+      - title: Workshop Applications
+        blurb: >
+          Assembling ontology objects and widgets into an application
+          end users interact with directly.
+      - title: Foundry Functions & Actions
+        blurb: >
+          Writing logic that runs against ontology objects and the
+          write-back actions that let users change real data safely.
+
+  - title: Modern AI-Assisted Workflows
+    nodes:
+      - title: Prompt Engineering
+        blurb: >
+          Getting reliable output from the LLM-backed features
+          increasingly built into Foundry's AIP tooling.
+        module: prompt-engineering
+      - title: Claude Code
+        blurb: >
+          Working with an agentic coding CLI when writing transforms
+          and functions outside the Foundry UI.
+        module: claude-code

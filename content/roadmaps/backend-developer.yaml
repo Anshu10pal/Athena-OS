@@ -1,0 +1,76 @@
+slug: backend-developer
+title: Backend Developer
+target: Backend Developer
+category: role
+aliases:
+  - backend engineer
+  - backend engineering
+  - server-side developer
+summary: >
+  A path from programming fundamentals through data, systems design, and
+  infrastructure, to the interview skills that get you hired for it.
+stages:
+  - title: Foundations
+    nodes:
+      - title: A Programming Language
+        blurb: >
+          Pick one language and get fluent in it — syntax, standard library,
+          how to structure a small program before scaling up to a large one.
+        module: python
+      - title: Version Control
+        blurb: >
+          Track your changes, branch to work in parallel, and collaborate
+          through pull requests without overwriting anyone's work.
+        module: git
+      - title: Data Structures & Algorithms
+        blurb: >
+          Arrays, hash maps, trees, and graphs — and the algorithms that run
+          on them well enough to matter at scale.
+        module: data-structures
+
+  - title: Data & Storage
+    nodes:
+      - title: Databases & SQL
+        blurb: >
+          Modeling data relationally, writing queries that scale, and
+          understanding indexes, transactions, and joins.
+        module: sql
+
+  - title: Systems & Infrastructure
+    nodes:
+      - title: System Design Fundamentals
+        blurb: >
+          Load balancing, caching, database scaling, and the tradeoffs
+          behind every "it depends" in a systems interview.
+        module: system-design
+      - title: Containers with Docker
+        blurb: >
+          Packaging an application and its dependencies so it runs the
+          same way on your machine, a teammate's, and in production.
+        module: docker
+      - title: Cloud Fundamentals (AWS)
+        blurb: >
+          The handful of AWS services — compute, storage, networking,
+          identity — that most backend systems are actually built from.
+        module: aws-core
+
+  - title: Modern AI-Assisted Workflows
+    nodes:
+      - title: Prompt Engineering
+        blurb: >
+          Getting reliable output from the LLMs increasingly built into
+          backend systems, not just chat products.
+        module: prompt-engineering
+      - title: Claude Code
+        blurb: >
+          Working with an agentic coding CLI as part of your day-to-day
+          development loop.
+        module: claude-code
+
+  - title: Interview Readiness
+    nodes:
+      - title: Coding Interview Practice
+        blurb: >
+          Deliberate practice on the pattern-recognition skills that
+          technical interviews actually test.
+        module: leetcode

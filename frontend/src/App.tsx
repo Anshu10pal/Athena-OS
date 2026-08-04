@@ -8,6 +8,7 @@ import Hub from "./pages/Hub";
 import InterviewArena from "./pages/InterviewArena";
 import Login from "./pages/Login";
 import Missions from "./pages/Missions";
+import ModuleDetail from "./pages/ModuleDetail";
 import OratoryDeck from "./pages/OratoryDeck";
 import PresentationArena from "./pages/PresentationArena";
 import Communication from "./pages/Communication";
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="/" element={<Hub />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/roadmap" element={<Roadmap />} />
+          <Route path="/modules/:slug" element={<ModuleDetail />} />
           <Route path="/missions" element={<Missions />} />
           <Route path="/interview" element={<InterviewArena />} />
           <Route path="/oratory" element={<OratoryDeck />} />

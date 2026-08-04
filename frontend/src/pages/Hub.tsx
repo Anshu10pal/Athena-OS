@@ -3,10 +3,32 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ConsistencyCard, FocusCard, GymCard, RecallCard, RoadmapCard, TodayCard } from "../components/DashboardCards";
 import HeroMedia from "../components/HeroMedia";
 import ToolsBento from "../components/ToolsBento";
+import { api } from "../lib/api";
 import { useWakeWord } from "../lib/useWakeWord";
 import { useAuth } from "../store/auth";
 
 const WAVE_DELAYS = [0, 0.08, 0.16, 0.24, 0.32, 0.4, 0.48, 0.56, 0.64, 0.72, 0.8, 0.88];
+
+interface DashboardData {
+  roadmap_title: string | null;
+  roadmap_slug: string | null;
+  roadmap_progress: number;
+  roadmap_topic_count: number;
+  roadmap_completed_count: number;
+  missions_today: { id: number; objective: string; status: string }[];
+  missions_today_completed: number;
+  missions_today_total: number;
+  review_forecast: { date: string; count: number }[];
+  streak: number;
+  activity: {
+    cells: { date: string; level: number }[];
+    range_start: string;
+    range_end: string;
+    active_days: number;
+    active_this_week: number;
+    active_last_week: number;
+  };
+}
 
 export default function Hub() {
   const { user } = useAuth();
@@ -14,6 +36,11 @@ export default function Hub() {
   const location = useLocation();
   const [wakeReady, setWakeReady] = useState(false);
   const [wakeHint, setWakeHint] = useState("");
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+
+  useEffect(() => {
+    api<DashboardData>("/api/analytics/dashboard").then(setDashboard).catch(() => {});
+  }, []);
 
   useWakeWord(
     () => navigate("/chat"),
@@ -163,10 +190,28 @@ export default function Hub() {
             </Link>
           </div>
           <div className="dash">
-            <RoadmapCard />
+            <RoadmapCard
+              title={dashboard?.roadmap_title ?? null}
+              percent={dashboard?.roadmap_progress ?? 0}
+              topicCount={dashboard?.roadmap_topic_count ?? 0}
+              completedCount={dashboard?.roadmap_completed_count ?? 0}
+            />
             <GymCard />
-            <TodayCard />
-            <ConsistencyCard />
+            <TodayCard
+              completed={dashboard?.missions_today_completed ?? 0}
+              total={dashboard?.missions_today_total ?? 0}
+              missions={dashboard?.missions_today ?? []}
+              forecast={dashboard?.review_forecast ?? []}
+            />
+            <ConsistencyCard
+              cells={dashboard?.activity.cells ?? []}
+              rangeStart={dashboard?.activity.range_start ?? new Date().toISOString().slice(0, 10)}
+              rangeEnd={dashboard?.activity.range_end ?? new Date().toISOString().slice(0, 10)}
+              streak={dashboard?.streak ?? 0}
+              activeDays={dashboard?.activity.active_days ?? 0}
+              activeThisWeek={dashboard?.activity.active_this_week ?? 0}
+              activeLastWeek={dashboard?.activity.active_last_week ?? 0}
+            />
             <RecallCard />
             <FocusCard />
           </div>

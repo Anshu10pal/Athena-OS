@@ -1,0 +1,123 @@
+slug: sql
+title: SQL
+kind: tool
+summary: >
+  The query language behind almost every relational database — how to
+  shape, filter, combine, and reason about tabular data at any scale.
+aliases:
+  - structured query language
+  - relational databases
+  - databases
+  - sql queries
+topics:
+  - slug: relational-model-basics
+    title: Relational Model Basics
+    blurb: >
+      Tables, rows, columns, and keys — the mental model every SQL query
+      is built on top of.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "The relational model explained"
+        search_query: "relational database model explained"
+      - kind: article
+        title: "Relational databases basics"
+        search_query: "relational database basics tables keys"
+
+  - slug: select-filtering-sorting
+    title: SELECT, Filtering, and Sorting
+    blurb: >
+      Reading data out of a table with SELECT, narrowing it with WHERE,
+      and ordering the result — the queries you'll write most often.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "SQL SELECT and WHERE tutorial"
+        search_query: "sql select where clause tutorial"
+      - kind: article
+        title: "SQL basics: SELECT, WHERE, ORDER BY"
+        search_query: "sql select where order by basics"
+
+  - slug: joins
+    title: Joins
+    blurb: >
+      Inner, left, right, and full joins — how to combine rows across
+      tables, and the classic mistakes that quietly duplicate or drop data.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "SQL joins explained visually"
+        search_query: "sql joins explained visually inner left right"
+      - kind: article
+        title: "SQL join types guide"
+        search_query: "sql join types guide inner left right full"
+
+  - slug: aggregations-group-by
+    title: Aggregations & Group By
+    blurb: >
+      COUNT, SUM, AVG, and GROUP BY — turning many rows into a summary,
+      and using HAVING to filter on the summary itself.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "SQL GROUP BY and aggregate functions"
+        search_query: "sql group by aggregate functions tutorial"
+      - kind: article
+        title: "GROUP BY vs HAVING explained"
+        search_query: "sql group by having explained"
+
+  - slug: indexes-and-query-performance
+    title: Indexes & Query Performance
+    blurb: >
+      What an index actually speeds up, what it costs on writes, and how
+      to read a query plan to find out why a query is slow.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "How SQL indexes work"
+        search_query: "how sql indexes work explained"
+      - kind: article
+        title: "Reading a query execution plan"
+        search_query: "sql query execution plan explained"
+
+  - slug: transactions-and-acid
+    title: Transactions & ACID
+    blurb: >
+      Why a transaction either fully happens or fully doesn't, and what
+      atomicity, consistency, isolation, and durability each guarantee.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "ACID properties explained"
+        search_query: "acid properties database transactions explained"
+      - kind: article
+        title: "Database transactions guide"
+        search_query: "database transactions acid guide"
+
+  - slug: window-functions
+    title: Window Functions
+    blurb: >
+      Running totals, rankings, and row-over-row comparisons without
+      collapsing rows the way GROUP BY does.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "SQL window functions explained"
+        search_query: "sql window functions explained over partition"
+      - kind: article
+        title: "Window functions guide"
+        search_query: "sql window functions guide examples"
+
+  - slug: schema-design-and-normalization
+    title: Schema Design & Normalization
+    blurb: >
+      Structuring tables to avoid duplicated and inconsistent data, and
+      knowing when a little denormalization is the right tradeoff.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Database normalization explained"
+        search_query: "database normalization explained 1nf 2nf 3nf"
+      - kind: article
+        title: "When to denormalize a schema"
+        search_query: "database denormalization when to use"

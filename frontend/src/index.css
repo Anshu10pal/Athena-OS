@@ -365,15 +365,6 @@ h1 em { font-style: normal; color: var(--jade); }
 .note b { color: var(--fg); font-weight: 500; }
 .foot { margin-top: auto; padding-top: 12px; font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--fg-3); display: flex; justify-content: space-between; gap: 10px; }
 
-.legs { display: flex; gap: 8px; margin-top: 18px; }
-.stage { display: flex; flex-direction: column; gap: 8px; flex: 1; }
-.stage b { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 400; color: var(--fg-3); }
-.stage u { text-decoration: none; height: 4px; border-radius: 2px; background: rgba(255,255,255,.08); display: block; }
-.stage.done b { color: var(--fg-2); }
-.stage.done u { background: var(--jade); }
-.stage.now b { color: var(--amber); }
-.stage.now u { background: linear-gradient(90deg, var(--amber) 45%, rgba(255,255,255,.08) 45%); }
-
 .radar { width: 100%; max-width: 186px; margin: 6px auto 0; display: block; }
 .quad-key { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin-top: auto; padding-top: 12px; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
 .quad-key span { display: flex; justify-content: space-between; }

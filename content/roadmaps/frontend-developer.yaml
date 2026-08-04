@@ -1,0 +1,67 @@
+slug: frontend-developer
+title: Frontend Developer
+target: Frontend Developer
+category: role
+aliases:
+  - frontend engineer
+  - front-end developer
+  - ui developer
+summary: >
+  From the web platform fundamentals through building and shipping UIs,
+  to the CS fundamentals and interview skills that get you hired for it.
+stages:
+  - title: Web Fundamentals
+    nodes:
+      - title: HTML & CSS
+        blurb: >
+          Structuring content and styling it — the two layers every
+          browser renders before a single line of JavaScript runs.
+      - title: JavaScript Fundamentals
+        blurb: >
+          The language every frontend framework compiles down to —
+          syntax, the DOM, and asynchronous code.
+      - title: Version Control
+        blurb: >
+          Track your changes, branch to work in parallel, and collaborate
+          through pull requests without overwriting anyone's work.
+        module: git
+
+  - title: Building UIs
+    nodes:
+      - title: Component-Based Frameworks
+        blurb: >
+          Structuring an interface as composable, reusable pieces instead
+          of one long template — the model behind React, Vue, and Svelte.
+      - title: State Management
+        blurb: >
+          Deciding where data lives and how it flows through a component
+          tree as an application grows past a handful of components.
+
+  - title: Computer Science Fundamentals
+    nodes:
+      - title: Data Structures & Algorithms
+        blurb: >
+          The CS fundamentals frontend interviews still test, even though
+          you'll use them less day-to-day than a backend engineer will.
+        module: data-structures
+
+  - title: Modern AI-Assisted Workflows
+    nodes:
+      - title: Prompt Engineering
+        blurb: >
+          Getting reliable output from the LLM features increasingly
+          built directly into frontend products.
+        module: prompt-engineering
+      - title: Claude Code
+        blurb: >
+          Working with an agentic coding CLI as part of your day-to-day
+          development loop.
+        module: claude-code
+
+  - title: Interview Readiness
+    nodes:
+      - title: Coding Interview Practice
+        blurb: >
+          Deliberate practice on the pattern-recognition skills that
+          technical interviews actually test.
+        module: leetcode

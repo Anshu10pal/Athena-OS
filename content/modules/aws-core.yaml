@@ -1,0 +1,109 @@
+slug: aws-core
+title: AWS Core
+kind: tool
+summary: >
+  The handful of AWS services that most cloud systems are actually built
+  from — compute, storage, networking, and identity.
+aliases:
+  - amazon web services
+  - aws
+  - cloud fundamentals
+  - aws basics
+topics:
+  - slug: cloud-computing-fundamentals
+    title: Cloud Computing Fundamentals
+    blurb: >
+      Renting compute and storage instead of owning it — what "the
+      cloud" actually is, and why it changed how systems get built.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Cloud computing explained"
+        search_query: "what is cloud computing explained beginners"
+      - kind: article
+        title: "Cloud computing basics"
+        search_query: "cloud computing basics guide"
+
+  - slug: iam-and-access-control
+    title: IAM & Access Control
+    blurb: >
+      Users, roles, and policies — how AWS decides who can do what, and
+      why "least privilege" is the default you should reach for.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "AWS IAM explained"
+        search_query: "aws iam explained users roles policies"
+      - kind: article
+        title: "IAM best practices"
+        search_query: "aws iam best practices least privilege"
+
+  - slug: ec2-and-compute-basics
+    title: EC2 & Compute Basics
+    blurb: >
+      Virtual machines in the cloud — instance types, how they're billed,
+      and the difference between stopping and terminating one.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "AWS EC2 explained"
+        search_query: "aws ec2 explained for beginners"
+      - kind: article
+        title: "EC2 instance types guide"
+        search_query: "aws ec2 instance types guide"
+
+  - slug: s3-and-object-storage
+    title: S3 & Object Storage
+    blurb: >
+      Storing files as objects in buckets instead of a filesystem, and
+      the durability and access-control model that comes with it.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "AWS S3 explained"
+        search_query: "aws s3 explained for beginners"
+      - kind: article
+        title: "S3 storage classes guide"
+        search_query: "aws s3 storage classes guide"
+
+  - slug: vpc-and-networking-basics
+    title: VPC & Networking Basics
+    blurb: >
+      Your own private network inside AWS — subnets, route tables, and
+      what actually controls whether something is reachable from the internet.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "AWS VPC explained"
+        search_query: "aws vpc explained subnets networking"
+      - kind: article
+        title: "VPC networking basics"
+        search_query: "aws vpc networking basics guide"
+
+  - slug: rds-and-managed-databases
+    title: RDS & Managed Databases
+    blurb: >
+      Running Postgres or MySQL without managing the server yourself —
+      what AWS handles for you, and what you still have to think about.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "AWS RDS explained"
+        search_query: "aws rds explained managed database"
+      - kind: article
+        title: "RDS basics guide"
+        search_query: "aws rds basics guide"
+
+  - slug: lambda-and-serverless
+    title: Lambda & Serverless
+    blurb: >
+      Running code without provisioning a server at all — what you gain,
+      what you give up, and when it's the wrong tool.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "AWS Lambda explained"
+        search_query: "aws lambda explained serverless"
+      - kind: article
+        title: "Serverless basics guide"
+        search_query: "serverless computing basics guide aws"

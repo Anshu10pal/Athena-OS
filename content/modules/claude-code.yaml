@@ -1,0 +1,94 @@
+slug: claude-code
+title: Claude Code
+kind: tool
+summary: >
+  Anthropic's agentic coding CLI — how it reads a project, what tools it
+  can use, and how to shape its behavior instead of just chatting with it.
+aliases:
+  - claude code cli
+  - anthropic claude code
+  - claude cli
+topics:
+  - slug: what-claude-code-is
+    title: What Claude Code Is
+    blurb: >
+      An agent that can read, edit, and run code in your project directly
+      from the terminal — how that's different from a chat window.
+    estimated_minutes: 10
+    resources:
+      - kind: video
+        title: "Claude Code overview"
+        search_query: "claude code anthropic overview explained"
+      - kind: article
+        title: "Claude Code introduction"
+        search_query: "claude code cli introduction guide"
+
+  - slug: claude-md-and-project-context
+    title: CLAUDE.md and Project Context
+    blurb: >
+      A file the agent reads automatically so it doesn't need the same
+      conventions and constraints re-explained every session.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Setting up CLAUDE.md"
+        search_query: "claude code claude.md setup guide"
+      - kind: article
+        title: "CLAUDE.md best practices"
+        search_query: "claude.md best practices guide"
+
+  - slug: slash-commands
+    title: Slash Commands
+    blurb: >
+      Saved, reusable prompts you can invoke by name instead of retyping
+      the same instructions every time you need them.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Claude Code slash commands explained"
+        search_query: "claude code slash commands explained"
+      - kind: article
+        title: "Custom slash commands guide"
+        search_query: "claude code custom slash commands guide"
+
+  - slug: subagents-and-delegation
+    title: Subagents & Delegation
+    blurb: >
+      Handing off a bounded piece of work to a separate agent instance so
+      it doesn't crowd out your main conversation's context.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Claude Code subagents explained"
+        search_query: "claude code subagents explained"
+      - kind: article
+        title: "Using subagents effectively"
+        search_query: "claude code subagents guide"
+
+  - slug: hooks-and-automation
+    title: Hooks & Automation
+    blurb: >
+      Running your own scripts automatically around agent events — before
+      a tool call, after a response — to enforce rules the agent can't skip.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Claude Code hooks explained"
+        search_query: "claude code hooks explained"
+      - kind: article
+        title: "Claude Code hooks guide"
+        search_query: "claude code hooks configuration guide"
+
+  - slug: mcp-and-external-tools
+    title: MCP & External Tools
+    blurb: >
+      The Model Context Protocol — how an agent connects to outside
+      services and data sources through a common interface.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "What is MCP (Model Context Protocol)?"
+        search_query: "what is mcp model context protocol explained"
+      - kind: article
+        title: "MCP servers guide"
+        search_query: "model context protocol mcp servers guide"

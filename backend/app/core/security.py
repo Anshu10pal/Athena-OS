@@ -41,3 +41,16 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user is None:
         raise credentials_error
     return user
+
+
+def require_write_access(user=Depends(get_current_user)):
+    """Authorization seam for content-library writes (Phase 5).
+
+    No role model exists yet -- every authenticated user currently has full
+    admin-equivalent write access. Every content-editing endpoint depends on
+    this function rather than get_current_user directly, so real role checks
+    can be dropped in here later without touching each endpoint individually.
+    """
+    if not settings.SINGLE_USER_MODE:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "Multi-user permissions are not implemented yet")
+    return user

@@ -1,0 +1,96 @@
+slug: prompt-engineering
+title: Prompt Engineering
+kind: skill
+summary: >
+  Getting reliable, useful output from a language model — how it reads
+  a prompt, and the techniques for steering it deliberately instead of
+  hoping for the best.
+aliases:
+  - prompting
+  - llm prompting
+  - working with llms
+  - prompt design
+topics:
+  - slug: how-llms-interpret-a-prompt
+    title: How LLMs Interpret a Prompt
+    blurb: >
+      A model predicts the next token from everything before it — what
+      that means for why wording, order, and context all matter.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "How LLMs process a prompt"
+        search_query: "how llms process prompts explained"
+      - kind: article
+        title: "How language models generate text"
+        search_query: "how language models generate text explained"
+
+  - slug: system-vs-user-prompts
+    title: System Prompts vs User Prompts
+    blurb: >
+      Setting persistent behavior once versus asking a specific question
+      each turn — and why mixing the two up causes inconsistent output.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "System prompts explained"
+        search_query: "system prompt vs user prompt explained"
+      - kind: article
+        title: "Writing effective system prompts"
+        search_query: "how to write effective system prompts"
+
+  - slug: few-shot-examples
+    title: Few-Shot Examples
+    blurb: >
+      Showing the model two or three examples of what you want instead
+      of describing it — often more reliable than a longer instruction.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Few-shot prompting explained"
+        search_query: "few shot prompting explained"
+      - kind: article
+        title: "Few-shot vs zero-shot prompting"
+        search_query: "few shot vs zero shot prompting guide"
+
+  - slug: chain-of-thought-prompting
+    title: Chain-of-Thought & Reasoning Prompts
+    blurb: >
+      Asking a model to reason step by step before answering, and why
+      that alone measurably improves accuracy on harder problems.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Chain-of-thought prompting explained"
+        search_query: "chain of thought prompting explained"
+      - kind: article
+        title: "Chain-of-thought prompting guide"
+        search_query: "chain of thought prompting guide examples"
+
+  - slug: structured-output
+    title: Structured Output & JSON Mode
+    blurb: >
+      Forcing a model's response into a schema you can parse reliably,
+      instead of scraping free text and hoping the format holds.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Getting structured JSON output from LLMs"
+        search_query: "llm structured output json mode explained"
+      - kind: article
+        title: "Structured output guide"
+        search_query: "llm structured output json schema guide"
+
+  - slug: evaluating-and-iterating-prompts
+    title: Evaluating and Iterating on Prompts
+    blurb: >
+      Testing a prompt against real examples instead of eyeballing one
+      response, so a "fix" doesn't quietly break a different case.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "How to evaluate LLM prompts"
+        search_query: "how to evaluate llm prompts systematically"
+      - kind: article
+        title: "Prompt evaluation guide"
+        search_query: "prompt engineering evaluation guide"

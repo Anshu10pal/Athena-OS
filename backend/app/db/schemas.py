@@ -52,6 +52,10 @@ class RoadmapIn(BaseModel):
     current_skills: list[str] = []
 
 
+class RoadmapSearchIn(BaseModel):
+    query: str
+
+
 class NodeStatusIn(BaseModel):
     node_id: str
     status: str  # available|in_progress|completed
@@ -81,3 +85,24 @@ class InterviewAnswerIn(BaseModel):
     session_id: int
     answer: str
     finish: bool = False
+
+
+class ResourcePatchIn(BaseModel):
+    url: str
+    title: Optional[str] = None
+
+
+class ResourceAddIn(BaseModel):
+    kind: str
+    title: str = ""
+    url: Optional[str] = None
+    search_query: Optional[str] = None
+
+
+class TopicAddIn(BaseModel):
+    title: str
+    blurb: str = ""
+
+
+class ResourceReorderIn(BaseModel):
+    resource_ids: list[int]

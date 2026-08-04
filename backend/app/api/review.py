@@ -69,6 +69,24 @@ def summary(db: Session, user_id: int) -> dict:
     return {"reviews_due": len(due), "total_tracked": len(items), "memory_strength": avg_strength}
 
 
+def due_forecast(db: Session, user_id: int, days: int = 7) -> list[dict]:
+    """Real per-day due counts for the next `days` days. Anything already overdue
+    or due today buckets into today -- not dropped, not double-counted."""
+    today = _now().date()
+    items = db.query(ReviewItem).filter(ReviewItem.user_id == user_id).all()
+    counts: dict = {}
+    for i in items:
+        d = _aware(i.due_at).date()
+        bucket = today if d <= today else d
+        delta = (bucket - today).days
+        if 0 <= delta < days:
+            counts[bucket] = counts.get(bucket, 0) + 1
+    return [
+        {"date": (today + timedelta(days=k)).isoformat(), "count": counts.get(today + timedelta(days=k), 0)}
+        for k in range(days)
+    ]
+
+
 @router.get("/due")
 def due(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     now = _now()

@@ -91,6 +91,21 @@ frontend/src/
   pages/               <- Dashboard, Chat, Roadmap, Interview, Presentation, Vault
 ```
 
+## Content library (modules, topics, roadmaps)
+
+Curated content lives as YAML under `content/modules/*.yaml` and `content/roadmaps/*.yaml` — Git is
+the durable record. An idempotent seeder (`app/services/seed.py`) loads it into the DB on every
+startup; `POST /api/content/export` writes the current DB state back out to those same files so
+curation (saving a real link over a search-intent one) can be committed. Schema is Alembic-owned
+(`backend/alembic/`) — `alembic upgrade head` runs automatically on startup, replacing the old
+hand-written `ALTER TABLE` list.
+
+**Uploaded resource files are not durable on Render.** `POST /api/topics/{id}/resources/upload`
+stores files under `backend/data/resources/{module_slug}/` on the local filesystem. That's fine
+locally, but Render's default web service filesystem is ephemeral — uploads are lost on every
+redeploy unless a persistent disk is attached to that path. No workaround is implemented; attach a
+Render persistent disk before relying on uploads in production.
+
 ## Free-tier survival notes
 
 - Gemini free ≈ 10 requests/minute. One chat turn = 1 intent call (Groq) + 1 stream (Gemini), so normal usage is fine; hammering Generate buttons isn't.

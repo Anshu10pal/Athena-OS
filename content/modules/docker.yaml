@@ -1,0 +1,94 @@
+slug: docker
+title: Docker
+kind: tool
+summary: >
+  Packaging an application and everything it depends on so it runs the
+  same way on your machine, a teammate's, and in production.
+aliases:
+  - containers
+  - containerization
+  - docker containers
+topics:
+  - slug: why-containers
+    title: Why Containers
+    blurb: >
+      The "works on my machine" problem, and how packaging dependencies
+      alongside the app instead of on the host solves it.
+    estimated_minutes: 10
+    resources:
+      - kind: video
+        title: "Why use Docker?"
+        search_query: "why use docker containers explained"
+      - kind: article
+        title: "Containers vs virtual machines"
+        search_query: "docker containers vs virtual machines explained"
+
+  - slug: images-vs-containers
+    title: Images vs Containers
+    blurb: >
+      An image is a frozen template; a container is a running instance
+      of it — the distinction that makes the rest of Docker make sense.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Docker images vs containers explained"
+        search_query: "docker image vs container explained"
+      - kind: article
+        title: "Docker images guide"
+        search_query: "docker images explained guide"
+
+  - slug: writing-a-dockerfile
+    title: Writing a Dockerfile
+    blurb: >
+      The instructions that build an image layer by layer — base images,
+      COPY, RUN, and why layer order affects build speed.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Writing your first Dockerfile"
+        search_query: "how to write a dockerfile tutorial"
+      - kind: article
+        title: "Dockerfile best practices"
+        search_query: "dockerfile best practices guide"
+
+  - slug: volumes-and-persistent-data
+    title: Volumes & Persistent Data
+    blurb: >
+      Containers are disposable by design — volumes are how data
+      survives a container being destroyed and recreated.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Docker volumes explained"
+        search_query: "docker volumes explained persistent data"
+      - kind: article
+        title: "Docker volumes guide"
+        search_query: "docker volumes guide bind mounts"
+
+  - slug: networking-between-containers
+    title: Networking Between Containers
+    blurb: >
+      How containers find and talk to each other, and what exposing a
+      port to the host actually does.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Docker networking explained"
+        search_query: "docker networking explained ports containers"
+      - kind: article
+        title: "Docker networking guide"
+        search_query: "docker networking basics guide"
+
+  - slug: docker-compose
+    title: Docker Compose for Multi-Container Apps
+    blurb: >
+      Defining a whole stack — app, database, cache — in one file, and
+      bringing it all up with a single command.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Docker Compose explained"
+        search_query: "docker compose explained tutorial"
+      - kind: article
+        title: "Docker Compose guide"
+        search_query: "docker compose yaml guide getting started"

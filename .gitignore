@@ -4,6 +4,8 @@ __pycache__/
 athena.db
 qdrant_data/
 voices/
+backend/data/
+.pytest_cache/
 node_modules/
 dist/
 .venv/

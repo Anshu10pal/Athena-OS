@@ -1,42 +1,20 @@
+import logging
 from pathlib import Path
 
+from alembic import command
+from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import achievements, analytics, auth, briefing, chat, communication, interview, missions, oratory, presentation, profile, review, roadmap, vault, voice
+from app.api import achievements, analytics, auth, briefing, chat, communication, content, interview, missions, modules, oratory, presentation, profile, resources, review, roadmap, roadmaps, topics, vault, voice
+from app.core.config import BACKEND_DIR
 from app.db import models  # noqa: F401  (register models)
-from app.db.database import Base, engine
 
-Base.metadata.create_all(bind=engine)
-
-# Lightweight migrations for columns added after first release (SQLite-safe)
-from sqlalchemy import text as _text
-
-with engine.connect() as _conn:
-    for _stmt in (
-        "ALTER TABLE interview_sessions ADD COLUMN mcq JSON",
-        "ALTER TABLE interview_sessions ADD COLUMN mcq_score INTEGER DEFAULT -1",
-        "ALTER TABLE roadmaps ADD COLUMN parent_roadmap_id INTEGER",
-        "ALTER TABLE roadmaps ADD COLUMN parent_node_id VARCHAR(40)",
-        "ALTER TABLE users ADD COLUMN voice VARCHAR(60) DEFAULT 'en-US-AriaNeural'",
-        "ALTER TABLE interview_sessions ADD COLUMN jd TEXT DEFAULT ''",
-        "ALTER TABLE roadmaps ADD COLUMN parent_roadmap_id INTEGER",
-        "ALTER TABLE roadmaps ADD COLUMN parent_node_id VARCHAR(40)",
-        "ALTER TABLE users ADD COLUMN voice VARCHAR(60) DEFAULT 'en-US-AriaNeural'",
-        "ALTER TABLE interview_sessions ADD COLUMN jd TEXT DEFAULT ''",
-        "ALTER TABLE roadmaps ADD COLUMN depth INTEGER DEFAULT 0",
-        "ALTER TABLE node_content ADD COLUMN meaning TEXT DEFAULT ''",
-        "ALTER TABLE node_content ADD COLUMN eli5 TEXT DEFAULT ''",
-        "ALTER TABLE review_items ADD COLUMN kind VARCHAR(20) NOT NULL DEFAULT 'node'",
-        "ALTER TABLE review_items ADD COLUMN detail TEXT NOT NULL DEFAULT ''",
-    ):
-        try:
-            _conn.execute(_text(_stmt))
-            _conn.commit()
-        except Exception:
-            pass
+# Schema is Alembic-owned. Safe to re-run: Alembic no-ops once the DB is at head.
+# (Replaces the old create_all() + hand-written ALTER TABLE list.)
+command.upgrade(AlembicConfig(str(BACKEND_DIR / "alembic.ini")), "head")
 
 # One-time data unification: mirror existing speeches into the Communication gym.
 try:
@@ -48,6 +26,15 @@ try:
 except Exception:
     pass
 
+# Content library: idempotent, re-run on every startup. A bad YAML file logs and
+# skips rather than taking the API down.
+try:
+    from app.services.seed import run_seed as _run_seed
+
+    _run_seed()
+except Exception:
+    logging.getLogger("athena.seed").exception("Content seeding failed at startup")
+
 app = FastAPI(title="ATHENA OS", version="0.1.0")
 
 app.add_middleware(
@@ -58,7 +45,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for module in (auth, profile, chat, roadmap, interview, presentation, vault, missions, analytics, voice, briefing, oratory, achievements, review, communication):
+for module in (auth, profile, chat, roadmap, roadmaps, modules, topics, resources, interview, presentation, vault, missions, analytics, voice, briefing, oratory, achievements, review, communication, content):
     app.include_router(module.router)
 
 

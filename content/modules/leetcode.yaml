@@ -1,0 +1,95 @@
+slug: leetcode
+title: Coding Interview Practice
+kind: skill
+summary: >
+  The pattern-recognition skills technical interviews actually test —
+  fewer problems memorized, more patterns recognized under time pressure.
+aliases:
+  - coding interviews
+  - interview problem solving
+  - dsa practice
+  - leetcode practice
+topics:
+  - slug: two-pointers-sliding-window
+    title: Two Pointers & Sliding Window
+    blurb: >
+      Scanning a sequence with two moving markers instead of nested
+      loops — the pattern behind a huge share of array and string problems.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "Two pointers technique explained"
+        search_query: "two pointers technique explained coding interview"
+      - kind: article
+        title: "Sliding window pattern guide"
+        search_query: "sliding window pattern guide leetcode"
+
+  - slug: binary-search-patterns
+    title: Binary Search Patterns
+    blurb: >
+      Beyond searching a sorted array — recognizing when a problem hides
+      a "search over the answer" shape.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Binary search patterns for interviews"
+        search_query: "binary search patterns coding interview"
+      - kind: article
+        title: "Binary search on the answer explained"
+        search_query: "binary search on answer technique explained"
+
+  - slug: bfs-dfs-graphs-trees
+    title: BFS & DFS on Graphs and Trees
+    blurb: >
+      Recognizing when a problem is really a traversal problem, and
+      choosing breadth-first versus depth-first for the right reason.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "BFS vs DFS for coding interviews"
+        search_query: "bfs vs dfs coding interview explained"
+      - kind: article
+        title: "Graph traversal interview patterns"
+        search_query: "graph traversal patterns coding interview"
+
+  - slug: dynamic-programming-fundamentals
+    title: Dynamic Programming Fundamentals
+    blurb: >
+      Breaking a problem into overlapping subproblems and caching the
+      answers — the pattern most people find hardest to spot.
+    estimated_minutes: 30
+    resources:
+      - kind: video
+        title: "Dynamic programming explained for beginners"
+        search_query: "dynamic programming explained for beginners"
+      - kind: article
+        title: "How to recognize a DP problem"
+        search_query: "how to recognize dynamic programming problem"
+
+  - slug: greedy-algorithms
+    title: Greedy Algorithms
+    blurb: >
+      Making the locally best choice at each step, and how to tell
+      whether that actually leads to the globally best answer.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Greedy algorithms explained"
+        search_query: "greedy algorithms explained coding interview"
+      - kind: article
+        title: "When greedy works guide"
+        search_query: "greedy algorithm when it works guide"
+
+  - slug: practicing-under-interview-conditions
+    title: Practicing Under Interview Conditions
+    blurb: >
+      Talking through your approach out loud, managing the clock, and
+      recovering when your first idea doesn't work.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "How to think out loud in a coding interview"
+        search_query: "how to think out loud coding interview"
+      - kind: article
+        title: "Coding interview strategy guide"
+        search_query: "coding interview strategy guide tips"

@@ -1,0 +1,109 @@
+slug: system-design
+title: System Design
+kind: skill
+summary: >
+  How large systems handle scale, failure, and change — the tradeoffs
+  behind every "it depends" you'll hear in a systems interview.
+aliases:
+  - systems design
+  - distributed systems basics
+  - scalability
+  - large scale system design
+topics:
+  - slug: scalability-and-cap-theorem
+    title: Scalability & the CAP Theorem
+    blurb: >
+      Vertical vs horizontal scaling, and why a distributed system can't
+      have consistency, availability, and partition tolerance all at once.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "CAP theorem explained"
+        search_query: "cap theorem explained distributed systems"
+      - kind: article
+        title: "Horizontal vs vertical scaling"
+        search_query: "horizontal vs vertical scaling explained"
+
+  - slug: load-balancing
+    title: Load Balancing
+    blurb: >
+      Spreading traffic across multiple servers, and the strategies for
+      deciding which server gets the next request.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Load balancing explained"
+        search_query: "load balancing explained system design"
+      - kind: article
+        title: "Load balancer algorithms guide"
+        search_query: "load balancer algorithms guide"
+
+  - slug: caching-strategies
+    title: Caching Strategies
+    blurb: >
+      Storing the answer to a slow question so you don't have to redo the
+      work — cache-aside, write-through, and what to do when the cache is wrong.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Caching strategies explained"
+        search_query: "caching strategies explained system design"
+      - kind: article
+        title: "Cache invalidation guide"
+        search_query: "cache invalidation strategies guide"
+
+  - slug: database-scaling
+    title: Database Scaling (Replication & Sharding)
+    blurb: >
+      Copying data across replicas to survive failure and spread reads,
+      and splitting it across shards when one machine isn't enough.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "Database replication and sharding explained"
+        search_query: "database replication and sharding explained"
+      - kind: article
+        title: "Sharding strategies guide"
+        search_query: "database sharding strategies guide"
+
+  - slug: message-queues-async
+    title: Message Queues & Async Processing
+    blurb: >
+      Decoupling services by letting one hand off work instead of waiting
+      for the other to finish it in real time.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Message queues explained"
+        search_query: "message queues explained system design"
+      - kind: article
+        title: "When to use a message queue"
+        search_query: "message queue use cases guide"
+
+  - slug: api-design-and-rate-limiting
+    title: API Design & Rate Limiting
+    blurb: >
+      Designing an API that's predictable to use, and protecting it from
+      being overwhelmed by any single client.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "REST API design best practices"
+        search_query: "rest api design best practices"
+      - kind: article
+        title: "Rate limiting algorithms explained"
+        search_query: "api rate limiting algorithms explained"
+
+  - slug: designing-for-failure
+    title: Designing for Failure
+    blurb: >
+      Timeouts, retries, and circuit breakers — assuming every dependency
+      will fail eventually, and deciding what happens when it does.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Circuit breaker pattern explained"
+        search_query: "circuit breaker pattern explained system design"
+      - kind: article
+        title: "Designing resilient systems guide"
+        search_query: "designing for failure resilient systems guide"

@@ -41,10 +41,10 @@ def validate_node(state: RoadmapState) -> dict:
         ],
         fast=True,
     )
-    # Stamp node states: first node available, rest locked.
+    # No gating: every node is open from the start.
     nodes = fixed.get("nodes", [])
-    for i, node in enumerate(nodes):
-        node["status"] = "available" if i == 0 else "locked"
+    for node in nodes:
+        node["status"] = "available"
     fixed["nodes"] = nodes
     return {"final": fixed}
 

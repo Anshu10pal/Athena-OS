@@ -1,0 +1,124 @@
+slug: data-structures
+title: Data Structures & Algorithms
+kind: skill
+summary: >
+  The ways of organizing data and the procedures that operate on it
+  efficiently — the foundation both real systems and coding interviews
+  are built on.
+aliases:
+  - dsa
+  - data structures and algorithms
+  - algorithms
+  - cs fundamentals
+topics:
+  - slug: big-o-and-complexity
+    title: Big-O and Complexity Analysis
+    blurb: >
+      How to describe an algorithm's speed and memory use as its input
+      grows, without needing to run it to find out.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Big O notation explained"
+        search_query: "big o notation explained for beginners"
+      - kind: article
+        title: "Time complexity cheat sheet"
+        search_query: "big o time complexity cheat sheet"
+
+  - slug: arrays-and-strings
+    title: Arrays & Strings
+    blurb: >
+      The simplest structure with the most interview problems built on
+      it — indexing, slicing, and the patterns that show up everywhere.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Arrays and strings for coding interviews"
+        search_query: "arrays and strings coding interview patterns"
+      - kind: article
+        title: "Array algorithms guide"
+        search_query: "array algorithms patterns guide"
+
+  - slug: hash-maps-and-sets
+    title: Hash Maps & Sets
+    blurb: >
+      Constant-time lookups and how hashing makes them possible — the
+      single most useful trick for turning a slow solution into a fast one.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Hash maps explained"
+        search_query: "hash maps explained how they work"
+      - kind: article
+        title: "When to use a hash map"
+        search_query: "hash map use cases coding interviews"
+
+  - slug: linked-lists
+    title: Linked Lists
+    blurb: >
+      Nodes connected by pointers instead of contiguous memory — what
+      that buys you, and the classic pointer-manipulation problems it creates.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Linked lists explained"
+        search_query: "linked lists explained singly doubly"
+      - kind: article
+        title: "Linked list operations guide"
+        search_query: "linked list operations guide interview"
+
+  - slug: stacks-and-queues
+    title: Stacks & Queues
+    blurb: >
+      Last-in-first-out versus first-in-first-out — simple rules with
+      surprisingly wide reach, from parsing to breadth-first search.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Stacks and queues explained"
+        search_query: "stacks and queues explained data structures"
+      - kind: article
+        title: "Stack vs queue use cases"
+        search_query: "stack vs queue use cases explained"
+
+  - slug: trees-and-bst
+    title: Trees & Binary Search Trees
+    blurb: >
+      Hierarchical data, tree traversal orders, and what makes a binary
+      search tree searchable in logarithmic time.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "Binary search trees explained"
+        search_query: "binary search tree explained traversal"
+      - kind: article
+        title: "Tree traversal guide"
+        search_query: "tree traversal inorder preorder postorder guide"
+
+  - slug: graphs-and-traversal
+    title: Graphs & Traversal
+    blurb: >
+      Modeling relationships as nodes and edges, and the two core ways
+      to walk through them: breadth-first and depth-first.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "BFS and DFS graph traversal explained"
+        search_query: "bfs dfs graph traversal explained"
+      - kind: article
+        title: "Graph algorithms for beginners"
+        search_query: "graph algorithms for beginners guide"
+
+  - slug: sorting-and-searching
+    title: Sorting & Searching Algorithms
+    blurb: >
+      How the standard sorting algorithms differ in speed and memory,
+      and how binary search turns a sorted list into a fast lookup.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Sorting algorithms explained"
+        search_query: "sorting algorithms explained comparison"
+      - kind: article
+        title: "Binary search explained"
+        search_query: "binary search algorithm explained"

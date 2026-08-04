@@ -1,0 +1,83 @@
+slug: data-engineer
+title: Data Engineer
+target: Data Engineer
+category: role
+aliases:
+  - data engineering
+  - become a data engineer
+summary: >
+  From programming and data fundamentals through storage, pipelines, and
+  infrastructure, to the systems-scale thinking a data platform needs.
+stages:
+  - title: Foundations
+    nodes:
+      - title: A Programming Language
+        blurb: >
+          Python is the default here — fluent enough to write and debug
+          a pipeline, not just a script.
+        module: python
+      - title: Version Control
+        blurb: >
+          Track your changes, branch to work in parallel, and collaborate
+          through pull requests without overwriting anyone's work.
+        module: git
+      - title: Data Fundamentals
+        blurb: >
+          The vocabulary and concepts — schemas, ETL/ELT, data quality —
+          that every other module here assumes you already have.
+        module: data-fundamentals
+      - title: Data Structures & Algorithms
+        blurb: >
+          The CS fundamentals that make you a better engineer, not just
+          a better interview candidate.
+        module: data-structures
+
+  - title: Data Storage & Querying
+    nodes:
+      - title: Databases & SQL
+        blurb: >
+          The query language you'll write more than any pipeline code —
+          joins, aggregations, indexes, and window functions.
+        module: sql
+
+  - title: Pipelines & Infrastructure
+    nodes:
+      - title: Containers with Docker
+        blurb: >
+          Packaging a pipeline so it runs identically in development,
+          staging, and production.
+        module: docker
+      - title: Cloud Fundamentals (AWS)
+        blurb: >
+          The storage, compute, and networking primitives most data
+          platforms are actually built from.
+        module: aws-core
+
+  - title: Systems at Scale
+    nodes:
+      - title: System Design Fundamentals
+        blurb: >
+          Scaling data infrastructure — caching, replication, message
+          queues — once a single machine and a nightly job aren't enough.
+        module: system-design
+
+  - title: Modern AI-Assisted Workflows
+    nodes:
+      - title: Prompt Engineering
+        blurb: >
+          Getting reliable, structured output from an LLM step inside a
+          pipeline, not just a chat window.
+        module: prompt-engineering
+      - title: Claude Code
+        blurb: >
+          Working with an agentic coding CLI as part of your day-to-day
+          development loop.
+        module: claude-code
+
+  - title: Interview Readiness
+    nodes:
+      - title: Coding Interview Practice
+        blurb: >
+          Deliberate practice on the pattern-recognition skills that
+          technical interviews actually test.
+        module: leetcode

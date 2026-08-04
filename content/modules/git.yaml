@@ -1,0 +1,125 @@
+slug: git
+title: Git
+kind: tool
+summary: >
+  Distributed version control for tracking changes to code over time,
+  branching to work in parallel, and merging that work back together
+  without stepping on your collaborators.
+aliases:
+  - version control
+  - source control
+  - git and github
+  - git & github
+topics:
+  - slug: what-version-control-solves
+    title: What Version Control Solves
+    blurb: >
+      Why teams track history as a graph of snapshots instead of emailing
+      zip files around, and what problem a "commit" actually solves.
+    estimated_minutes: 10
+    resources:
+      - kind: video
+        title: "Version control, explained"
+        search_query: "what is version control explained for beginners"
+      - kind: article
+        title: "Version control basics"
+        search_query: "version control system basics git"
+
+  - slug: git-object-model
+    title: The Git Object Model
+    blurb: >
+      Commits, trees, and blobs — the content-addressed storage underneath
+      every Git command, and why understanding it makes the rest of Git stop
+      feeling like magic.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Git internals: commits, trees, blobs"
+        search_query: "git internals commits trees blobs object model"
+      - kind: article
+        title: "How Git stores data"
+        search_query: "git object model internals explained"
+
+  - slug: staging-committing-diffing
+    title: Staging, Committing, and Diffing
+    blurb: >
+      The working directory, the staging area, and the commit history — how
+      changes move between them, and how to read a diff.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "git add, commit, and diff in practice"
+        search_query: "git add commit diff tutorial"
+      - kind: article
+        title: "Staging area explained"
+        search_query: "git staging area index explained"
+
+  - slug: branching-merging
+    title: Branching and Merging
+    blurb: >
+      Creating branches to isolate work, and the two ways Git can bring
+      that work back into another branch.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "Git branching and merging"
+        search_query: "git branching and merging tutorial"
+      - kind: article
+        title: "A branching model that works"
+        search_query: "git branching strategy explained"
+
+  - slug: rebasing-vs-merging
+    title: Rebasing vs Merging
+    blurb: >
+      What rebase actually rewrites, when it produces a cleaner history
+      than a merge commit, and when it's the wrong tool.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "git rebase vs git merge"
+        search_query: "git rebase vs merge explained"
+      - kind: article
+        title: "When to rebase, when to merge"
+        search_query: "git rebase vs merge when to use each"
+
+  - slug: resolving-merge-conflicts
+    title: Resolving Merge Conflicts
+    blurb: >
+      Reading conflict markers, deciding what the merged result should be,
+      and finishing a merge or rebase you're in the middle of.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Resolving a merge conflict, step by step"
+        search_query: "how to resolve git merge conflict tutorial"
+      - kind: article
+        title: "Merge conflict resolution guide"
+        search_query: "git merge conflict resolution guide"
+
+  - slug: remotes-push-pull-fetch
+    title: Remotes, Push, Pull, and Fetch
+    blurb: >
+      How a local repo talks to a remote one — the difference between
+      fetch and pull, and what actually happens on push.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "git push, pull, and fetch explained"
+        search_query: "git push pull fetch explained difference"
+      - kind: article
+        title: "Working with remotes"
+        search_query: "git remotes push pull fetch guide"
+
+  - slug: collaborating-pull-requests
+    title: Collaborating with Pull Requests
+    blurb: >
+      The pull-request workflow — branch, push, review, merge — and how
+      it turns Git into a team collaboration tool, not just a personal undo button.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Pull request workflow explained"
+        search_query: "github pull request workflow explained"
+      - kind: article
+        title: "How to write a good pull request"
+        search_query: "how to write a good pull request guide"

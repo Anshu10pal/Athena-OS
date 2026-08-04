@@ -1,33 +1,46 @@
 import { Link } from "react-router-dom";
 
 /**
- * Six dashboard cards, ported from docs/athena-homepage-wireframe.html with its
- * exact placeholder values. No data wiring yet — see Phase 3.
+ * Dashboard cards, ported from docs/athena-homepage-wireframe.html with its
+ * exact placeholder values. RoadmapCard, TodayCard, and ConsistencyCard are
+ * wired to real data; GymCard, RecallCard, and FocusCard still show the
+ * original placeholder values — no data wiring yet for those.
  */
 
-export function RoadmapCard() {
+export function RoadmapCard({
+  title,
+  percent,
+  topicCount,
+  completedCount,
+}: {
+  title: string | null;
+  percent: number;
+  topicCount: number;
+  completedCount: number;
+}) {
   return (
     <div className="card w2 rise">
-      <h3>
-        Roadmap <em>Systems design</em>
-      </h3>
-      <p className="big">
-        38<small>% complete &middot; 13 of 34 nodes</small>
-      </p>
-      <div className="legs">
-        <span className="stage done"><b>Foundations</b><u /></span>
-        <span className="stage done"><b>Storage</b><u /></span>
-        <span className="stage now"><b>Caching</b><u /></span>
-        <span className="stage"><b>Queues</b><u /></span>
-        <span className="stage"><b>Scale</b><u /></span>
-      </div>
-      <p className="note">
-        You stalled on <b>Caching</b> 4 days ago &mdash; two nodes left before Queues unlocks.
-      </p>
-      <div className="foot">
-        <span>Started 14 Jun</span>
-        <span>~9 sessions to finish</span>
-      </div>
+      <h3>Roadmap {title && <em>{title}</em>}</h3>
+      {title ? (
+        <>
+          <p className="big">
+            {percent}
+            <small>
+              % complete &middot; {completedCount} of {topicCount} topics
+            </small>
+          </p>
+          <Link className="focus-cta" to="/roadmap">
+            Resume this roadmap &rarr;
+          </Link>
+        </>
+      ) : (
+        <>
+          <p className="note">You haven't searched a roadmap yet.</p>
+          <Link className="focus-cta" to="/roadmap">
+            Start a roadmap &rarr;
+          </Link>
+        </>
+      )}
     </div>
   );
 }
@@ -73,40 +86,73 @@ export function GymCard() {
   );
 }
 
-export function TodayCard() {
-  const forecast = [
-    { day: "T", pct: 38, hot: true },
-    { day: "W", pct: 13, hot: false },
-    { day: "T", pct: 63, hot: false },
-    { day: "F", pct: 25, hot: false },
-    { day: "S", pct: 100, hot: false },
-    { day: "S", pct: 50, hot: false },
-    { day: "M", pct: 75, hot: false },
-  ];
+interface MissionT {
+  id: number;
+  objective: string;
+  status: string;
+}
+
+interface ForecastDay {
+  date: string;
+  count: number;
+}
+
+export function TodayCard({
+  completed,
+  total,
+  missions,
+  forecast,
+}: {
+  completed: number;
+  total: number;
+  missions: MissionT[];
+  forecast: ForecastDay[];
+}) {
+  const circumference = 2 * Math.PI * 28;
+  const filled = total > 0 ? (circumference * completed) / total : 0;
+  const totalDue = forecast.reduce((sum, f) => sum + f.count, 0);
+  const maxCount = Math.max(1, ...forecast.map((f) => f.count));
+
   return (
     <div className="card rise">
       <h3>Today</h3>
       <div className="ringwrap">
-        <svg className="ring" width="68" height="68" viewBox="0 0 68 68" role="img" aria-label="Two of three daily missions complete">
+        <svg
+          className="ring"
+          width="68"
+          height="68"
+          viewBox="0 0 68 68"
+          role="img"
+          aria-label={`${completed} of ${total} daily missions complete`}
+        >
           <circle className="bg" cx="34" cy="34" r="28" />
-          <circle className="fg" cx="34" cy="34" r="28" strokeDasharray="117.3 175.9" />
+          <circle className="fg" cx="34" cy="34" r="28" strokeDasharray={`${filled.toFixed(1)} ${circumference.toFixed(1)}`} />
           <text x="34" y="34" textAnchor="middle" dominantBaseline="central" fill="#E9F1EE" fontFamily="Instrument Sans, sans-serif" fontSize="17" fontWeight="600">
-            2/3
+            {completed}/{total}
           </text>
         </svg>
         <div className="tasklist">
-          <span className="ok"><i />Clear the review queue</span>
-          <span className="ok"><i />One speaking drill</span>
-          <span><i />Advance the roadmap</span>
+          {missions.length > 0 ? (
+            missions.map((m) => (
+              <span key={m.id} className={m.status === "completed" ? "ok" : ""}>
+                <i />
+                {m.objective}
+              </span>
+            ))
+          ) : (
+            <span>No missions generated yet today</span>
+          )}
         </div>
       </div>
       <div className="forecast">
-        <h4>Due next 7 days &middot; 29 cards</h4>
+        <h4>
+          Due next 7 days &middot; {totalDue} card{totalDue === 1 ? "" : "s"}
+        </h4>
         <div className="bars">
           {forecast.map((f, i) => (
-            <span key={i} className={f.hot ? "hot" : ""}>
-              <u style={{ height: `${f.pct}%` }} />
-              <em>{f.day}</em>
+            <span key={f.date} className={i === 0 && f.count > 0 ? "hot" : ""}>
+              <u style={{ height: `${Math.round((f.count / maxCount) * 100)}%` }} />
+              <em>{new Date(f.date + "T00:00:00").toLocaleDateString(undefined, { weekday: "short" }).charAt(0)}</em>
             </span>
           ))}
         </div>
@@ -115,28 +161,49 @@ export function TodayCard() {
   );
 }
 
-export function ConsistencyCard() {
-  const padCells = 5;
-  const days = [0, 2, 1, 0, 3, 1, 0, 0, 2, 4, 1, 0, 2, 3, 1, 0, 0, 1, 4, 2, 0, 3, 0, 1, 2, 0, 4, 1, 3, 0, 2];
+export function ConsistencyCard({
+  cells,
+  rangeStart,
+  rangeEnd,
+  streak,
+  activeDays,
+  activeThisWeek,
+  activeLastWeek,
+}: {
+  cells: { date: string; level: number }[];
+  rangeStart: string;
+  rangeEnd: string;
+  streak: number;
+  activeDays: number;
+  activeThisWeek: number;
+  activeLastWeek: number;
+}) {
+  const fmt = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const startWeekday = cells.length ? new Date(rangeStart + "T00:00:00").getDay() : 0;
+  const delta = activeThisWeek - activeLastWeek;
+  const deltaLabel = delta === 0 ? "same as last week" : `${delta > 0 ? "+" : ""}${delta} vs last week`;
+
   return (
     <div className="card rise">
       <h3>Consistency</h3>
-      <p className="range">12 Jul &rarr; 12 Aug</p>
+      <p className="range">
+        {fmt(rangeStart)} &rarr; {fmt(rangeEnd)}
+      </p>
       <div className="heat">
-        {Array.from({ length: padCells }).map((_, i) => (
+        {Array.from({ length: startWeekday }).map((_, i) => (
           <i key={`pad-${i}`} className="pad" />
         ))}
-        {days.map((v, i) => (
-          <i key={i} className={v ? `l${v}` : ""} />
+        {cells.map((c) => (
+          <i key={c.date} className={c.level ? `l${c.level}` : ""} title={c.date} />
         ))}
       </div>
       <div className="hours">
-        <b>4h 20m</b>
-        <em>+38m vs last week</em>
+        <b>{activeDays} active days</b>
+        <em>{deltaLabel}</em>
       </div>
       <div className="foot">
-        <span>1 day streak</span>
-        <span>Best 11</span>
+        <span>{streak} day streak</span>
+        <span>{activeThisWeek} active this week</span>
       </div>
     </div>
   );

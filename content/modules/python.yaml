@@ -1,0 +1,108 @@
+slug: python
+title: Python
+kind: tool
+summary: >
+  A general-purpose language read almost as easily as pseudocode — the
+  default choice for data work, scripting, and backend services alike.
+aliases:
+  - python programming
+  - python language
+  - programming in python
+topics:
+  - slug: syntax-and-core-data-types
+    title: Syntax & Core Data Types
+    blurb: >
+      Variables, numbers, strings, and booleans — the building blocks
+      every Python program is made of.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Python basics: variables and data types"
+        search_query: "python basics variables data types tutorial"
+      - kind: article
+        title: "Python data types explained"
+        search_query: "python data types explained"
+
+  - slug: control-flow-and-functions
+    title: Control Flow & Functions
+    blurb: >
+      if/else, loops, and defining your own functions — how a program
+      makes decisions and avoids repeating itself.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Python control flow and functions"
+        search_query: "python if else loops functions tutorial"
+      - kind: article
+        title: "Python functions guide"
+        search_query: "python functions guide for beginners"
+
+  - slug: core-collections
+    title: Data Structures (Lists, Dicts, Sets, Tuples)
+    blurb: >
+      Python's built-in collections, when to reach for each one, and the
+      operations that make them fast or slow.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Python lists, dicts, sets, and tuples explained"
+        search_query: "python lists dicts sets tuples explained"
+      - kind: article
+        title: "Choosing the right Python collection"
+        search_query: "python list vs dict vs set vs tuple when to use"
+
+  - slug: object-oriented-basics
+    title: Object-Oriented Basics
+    blurb: >
+      Classes, instances, and methods — structuring code around the
+      things it operates on instead of just a list of steps.
+    estimated_minutes: 25
+    resources:
+      - kind: video
+        title: "Python OOP for beginners"
+        search_query: "python object oriented programming for beginners"
+      - kind: article
+        title: "Python classes explained"
+        search_query: "python classes and objects explained"
+
+  - slug: modules-packages-venvs
+    title: Modules, Packages & Virtual Environments
+    blurb: >
+      Organizing code across files, installing third-party packages, and
+      why every project needs its own isolated environment.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Python virtual environments explained"
+        search_query: "python virtual environments explained venv"
+      - kind: article
+        title: "pip and virtual environments guide"
+        search_query: "python pip virtual environment guide"
+
+  - slug: error-handling
+    title: Error Handling
+    blurb: >
+      try/except, raising your own exceptions, and failing loudly instead
+      of silently producing the wrong answer.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Python try except error handling"
+        search_query: "python try except error handling tutorial"
+      - kind: article
+        title: "Python exceptions guide"
+        search_query: "python exception handling guide"
+
+  - slug: writing-your-first-tests
+    title: Writing Your First Tests
+    blurb: >
+      Using pytest to check that your code does what you think it does —
+      and to catch it the moment it stops.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "pytest for beginners"
+        search_query: "pytest tutorial for beginners"
+      - kind: article
+        title: "Writing your first Python unit tests"
+        search_query: "python unit testing pytest getting started"

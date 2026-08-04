@@ -1,78 +1,97 @@
 import { motion } from "framer-motion";
-import { CheckCircle2, Circle, Lock, PlayCircle } from "lucide-react";
 import { useEffect, useState } from "react";
-import NodeDossier from "../components/NodeDossier";
+import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { DecryptText } from "../lib/fx";
-import { unlock } from "../lib/sound";
-import { useAuth } from "../store/auth";
-import { useOrb } from "../store/orb";
 
-interface Node {
-  id: string;
-  title: string;
-  description: string;
-  skills: string[];
-  status: "locked" | "available" | "in_progress" | "completed" | "skipped";
-  depends_on: string[];
-  custom?: boolean;
-}
-
-interface RoadmapT {
+interface RoadmapNodeT {
   id: number;
   title: string;
-  target_role: string;
-  nodes: Node[];
-  parent_roadmap_id: number | null;
-  parent_node_id: string | null;
+  blurb: string;
+  module_slug: string | null;
+  resolution: "matched" | "unmatched";
+  match_score: number | null;
+  percent: number | null;
 }
 
-const icons: Record<string, JSX.Element> = {
-  locked: <Lock size={18} className="text-fog" />,
-  available: <Circle size={18} className="text-accent" />,
-  in_progress: <PlayCircle size={18} className="text-accent" />,
-  completed: <CheckCircle2 size={18} className="text-accent" />,
-  skipped: <CheckCircle2 size={18} className="text-fog" />,
+interface StageT {
+  title: string;
+  nodes: RoadmapNodeT[];
+}
+
+interface RoadmapResult {
+  id: number;
+  slug: string;
+  title: string;
+  target: string;
+  kind: "seed" | "generated";
+  summary: string;
+  resolved_via: "seed" | "cached" | "generated";
+  percent: number;
+  topic_count: number;
+  completed_count: number;
+  stages: StageT[];
+}
+
+interface RoadmapTile {
+  slug: string;
+  title: string;
+  summary: string;
+  category: "role" | "tool";
+  kind: "seed" | "generated";
+  percent: number;
+}
+
+const VIA_LABEL: Record<RoadmapResult["resolved_via"], string> = {
+  seed: "curated",
+  cached: "cached",
+  generated: "freshly generated",
 };
 
+function TileGrid({ tiles, onOpen }: { tiles: RoadmapTile[]; onOpen: (slug: string) => void }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {tiles.map((t) => (
+        <button
+          key={t.slug}
+          onClick={() => onOpen(t.slug)}
+          className="card text-left p-5 min-h-[148px] flex flex-col hover:border-accent/50 transition-colors"
+        >
+          <p className="font-display text-lg font-semibold text-snow leading-snug">{t.title}</p>
+          {t.summary && <p className="text-fog text-sm mt-2 leading-relaxed line-clamp-3 flex-1">{t.summary}</p>}
+          <div className="mt-4 flex items-center gap-2.5">
+            <div className="flex-1 h-1.5 rounded-full bg-line overflow-hidden">
+              <div className="h-full bg-accent" style={{ width: `${t.percent}%` }} />
+            </div>
+            <span className="font-mono text-[10px] text-accent shrink-0">{t.percent}%</span>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function Roadmap() {
-  const { refresh } = useAuth();
-  const { notifyXp } = useOrb();
-  const [maps, setMaps] = useState<RoadmapT[]>([]);
-  const [currentId, setCurrentId] = useState<number | null>(null);
-  const [role, setRole] = useState("");
+  const navigate = useNavigate();
+  const [query, setQuery] = useState("");
+  const [tiles, setTiles] = useState<RoadmapTile[] | null>(null);
+  const [result, setResult] = useState<RoadmapResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState<Node | null>(null);
-  const [newTopic, setNewTopic] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [openingId, setOpeningId] = useState<number | null>(null);
 
-  const load = () => api<RoadmapT[]>("/api/roadmap").then(setMaps).catch(() => {});
+  const loadTiles = () => api<RoadmapTile[]>("/api/roadmaps").then(setTiles).catch(() => {});
+
   useEffect(() => {
-    load();
+    loadTiles();
   }, []);
 
-  const roots = maps.filter((m) => !m.parent_roadmap_id);
-  const current = maps.find((m) => m.id === currentId) ?? roots[0];
-
-  // Breadcrumbs: walk parent chain up to the root
-  const crumbs: RoadmapT[] = [];
-  let walker: RoadmapT | undefined = current;
-  while (walker) {
-    crumbs.unshift(walker);
-    const pid: number | null = walker.parent_roadmap_id;
-    walker = pid ? maps.find((m) => m.id === pid) : undefined;
-  }
-
-  const generate = async () => {
-    if (!role.trim()) return;
+  const openBySlug = async (slug: string) => {
     setBusy(true);
     setError("");
     try {
-      await api("/api/roadmap/generate", { method: "POST", body: JSON.stringify({ target_role: role }) });
-      setRole("");
-      setCurrentId(null);
-      load();
+      const r = await api<RoadmapResult>(`/api/roadmaps/${slug}`);
+      setResult(r);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -80,49 +99,51 @@ export default function Roadmap() {
     }
   };
 
-  const setStatus = async (mapId: number, nodeId: string, status: string) => {
-    const res = await api<{ nodes: Node[]; xp: number; xp_gained: number }>(`/api/roadmap/${mapId}/node`, {
-      method: "PATCH",
-      body: JSON.stringify({ node_id: nodeId, status }),
-    });
-    if (res.xp_gained > 0) {
-      unlock();
-      notifyXp(res.xp, res.xp_gained);
-    }
-    setMaps((ms) => ms.map((m) => (m.id === mapId ? { ...m, nodes: res.nodes } : m)));
-    refresh();
-  };
-
-  const openNode = (node: Node) => {
-    if (node.status === "locked" || !current) return;
-    if (node.status === "available") setStatus(current.id, node.id, "in_progress");
-    setSelected(node);
-  };
-
-  const onAssessmentDone = (nodes: Node[] | null) => {
-    if (nodes && current) {
-      setMaps((ms) => ms.map((m) => (m.id === current.id ? { ...m, nodes } : m)));
-      unlock();
-      refresh();
-      load(); // parent map may have auto-completed
-      setSelected(null);
-    }
-  };
-
-  const addTopic = async () => {
-    if (!newTopic.trim() || !current || adding) return;
-    setAdding(true);
+  const search = async () => {
+    if (!query.trim() || busy) return;
+    setBusy(true);
+    setError("");
     try {
-      const r = await api<{ nodes: Node[] }>(`/api/roadmap/${current.id}/node`, {
+      const r = await api<RoadmapResult>("/api/roadmaps/search", {
         method: "POST",
-        body: JSON.stringify({ title: newTopic.trim() }),
+        body: JSON.stringify({ query: query.trim() }),
       });
-      setMaps((ms) => ms.map((m) => (m.id === current.id ? { ...m, nodes: r.nodes } : m)));
-      setNewTopic("");
+      setResult(r);
+    } catch (e: any) {
+      setError(e.message);
     } finally {
-      setAdding(false);
+      setBusy(false);
     }
   };
+
+  const backToRoadmaps = () => {
+    setResult(null);
+    setQuery("");
+    loadTiles(); // percents may have changed since progress was made
+  };
+
+  const openNode = async (node: RoadmapNodeT) => {
+    if (!result || openingId) return;
+    if (node.resolution === "matched" && node.module_slug) {
+      navigate(`/modules/${node.module_slug}?from=${encodeURIComponent(result.title)}`);
+      return;
+    }
+    setOpeningId(node.id);
+    try {
+      const r = await api<{ module_slug: string }>(`/api/roadmaps/nodes/${node.id}/ensure-module`, {
+        method: "POST",
+      });
+      navigate(`/modules/${r.module_slug}?from=${encodeURIComponent(result.title)}`);
+    } catch (e: any) {
+      setError(e.message);
+      setOpeningId(null);
+    }
+  };
+
+  const started = (tiles ?? []).filter((t) => t.percent > 0);
+  const startedSlugs = new Set(started.map((t) => t.slug));
+  const roleBased = (tiles ?? []).filter((t) => t.category === "role" && !startedSlugs.has(t.slug));
+  const toolBased = (tiles ?? []).filter((t) => t.category === "tool" && !startedSlugs.has(t.slug));
 
   return (
     <div className="w-full max-w-none space-y-6">
@@ -133,117 +154,106 @@ export default function Roadmap() {
         <div className="flex gap-2 mt-3">
           <input
             className="input"
-            placeholder="Target role, e.g. AI Architect"
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && generate()}
+            placeholder="Or type any target role or tool, e.g. AI Architect"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && search()}
           />
-          <button className="btn-accent shrink-0" onClick={generate} disabled={busy}>
-            {busy ? "Generating…" : "Generate"}
+          <button className="btn-accent shrink-0" onClick={search} disabled={busy}>
+            {busy ? "Searching…" : "Search"}
           </button>
         </div>
         {error && <p className="text-danger text-sm mt-2">{error}</p>}
-        {roots.length > 1 && (
-          <div className="flex gap-2 mt-3 flex-wrap">
-            {roots.map((r) => (
-              <button
-                key={r.id}
-                onClick={() => setCurrentId(r.id)}
-                className={`font-mono text-[10px] border rounded px-2 py-1 transition-colors ${
-                  current?.id === r.id ? "border-accent text-accent" : "border-line text-fog hover:text-snow"
-                }`}
-              >
-                {r.title}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
-      {current && (
-        <div className="card p-5">
-          {crumbs.length > 1 && (
-            <div className="flex items-center gap-1.5 mb-3 font-mono text-[11px] flex-wrap">
-              {crumbs.map((c, i) => (
-                <span key={c.id} className="flex items-center gap-1.5">
-                  {i > 0 && <span className="text-fog">›</span>}
-                  <button onClick={() => setCurrentId(c.id)} className={i === crumbs.length - 1 ? "text-accent" : "text-fog hover:text-snow"}>
-                    {c.title.replace(" — deep dive", "")}
-                  </button>
-                </span>
-              ))}
+      {!result && (
+        <div className="space-y-6">
+          {started.length > 0 && (
+            <div>
+              <p className="font-mono text-[10px] tracking-widest text-fog mb-2 uppercase">Ongoing</p>
+              <TileGrid tiles={started} onOpen={openBySlug} />
             </div>
           )}
-          <h3 className="font-display text-lg mb-1">{current.title}</h3>
-          <p className="text-fog text-sm mb-3">Target: {current.target_role}</p>
-          <div className="flex gap-2 mb-5">
-            <input
-              className="input"
-              placeholder="Add a topic to this map (e.g. Prompt Engineering)…"
-              value={newTopic}
-              onChange={(e) => setNewTopic(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addTopic()}
-            />
-            <span className="font-mono text-[10px] text-fog self-center shrink-0">{adding ? "adding…" : "Enter to add"}</span>
-          </div>
-
-          <div className="relative pl-7">
-            <div className="absolute left-[8px] top-2 bottom-2 w-px bg-line" />
-            {current.nodes.map((node, i) => (
-              <motion.div
-                key={node.id}
-                initial={{ opacity: 0, x: -12 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: i * 0.04 }}
-                className="relative pb-5"
-              >
-                <span className="absolute -left-7 top-1 bg-ink">{icons[node.status]}</span>
-                <div
-                  className={`rounded-lg border px-4 py-3 ${
-                    node.status === "locked" ? "border-line opacity-50" : "border-accent/40 bg-panel2"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="font-medium">
-                      {node.title}
-                      {node.custom && <span className="font-mono text-[8px] text-accent ml-2">CUSTOM</span>}
-                    </p>
-                    {node.status !== "locked" && (
-                      <button className="text-xs text-accent hover:underline shrink-0" onClick={() => openNode(node)}>
-                        {node.status === "completed" ? "Review dossier" : "Open dossier"}
-                      </button>
-                    )}
-                  </div>
-                  <p className="text-fog text-sm mt-1">{node.description}</p>
-                  {node.skills?.length > 0 && <p className="text-xs font-mono text-fog mt-2">{node.skills.join(" · ")}</p>}
-                </div>
-              </motion.div>
-            ))}
-          </div>
+          {roleBased.length > 0 && (
+            <div>
+              <p className="font-mono text-[10px] tracking-widest text-fog mb-2 uppercase">Role-based</p>
+              <TileGrid tiles={roleBased} onOpen={openBySlug} />
+            </div>
+          )}
+          {toolBased.length > 0 && (
+            <div>
+              <p className="font-mono text-[10px] tracking-widest text-fog mb-2 uppercase">Tool-based</p>
+              <TileGrid tiles={toolBased} onOpen={openBySlug} />
+            </div>
+          )}
         </div>
       )}
 
-      {selected && current && (
-        <NodeDossier
-          roadmapId={current.id}
-          node={current.nodes.find((n) => n.id === selected.id) ?? selected}
-          onClose={() => setSelected(null)}
-          onCompleted={(nodes) => onAssessmentDone(nodes)}
-          onExpand={(submapId) => {
-            setSelected(null);
-            load();
-            setCurrentId(submapId);
-          }}
-          onSkip={async () => {
-            await setStatus(current.id, selected.id, "skipped");
-            setSelected(null);
-          }}
-          onRemove={async () => {
-            const r = await api<{ nodes: Node[] }>(`/api/roadmap/${current.id}/node/${selected.id}`, { method: "DELETE" });
-            setMaps((ms) => ms.map((m) => (m.id === current.id ? { ...m, nodes: r.nodes } : m)));
-            setSelected(null);
-          }}
-        />
+      {result && (
+        <div className="card p-5">
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+            <div className="flex items-center gap-3">
+              <button onClick={backToRoadmaps} className="font-mono text-[11px] text-fog hover:text-snow">
+                ← back to roadmaps
+              </button>
+              <h3 className="font-display text-lg">{result.title}</h3>
+            </div>
+            <span className="font-mono text-[9px] text-fog border border-line rounded px-1.5 py-0.5">
+              {VIA_LABEL[result.resolved_via]}
+            </span>
+          </div>
+          {result.summary && <p className="text-fog text-sm mb-3">{result.summary}</p>}
+          <div className="flex items-center gap-2.5 mb-5">
+            <div className="flex-1 h-1.5 rounded-full bg-line overflow-hidden max-w-xs">
+              <div className="h-full bg-accent" style={{ width: `${result.percent}%` }} />
+            </div>
+            <span className="font-mono text-[10px] text-accent">
+              {result.percent}% complete &middot; {result.completed_count} of {result.topic_count} topics
+            </span>
+          </div>
+
+          <div className="space-y-5">
+            {result.stages.map((stage, si) => (
+              <div key={si}>
+                <p className="font-mono text-[10px] tracking-widest text-fog mb-2 uppercase">{stage.title}</p>
+                <div className="relative pl-7">
+                  <div className="absolute left-[8px] top-2 bottom-2 w-px bg-line" />
+                  {stage.nodes.map((node, ni) => (
+                    <motion.div
+                      key={node.id}
+                      initial={{ opacity: 0, x: -12 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: ni * 0.04 }}
+                      className="relative pb-4"
+                    >
+                      <span className="absolute -left-7 top-4 w-2.5 h-2.5 rounded-full bg-accent" />
+                      <button
+                        onClick={() => openNode(node)}
+                        disabled={openingId === node.id}
+                        className="w-full text-left rounded-lg border border-accent/40 bg-panel2 px-4 py-3 hover:border-accent transition-colors disabled:opacity-60"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-medium text-snow">
+                            {node.title}
+                            {node.resolution === "unmatched" && (
+                              <span className="font-mono text-[8px] text-fog ml-2 border border-line rounded px-1 py-0.5">
+                                NEW MODULE
+                              </span>
+                            )}
+                          </p>
+                          {node.percent !== null && (
+                            <span className="font-mono text-[9px] text-accent shrink-0">{node.percent}%</span>
+                          )}
+                        </div>
+                        <p className="text-fog text-sm mt-1">{openingId === node.id ? "Opening…" : node.blurb}</p>
+                      </button>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

@@ -1,19 +1,31 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
 from app.db.database import get_db
-from app.db.models import InterviewSession, Mission, Roadmap, SpeechSession, User, VaultEntry
+from app.db.models import ContentRoadmap, InterviewSession, Mission, SpeechSession, User, VaultEntry
+from app.services.activity import activity_calendar
+from app.services.progress import roadmap_progress as _roadmap_progress
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
 @router.get("/dashboard")
 def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    roadmap = db.query(Roadmap).filter(Roadmap.user_id == user.id).order_by(Roadmap.id.desc()).first()
-    nodes = roadmap.nodes if roadmap else []
-    completed = sum(1 for n in nodes if n["status"] == "completed")
-    roadmap_progress = round(100 * completed / len(nodes)) if nodes else 0
+    # content_roadmaps aren't user-owned (shared library), so "the" roadmap the
+    # dashboard shows is whichever one the user last searched -- see User.last_roadmap_id.
+    roadmap = db.get(ContentRoadmap, user.last_roadmap_id) if user.last_roadmap_id else None
+    if roadmap:
+        rp = _roadmap_progress(db, user.id, roadmap)
+        roadmap_progress = rp["percent"]
+        roadmap_topic_count = rp["topic_count"]
+        roadmap_completed_count = rp["completed_count"]
+    else:
+        roadmap_progress = 0
+        roadmap_topic_count = 0
+        roadmap_completed_count = 0
 
     interviews = (
         db.query(InterviewSession)
@@ -30,6 +42,10 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
 
     presentations = db.query(VaultEntry).filter(VaultEntry.user_id == user.id, VaultEntry.kind == "presentation").count()
     missions_done = db.query(Mission).filter(Mission.user_id == user.id, Mission.status == "completed").count()
+
+    today_str = date.today().isoformat()
+    missions_today = db.query(Mission).filter(Mission.user_id == user.id, Mission.date == today_str).all()
+    missions_today_completed = sum(1 for m in missions_today if m.status == "completed")
 
     # Digital Twin: simple derived capability metrics (0-100)
     skills = user.skills or {}
@@ -57,10 +73,12 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
     except Exception:
         pass
     review_info = {"reviews_due": 0, "memory_strength": 1.0}
+    review_forecast = [{"date": today_str, "count": 0}]
     achievements_unlocked = 0
     try:
-        from app.api.review import summary as _review_summary
+        from app.api.review import due_forecast as _due_forecast, summary as _review_summary
         review_info = _review_summary(db, user.id)
+        review_forecast = _due_forecast(db, user.id)
     except Exception:
         pass
     try:
@@ -82,10 +100,20 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
         "streak": user.streak,
         "roadmap_progress": roadmap_progress,
         "roadmap_title": roadmap.title if roadmap else None,
+        "roadmap_slug": roadmap.slug if roadmap else None,
+        "roadmap_topic_count": roadmap_topic_count,
+        "roadmap_completed_count": roadmap_completed_count,
         "interview_readiness": interview_readiness,
         "interviews_completed": len(interviews),
         "presentations_analyzed": presentations,
         "missions_completed": missions_done,
+        "missions_today": [
+            {"id": m.id, "objective": m.objective, "status": m.status} for m in missions_today
+        ],
+        "missions_today_completed": missions_today_completed,
+        "missions_today_total": len(missions_today),
+        "review_forecast": review_forecast,
+        "activity": activity_calendar(db, user.id),
         "skills": skills,
         "digital_twin": twin,
     }

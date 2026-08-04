@@ -1,0 +1,111 @@
+slug: data-fundamentals
+title: Data Fundamentals
+kind: skill
+summary: >
+  The core concepts underneath every data role — what data actually looks
+  like before it reaches a database or a dashboard, and the vocabulary
+  every other data module assumes you already have.
+aliases:
+  - data basics
+  - fundamentals of data
+  - core data concepts
+  - intro to data
+topics:
+  - slug: what-data-engineering-is
+    title: What Data Engineering Is
+    blurb: >
+      The job of moving, shaping, and guaranteeing data so the people and
+      systems downstream can trust it — and how that's different from
+      data analysis or data science.
+    estimated_minutes: 10
+    resources:
+      - kind: video
+        title: "What does a data engineer actually do?"
+        search_query: "what is data engineering explained"
+      - kind: article
+        title: "Data engineering vs data science"
+        search_query: "data engineering vs data science explained"
+
+  - slug: structured-vs-unstructured-data
+    title: Structured vs Unstructured Data
+    blurb: >
+      Rows and columns versus free text, images, and logs — why the shape
+      of your data decides which tools even apply.
+    estimated_minutes: 10
+    resources:
+      - kind: video
+        title: "Structured vs unstructured vs semi-structured data"
+        search_query: "structured vs unstructured vs semi structured data explained"
+      - kind: article
+        title: "Types of data explained"
+        search_query: "structured unstructured semi structured data types"
+
+  - slug: data-types-and-schemas
+    title: Data Types & Schemas
+    blurb: >
+      Why declaring what a field is supposed to contain — and enforcing it —
+      is what turns a pile of files into something queryable.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "What is a schema?"
+        search_query: "what is a data schema explained"
+      - kind: article
+        title: "Schema-on-write vs schema-on-read"
+        search_query: "schema on write vs schema on read explained"
+
+  - slug: etl-elt-pattern
+    title: The ETL/ELT Pattern
+    blurb: >
+      Extract, transform, load — and why modern warehouses flipped the
+      order to extract, load, transform instead.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "ETL vs ELT explained"
+        search_query: "etl vs elt explained"
+      - kind: article
+        title: "ETL pipeline basics"
+        search_query: "etl pipeline basics guide"
+
+  - slug: data-quality-and-validation
+    title: Data Quality & Validation
+    blurb: >
+      Completeness, accuracy, consistency, and freshness — the checks that
+      catch a broken pipeline before it silently corrupts a report.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Data quality dimensions explained"
+        search_query: "data quality dimensions explained"
+      - kind: article
+        title: "Data validation strategies"
+        search_query: "data validation strategies pipelines"
+
+  - slug: batch-vs-streaming-data
+    title: Batch vs Streaming Data
+    blurb: >
+      Processing data in scheduled chunks versus reacting to it as it
+      arrives, and the different failure modes each one has.
+    estimated_minutes: 15
+    resources:
+      - kind: video
+        title: "Batch processing vs stream processing"
+        search_query: "batch processing vs stream processing explained"
+      - kind: article
+        title: "When to use streaming over batch"
+        search_query: "batch vs streaming data pipeline tradeoffs"
+
+  - slug: data-modeling-basics
+    title: Data Modeling Basics
+    blurb: >
+      Star schemas, fact and dimension tables — the shape that makes a
+      warehouse fast to query instead of just a place data goes to sit.
+    estimated_minutes: 20
+    resources:
+      - kind: video
+        title: "Star schema explained"
+        search_query: "star schema data warehouse explained"
+      - kind: article
+        title: "Dimensional modeling basics"
+        search_query: "dimensional modeling fact dimension tables explained"

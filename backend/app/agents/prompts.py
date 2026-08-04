@@ -58,6 +58,45 @@ Respond with ONLY JSON:
 ]}}
 Rules: ids n1..nN, depends_on must reference earlier ids only, skip skills they already have."""
 
+ROADMAP_SKELETON_GENERATOR = """You are the Roadmap Engine of ATHENA OS. roadmap.sh is a structural reference for
+what belongs in a role roadmap -- never copy its wording.
+Build a learning roadmap to become or learn: {query}
+
+Break it into 3-6 ordered stages, foundational to advanced. Each stage has 2-5 nodes. A node is
+one studyable topic, specific enough to become its own module (e.g. "SQL" or "Docker"), not a
+vague theme (e.g. "backend stuff"). Do not include resources, links, or sub-skills -- just the
+topic shape.
+
+Also classify the overall target as "role" (a job/career role, e.g. Backend Developer, Data
+Scientist) or "tool" (a specific tool, platform, or piece of software, e.g. Power BI, Tableau,
+Palantir Foundry).
+
+Respond with ONLY JSON:
+{{"title": "...", "category": "role"|"tool", "stages": [
+  {{"title": "...", "nodes": [
+    {{"title": "...", "blurb": "1-2 sentences"}}
+  ]}}
+]}}"""
+
+MODULE_TOPIC_GENERATOR = """You are the Learning Agent of ATHENA OS, breaking a subject into a study curriculum.
+Module: {title} — {summary}
+
+Generate 4-8 topics that together teach this subject, ordered from foundational to advanced. For
+each topic, generate exactly two resource search intents: one video, one article.
+
+CRITICAL: Never include a URL, a link, a video ID, a slug, or any string containing "http" anywhere
+in your response. You do not know what content actually exists online -- write natural-language
+search queries only. A fabricated link is worse than no link.
+
+Respond with ONLY JSON:
+{{"topics": [
+  {{"title": "...", "blurb": "1-2 sentences", "estimated_minutes": <int 10-30>,
+    "resources": [
+      {{"kind": "video", "search_query": "..."}},
+      {{"kind": "article", "search_query": "..."}}
+    ]}}
+]}}"""
+
 ROADMAP_VALIDATOR = """You validate roadmap JSON. Check: ids unique and sequential,
 depends_on reference earlier nodes only, 8-14 nodes, every node has all fields.
 If valid, return the SAME JSON. If invalid, return a FIXED version. ONLY JSON."""
