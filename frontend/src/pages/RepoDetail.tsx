@@ -2,11 +2,13 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   api, DirGraphResponseT, GraphResponseT, RankedFileT, RankingResponseT, RepoJobT, RepoT, ScorerT,
+  SubsystemAlgorithmT, SubsystemsResponseT,
   streamJobProgress, timeAgo,
 } from "../lib/api";
 import {
   applyFilterStateToSearchParams,
   deriveLanguages,
+  deriveSubsystemIds,
   deriveTopLevelSegments,
   EMPTY_FILTER_STATE,
   FilterState,
@@ -22,6 +24,7 @@ import { FocusView } from "../components/FocusView";
 import { DetailPanel } from "../components/DetailPanel";
 import { FileSearch } from "../components/FileSearch";
 import { MermaidPanel } from "../components/MermaidPanel";
+import { SubsystemsView } from "../components/SubsystemsView";
 
 type SortKey = keyof Pick<
   RankedFileT,
@@ -34,7 +37,7 @@ type SortKey = keyof Pick<
 // decided this. Architecture/Matrix/Focus/Layers answer all three better;
 // keeping a fourth tab and a d3-force dependency alive would have been
 // inertia, not justification.
-type ViewT = "reading" | "architecture" | "matrix" | "focus" | "layers";
+type ViewT = "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems";
 
 const COLUMNS: { key: SortKey; label: string; align?: "left" | "center" | "right" }[] = [
   { key: "score", label: "Score" },
@@ -58,6 +61,7 @@ const VIEWS: { value: ViewT; label: string }[] = [
   { value: "matrix", label: "Matrix" },
   { value: "focus", label: "Focus" },
   { value: "layers", label: "Layers" },
+  { value: "subsystems", label: "Dependency Clusters" },
 ];
 
 const VALIDATION_THRESHOLD_RANK = 20;
@@ -149,6 +153,27 @@ const GLOSSARY: { term: string; desc: string }[] = [
       "checkout has no commit history). When it applies, Commits/Authors/Last Change are unknown for every file, " +
       "and their weight is redistributed across Fan In, PageRank, and Entry Point instead of being scored as zero.",
   },
+  {
+    term: "Dependency cluster",
+    desc:
+      "A group of files that import each other more densely than they import the rest of the repo -- found by " +
+      "community detection over the import graph (Modularity and Louvain, two independent algorithms), not by " +
+      "directory structure or by anyone's intent. This is a real, measured coupling group, not a confirmed " +
+      "architectural subsystem -- validated against eslint/eslint's own architecture doc, one cluster genuinely " +
+      "spanned five of the doc's named components at once because they form a real call chain, not because the " +
+      "detector was wrong. Read a cluster as \"these files are entangled,\" not as \"this is one subsystem.\" " +
+      "Labelled by whichever naming rule the card states (most common directory, highest-fan-in file, or a name " +
+      "you've set yourself) -- the name is a convenience for talking about the cluster, not a claim about what " +
+      "it architecturally is.",
+  },
+  {
+    term: "Cycle-cluster coherence",
+    desc:
+      "For a known directory-level import cycle (two or more directories that depend on each other), what " +
+      "fraction of their combined files actually landed in one dependency cluster. A low percentage doesn't mean " +
+      "the clustering is broken -- it means the cycle is carried by a small number of specific edges between " +
+      "specific files, not by pervasive coupling across both directories, which is a more actionable finding.",
+  },
 ];
 
 function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -238,6 +263,30 @@ export default function RepoDetail() {
   // Phase H5: feeds the shared, persistent DetailPanel -- a raw directory
   // id, set by clicking a box in the Architecture map.
   const [selectedDirId, setSelectedDirId] = useState<string | null>(null);
+  // Phase I1: scorer-independent -- clustering runs over the import graph,
+  // not any scorer's output, so unlike ranking/graph/dirGraph these are
+  // fetched once per repo load, not once per scorer change. Both
+  // algorithms' responses are kept (not just the currently-displayed one)
+  // since agreement/cycle_coherence are identical repo-wide values on
+  // either response and the algorithm toggle should feel instant, not
+  // trigger a new fetch on every click.
+  const [subsystemAlgorithm, setSubsystemAlgorithm] = useState<SubsystemAlgorithmT>("modularity");
+  // Phase I2: shared between Architecture and Matrix so switching tabs
+  // keeps the same coloring active, same pattern as pairFilter/
+  // selectedDirId. Always modularity-based -- the algorithm toggle on
+  // the Dependency Clusters tab is a separate, deliberately-not-widened
+  // concern (a third toggle dimension here would overcomplicate what was
+  // asked to stay a small piece of work).
+  const [colorMode, setColorMode] = useState<"kind" | "cluster">("kind");
+  const [subsystemsModularity, setSubsystemsModularity] = useState<SubsystemsResponseT | null>(null);
+  const [subsystemsLouvain, setSubsystemsLouvain] = useState<SubsystemsResponseT | null>(null);
+  // Phase I6: HDBSCAN is a separate, on-demand, heavier computation (real
+  // CPU embedding work, not near-instant graph math) -- its own response
+  // state and its own "computing" flag, not shared with the modularity+
+  // Louvain pair's computeSubsystems/computingSubsystems below.
+  const [subsystemsHdbscan, setSubsystemsHdbscan] = useState<SubsystemsResponseT | null>(null);
+  const [computingSubsystems, setComputingSubsystems] = useState(false);
+  const [computingSubsystemsHdbscan, setComputingSubsystemsHdbscan] = useState(false);
 
   // DetailPanel shows file details whenever selectedFileId is set,
   // regardless of how stale -- without clearing the other one on every
@@ -293,8 +342,55 @@ export default function RepoDetail() {
       .catch(() => setDirGraph(null));
   };
 
+  // Phase I1: reads ONLY what a prior POST /subsystems already persisted --
+  // same "GET must never recompute" discipline H1.5 established for
+  // entry detection. Both algorithms fetched together so the toggle in
+  // SubsystemsView is instant.
+  const loadSubsystems = () => {
+    api<SubsystemsResponseT>(`/api/repos/${id}/subsystems?algorithm=modularity`)
+      .then(setSubsystemsModularity)
+      .catch(() => setSubsystemsModularity(null));
+    api<SubsystemsResponseT>(`/api/repos/${id}/subsystems?algorithm=louvain`)
+      .then(setSubsystemsLouvain)
+      .catch(() => setSubsystemsLouvain(null));
+    api<SubsystemsResponseT>(`/api/repos/${id}/subsystems?algorithm=hdbscan`)
+      .then(setSubsystemsHdbscan)
+      .catch(() => setSubsystemsHdbscan(null));
+  };
+
+  const computeSubsystems = async () => {
+    setComputingSubsystems(true);
+    try {
+      await api(`/api/repos/${id}/subsystems`, { method: "POST" });
+      loadSubsystems();
+      loadRanking(scorer); // subsystem_modularity_id/louvain_id on each file just changed
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setComputingSubsystems(false);
+    }
+  };
+
+  // Phase I6: deliberately its own POST, not folded into computeSubsystems
+  // above -- embedding every file is real CPU work (see api/repos.py's
+  // POST /subsystems/hdbscan docstring), so this stays a separate,
+  // explicitly-triggered action with its own loading state.
+  const computeSubsystemsHdbscan = async () => {
+    setComputingSubsystemsHdbscan(true);
+    try {
+      await api(`/api/repos/${id}/subsystems/hdbscan`, { method: "POST" });
+      loadSubsystems();
+      loadRanking(scorer); // subsystem_hdbscan_id on each file just changed
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setComputingSubsystemsHdbscan(false);
+    }
+  };
+
   useEffect(() => {
     loadRepo();
+    loadSubsystems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -363,6 +459,45 @@ export default function RepoDetail() {
   const graphNodes = graph?.nodes ?? [];
   const segments = useMemo(() => deriveTopLevelSegments(files), [files]);
   const languages = useMemo(() => deriveLanguages(files), [files]);
+  // Phase I6: which SubsystemsResponseT backs a given algorithm -- used
+  // both for the Reading-list filter chips below (which must follow
+  // whichever algorithm is currently selected in the Subsystems tab) and
+  // for building per-algorithm label maps, so there's one place that
+  // knows the algorithm -> state-variable mapping.
+  const subsystemsResponseFor = (algorithm: SubsystemAlgorithmT): SubsystemsResponseT | null =>
+    algorithm === "louvain" ? subsystemsLouvain : algorithm === "hdbscan" ? subsystemsHdbscan : subsystemsModularity;
+
+  const labelMapFrom = (data: SubsystemsResponseT | null): Map<number, string> => {
+    const map = new Map<number, string>();
+    for (const s of data?.subsystems ?? []) {
+      map.set(s.id, s.custom_label || (s.active_label_rule === "top_fan_in" ? s.top_fan_in_label : s.dominant_prefix_label) || `Cluster ${s.cluster_index}`);
+    }
+    return map;
+  };
+
+  // Phase I1: chip labels come from the persisted CodeSubsystem rows
+  // (dominant_prefix/top_fan_in/custom label), not derived from files
+  // alone -- unlike segments/languages, a subsystem id has no meaning
+  // without looking up what compute_subsystems named it. Always
+  // modularity, regardless of which algorithm is selected in the
+  // Subsystems tab -- ArchitectureMap/MatrixView's cluster color mode
+  // (colorMode state above) only ever colors by subsystem_modularity_id
+  // (dir_aggregation.py's _cluster_of never looks at Louvain/HDBSCAN), so
+  // its legend labels must come from the SAME algorithm as the colors
+  // themselves, not whatever the Subsystems tab happens to be showing.
+  const modularityLabelById = useMemo(() => labelMapFrom(subsystemsModularity), [subsystemsModularity]);
+  // Phase I6: by contrast, the Reading-list "Cluster" filter chips (below)
+  // exist to let you view files from whichever cluster the Subsystems tab
+  // is currently showing -- these DO need to follow subsystemAlgorithm,
+  // or clicking a Louvain/HDBSCAN card's "view files" would silently
+  // filter against the wrong id space (a real gap this phase closed: it
+  // existed for Louvain the moment a second algorithm was added, and
+  // would have repeated for HDBSCAN otherwise).
+  const activeSubsystemLabelById = useMemo(
+    () => labelMapFrom(subsystemsResponseFor(subsystemAlgorithm)),
+    [subsystemAlgorithm, subsystemsModularity, subsystemsLouvain, subsystemsHdbscan]
+  );
+  const subsystemIds = useMemo(() => deriveSubsystemIds(files, subsystemAlgorithm), [files, subsystemAlgorithm]);
   const visible = useMemo(() => filterFiles(files, filters), [files, filters]);
   const visibleGraphNodes = useMemo(() => filterFiles(graphNodes, filters), [graphNodes, filters]);
 
@@ -511,6 +646,26 @@ export default function RepoDetail() {
               </Chip>
             ))}
           </div>
+          {subsystemIds.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-widest text-fog w-24 shrink-0">Cluster</span>
+              {subsystemIds.map((sid) => (
+                <Chip
+                  key={sid}
+                  active={filters.subsystemId === sid && filters.subsystemAlgorithm === subsystemAlgorithm}
+                  onClick={() =>
+                    setFilters((f) => ({
+                      ...f,
+                      subsystemId: f.subsystemId === sid && f.subsystemAlgorithm === subsystemAlgorithm ? null : sid,
+                      subsystemAlgorithm,
+                    }))
+                  }
+                >
+                  {activeSubsystemLabelById.get(sid) ?? `Cluster ${sid}`}
+                </Chip>
+              ))}
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-5">
             <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-fog cursor-pointer">
               <input
@@ -539,7 +694,14 @@ export default function RepoDetail() {
             />
           </div>
           <p className="font-mono text-[10px] text-fog">
-            Showing {view === "reading" ? visible.length : visibleGraphNodes.length} of {files.length} files
+            {/* Phase I1: the subsystem filter only carries meaning for the
+                ranking-based file list (visible) -- GraphNodeT (behind
+                visibleGraphNodes, used by every other tab) doesn't carry
+                subsystem membership at all, so falling through to it while
+                a subsystem filter is active would always read 0 regardless
+                of tab, which is exactly what a browser pass caught. */}
+            Showing {view === "reading" || filters.subsystemId !== null ? visible.length : visibleGraphNodes.length} of{" "}
+            {files.length} files
           </p>
         </div>
       )}
@@ -687,6 +849,9 @@ export default function RepoDetail() {
           pairFilter={pairFilter}
           onClearPairFilter={() => setPairFilter(null)}
           onSelectDir={selectDir}
+          colorMode={colorMode}
+          onColorModeChange={setColorMode}
+          clusterLabelById={modularityLabelById}
         />
       )}
 
@@ -699,6 +864,8 @@ export default function RepoDetail() {
             selectDir(a);
             setView("architecture");
           }}
+          colorMode={colorMode}
+          onColorModeChange={setColorMode}
         />
       )}
 
@@ -719,6 +886,22 @@ export default function RepoDetail() {
           onOpenMermaid={(fileId, trigger) => {
             mermaidTriggerRef.current = trigger;
             setMermaidFileId(fileId);
+          }}
+        />
+      )}
+
+      {files.length > 0 && view === "subsystems" && id && (
+        <SubsystemsView
+          repoId={id}
+          algorithm={subsystemAlgorithm}
+          onAlgorithmChange={setSubsystemAlgorithm}
+          data={subsystemsResponseFor(subsystemAlgorithm)}
+          onCompute={subsystemAlgorithm === "hdbscan" ? computeSubsystemsHdbscan : computeSubsystems}
+          computing={subsystemAlgorithm === "hdbscan" ? computingSubsystemsHdbscan : computingSubsystems}
+          onDataChanged={loadSubsystems}
+          onSelectSubsystem={(subsystemId) => {
+            setFilters((f) => ({ ...f, subsystemId, subsystemAlgorithm }));
+            setView("reading");
           }}
         />
       )}

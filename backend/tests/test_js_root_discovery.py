@@ -67,6 +67,29 @@ class TestFindTsConfigs:
         configs = find_ts_configs(tmp_path)
         assert configs[0]["module_resolution"] == "bundler"
 
+    def test_config_search_root_defaults_to_repo_root_unchanged(self, tmp_path):
+        _write(tmp_path / "tsconfig.json", '{"compilerOptions": {}}')
+        assert find_ts_configs(tmp_path) == find_ts_configs(tmp_path, config_search_root=tmp_path)
+
+    def test_config_above_repo_root_is_discarded_not_mismapped(self, tmp_path):
+        # tsconfig.json lives ABOVE repo_root (config_search_root/frontend)
+        # -- the exact source_root-scoped miss confirmed in
+        # docs/external-validation-eslint.md's Round 2. Its config_dir has
+        # no valid representation relative to repo_root, so it must be
+        # dropped entirely, not reported at some wrong/negative path.
+        _write(tmp_path / "tsconfig.json", '{"compilerOptions": {"baseUrl": "."}}')
+        repo_root = tmp_path / "frontend"
+        repo_root.mkdir()
+        configs = find_ts_configs(repo_root, config_search_root=tmp_path)
+        assert configs == []
+
+    def test_config_inside_repo_root_still_found_when_widened(self, tmp_path):
+        _write(tmp_path / "tsconfig.json", '{"compilerOptions": {}}')  # above -- discarded
+        repo_root = tmp_path / "frontend"
+        _write(repo_root / "src" / "tsconfig.json", '{"compilerOptions": {}}')  # inside -- kept
+        configs = find_ts_configs(repo_root, config_search_root=tmp_path)
+        assert [c["dir"] for c in configs] == ["src"]
+
 
 class TestConfigForFile:
     def _config(self, dir_: str) -> dict:
@@ -131,6 +154,37 @@ class TestFindPackageJsonWorkspaceDirs:
     def test_no_workspaces_field_gives_empty_set(self, tmp_path):
         _write(tmp_path / "package.json", '{"name": "solo-package"}')
         assert find_package_json_workspace_dirs(tmp_path) == set()
+
+    def test_config_search_root_defaults_to_repo_root_unchanged(self, tmp_path):
+        _write(tmp_path / "package.json", '{"workspaces": ["packages/ui"]}')
+        self._make_package(tmp_path / "packages" / "ui", "ui")
+        assert find_package_json_workspace_dirs(tmp_path) == find_package_json_workspace_dirs(tmp_path, config_search_root=tmp_path)
+
+    def test_declaring_package_json_above_repo_root_is_a_legitimate_shape_not_discarded(self, tmp_path):
+        # Deliberately different from find_ts_configs' test: the
+        # DECLARING package.json lives above repo_root, but the workspace
+        # boundary it names resolves INSIDE repo_root -- a real root
+        # monorepo package.json declaring `workspaces: ["backend/*"]` for
+        # a source_root-scoped ingest of `backend/`. The declaring file's
+        # own location doesn't matter; only where the resulting boundary
+        # lands does.
+        _write(tmp_path / "package.json", '{"workspaces": ["backend/packages/*"]}')
+        repo_root = tmp_path / "backend"
+        self._make_package(repo_root / "packages" / "ui", "ui")
+        dirs = find_package_json_workspace_dirs(repo_root, config_search_root=tmp_path)
+        assert dirs == {"packages/ui"}
+
+    def test_boundary_resolving_outside_repo_root_is_discarded(self, tmp_path):
+        # Same declaring package.json above repo_root, but this time the
+        # named workspace resolves to a directory OUTSIDE repo_root's own
+        # subtree -- has no valid repo_root-relative representation, must
+        # be dropped rather than raise or mis-map.
+        _write(tmp_path / "package.json", '{"workspaces": ["other/*"]}')
+        self._make_package(tmp_path / "other" / "ui", "ui")
+        repo_root = tmp_path / "backend"
+        repo_root.mkdir()
+        dirs = find_package_json_workspace_dirs(repo_root, config_search_root=tmp_path)
+        assert dirs == set()
 
 
 class TestWorkspaceOf:

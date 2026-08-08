@@ -6,6 +6,7 @@ function makeNode(id: string): DirNodeT {
   return {
     id, path: id, short_label: id, file_count: 1, kind: "source", region: "backend",
     internal_edge_count: 0, fan_in_dirs: 0, fan_out_dirs: 0, import_count_in: 0, import_count_out: 0,
+    cluster_id: null, cluster_purity: null, cluster_unclustered_count: 0,
   };
 }
 

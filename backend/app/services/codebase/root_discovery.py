@@ -63,20 +63,60 @@ DEFAULT_ABSOLUTE_FLOOR = 3
 # weakening protection against a coincidentally-matching wrong one.
 
 
-def find_marker_candidate_roots(repo_root: Path) -> set:
+def find_marker_candidate_roots(repo_root: Path, config_search_root: Optional[Path] = None) -> set:
     """Directories (repo-root-relative, POSIX, "" for the repo root itself)
     containing a Python packaging marker file. Scanned directly off disk,
     not from the ingested CodeFile set: requirements.txt/Pipfile/
     pyproject.toml aren't parseable source languages, so they're never
     CodeFile rows at all (same reasoning as entry_detection's Dockerfile/
     Procfile scan). The repo root itself is always a candidate -- the
-    guaranteed fallback if nothing else is ever promoted."""
+    guaranteed fallback if nothing else is ever promoted.
+
+    config_search_root: same parameter, same reasoning, and same name as
+    entry_detection.detect_entry_points' -- defaults to repo_root, which
+    reproduces every prior caller's behavior exactly. Confirmed present as
+    a real defect (docs/external-validation-eslint.md's Round 2 "bug
+    class" section): this function used to always scan from repo_root
+    only, so a marker one level above a source_root-scoped ingest was
+    invisible.
+
+    UNLIKE entry_detection's fix, this can't just report a widened match
+    as-is: every returned string here is used downstream as a path
+    *relative to repo_root* (resolve_python_import's roots=[...]), not
+    matched against an absolute file path the way entry_detection matches
+    candidates against real CodeFile rows. So a marker found while
+    scanning from config_search_root is resolved to an ABSOLUTE path and
+    only kept if it is actually a descendant of repo_root (also resolved,
+    for symlink/relative-path robustness, mirroring entry_detection's own
+    `repo_root.resolve()` step) -- anything above or beside repo_root has
+    no valid "root string relative to repo_root" representation and is
+    dropped, the same way an authoritative target outside the ingested
+    subtree naturally fails to match any real CodeFile.
+
+    Stated honestly, not just claimed: on every repo this project has
+    registered so far (none use source_root with a Python marker file
+    living above it), this produces the IDENTICAL candidate set widening
+    or not -- rglob from an ancestor finds a strict superset of what
+    rglob from repo_root finds, and everything outside repo_root's own
+    subtree is discarded either way. The fix closes a real coordinate-
+    space correctness gap (a marker above repo_root could previously only
+    ever be silently absent, never correctly recognized-and-excluded);
+    it does not, by itself, make a marker that only exists above
+    source_root usable as a governing root within it -- see
+    docs/external-validation-eslint.md for why that's a harder, separately
+    tracked problem."""
+    search_root = config_search_root if config_search_root is not None else repo_root
+    resolved_repo_root = repo_root.resolve()
+
     candidates = {""}
     for marker_name in PYTHON_ROOT_MARKER_FILENAMES:
-        for p in repo_root.rglob(marker_name):
+        for p in search_root.rglob(marker_name):
             if any(part in _IGNORED_DIR_NAMES for part in p.parts):
                 continue
-            rel_dir = p.parent.relative_to(repo_root).as_posix()
+            try:
+                rel_dir = p.parent.resolve().relative_to(resolved_repo_root).as_posix()
+            except ValueError:
+                continue  # outside repo_root's own subtree -- not a valid candidate
             candidates.add("" if rel_dir == "." else rel_dir)
     return candidates
 

@@ -11,8 +11,23 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from app.api.repos import NEIGHBORS_ENDPOINT_CAP, VALID_SCORERS, get_file_neighbors, get_graph, get_ranking
+from app.api.repos import (
+    NEIGHBORS_ENDPOINT_CAP,
+    VALID_SCORERS,
+    SubsystemRenameIn,
+    compute_subsystems_endpoint,
+    compute_subsystems_hdbscan_endpoint,
+    get_file_neighbors,
+    get_graph,
+    get_ranking,
+    get_subsystem_members,
+    get_subsystems,
+    ingest_repo_endpoint,
+    rank_repo_endpoint,
+    rename_subsystem,
+)
 from app.services.codebase.git_ops import run_git
+from app.services.codebase.repo_lock import repo_lock
 from app.services.codebase.ingest import ingest_repo
 from app.services.codebase.ranking import rank_repo, rank_repo_rrf, rank_repo_weighted_pagerank
 from app.services.codebase.registry import register_from_path
@@ -91,6 +106,17 @@ class TestGetRankingEndpoint:
         result = get_ranking(repo.id, scorer="legacy", user=None, db=db_session)
         assert result["reduced_confidence"] is False
         assert all("reduced_confidence" not in f for f in result["files"])
+
+    def test_subsystem_ids_present_and_null_before_clustering_has_run(self, db_session, tmp_path):
+        # Phase I1: same "read straight off CodeFile" shape as fan_in/
+        # fan_out above -- present in every row, null until POST
+        # /subsystems has run at least once (rank_repo* alone never sets it).
+        repo = self._ranked_repo(db_session, tmp_path)
+        result = get_ranking(repo.id, scorer="legacy", user=None, db=db_session)
+        for f in result["files"]:
+            assert "subsystem_modularity_id" in f
+            assert "subsystem_louvain_id" in f
+            assert f["subsystem_modularity_id"] is None
 
     def test_switching_scorer_changes_score_scale_consistently(self, db_session, tmp_path):
         # The original bug: reading across scorers mixed incompatible
@@ -429,3 +455,309 @@ class TestGetFileNeighborsEndpoint:
         with pytest.raises(HTTPException) as exc_info:
             get_file_neighbors(repo.id, 999999, user=None, db=db_session)
         assert exc_info.value.status_code == 404
+
+
+class TestRepoBusyErrorHandling:
+    """Debt item closed: POST /ingest and POST /rank previously let
+    RepoBusyError propagate as a raw, unhandled 500 instead of a clean
+    409 -- the same class of gap POST /subsystems already closed when it
+    was built (see TestSubsystemEndpoints below for its own coverage of
+    this). Fixed for both, not just /rank, since /ingest calls a function
+    that acquires the exact same lock for the exact same reason."""
+
+    def _make_repo(self, tmp_path) -> Path:
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "main.py", "def f(): pass\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=Alice", "-c", "user.email=alice@t.com", "commit", "-m", "initial")
+        return root
+
+    def test_ingest_endpoint_returns_409_when_repo_busy(self, db_session, tmp_path):
+        root = self._make_repo(tmp_path)
+        repo = register_from_path(db_session, str(root))
+        with repo_lock(repo.id, "rank"):
+            with pytest.raises(HTTPException) as exc_info:
+                ingest_repo_endpoint(repo.id, user=None, db=db_session)
+        assert exc_info.value.status_code == 409
+
+    def test_rank_endpoint_returns_409_when_repo_busy(self, db_session, tmp_path):
+        root = self._make_repo(tmp_path)
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        with repo_lock(repo.id, "ingest"):
+            with pytest.raises(HTTPException) as exc_info:
+                rank_repo_endpoint(repo.id, user=None, db=db_session)
+        assert exc_info.value.status_code == 409
+
+
+class TestSubsystemEndpoints:
+    """Two dense triangles (groupA, groupB) with no edges between them --
+    same shape as test_subsystems.py's own integration fixture, kept
+    minimal here since the clustering math itself is already covered
+    there; these tests exercise the HTTP-layer scoping/serialization only."""
+
+    def _make_repo(self, tmp_path) -> Path:
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "groupA" / "a1.py", "from groupA.a2 import f2\nfrom groupA.a3 import f3\n")
+        _write(root / "groupA" / "a2.py", "from groupA.a3 import f3\ndef f2(): pass\n")
+        _write(root / "groupA" / "a3.py", "def f3(): pass\n")
+        _write(root / "groupB" / "b1.py", "from groupB.b2 import g2\nfrom groupB.b3 import g3\n")
+        _write(root / "groupB" / "b2.py", "from groupB.b3 import g3\ndef g2(): pass\n")
+        _write(root / "groupB" / "b3.py", "def g3(): pass\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=Alice", "-c", "user.email=alice@t.com", "commit", "-m", "initial")
+        return root
+
+    def _ranked_repo(self, db_session, tmp_path):
+        root = self._make_repo(tmp_path)
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        return repo
+
+    def test_compute_endpoint_returns_shape(self, db_session, tmp_path):
+        repo = self._ranked_repo(db_session, tmp_path)
+        result = compute_subsystems_endpoint(repo.id, user=None, db=db_session)
+        assert result["algorithms"]["modularity"]["cluster_count"] == 2
+        assert "louvain" in result["algorithms"]
+        assert "cycle_coherence" in result
+
+    def test_compute_unknown_repo_raises_404(self, db_session):
+        with pytest.raises(HTTPException) as exc_info:
+            compute_subsystems_endpoint(999999, user=None, db=db_session)
+        assert exc_info.value.status_code == 404
+
+    def test_get_subsystems_scoped_by_both_repo_and_algorithm(self, db_session, tmp_path):
+        """The exact scoping shape G1 fixed for CodeFileRank/scorer,
+        applied here: GET must never mix modularity and louvain rows."""
+        repo = self._ranked_repo(db_session, tmp_path)
+        compute_subsystems_endpoint(repo.id, user=None, db=db_session)
+
+        modularity = get_subsystems(repo.id, algorithm="modularity", user=None, db=db_session)
+        louvain = get_subsystems(repo.id, algorithm="louvain", user=None, db=db_session)
+        assert modularity["algorithm"] == "modularity"
+        assert louvain["algorithm"] == "louvain"
+        assert len(modularity["subsystems"]) == 2
+        assert len(louvain["subsystems"]) == 2
+
+        from app.db.models import CodeSubsystem
+        modularity_ids = {s["id"] for s in modularity["subsystems"]}
+        louvain_ids = {s["id"] for s in louvain["subsystems"]}
+        assert modularity_ids.isdisjoint(louvain_ids)  # distinct rows, not the same set filtered twice
+        real_algorithms = {
+            row.id: row.algorithm
+            for row in db_session.query(CodeSubsystem).filter(CodeSubsystem.repo_id == repo.id).all()
+        }
+        assert all(real_algorithms[i] == "modularity" for i in modularity_ids)
+        assert all(real_algorithms[i] == "louvain" for i in louvain_ids)
+
+    def test_get_subsystems_is_read_only_no_recompute(self, db_session, tmp_path, monkeypatch):
+        """H1.5's own lesson, applied to a new read endpoint: GET must
+        read what POST already persisted, never re-cluster live."""
+        import app.api.repos as repos_module
+
+        repo = self._ranked_repo(db_session, tmp_path)
+        compute_subsystems_endpoint(repo.id, user=None, db=db_session)
+
+        def _boom(*a, **kw):
+            raise AssertionError("get_subsystems must not recompute clustering")
+
+        monkeypatch.setattr(repos_module, "compute_subsystems", _boom)
+        result = get_subsystems(repo.id, algorithm="modularity", user=None, db=db_session)
+        assert result["agreement"] == 1.0
+        assert len(result["cycle_coherence"]) == 0  # no cross-directory cycle in this fixture
+
+    def test_get_subsystems_unknown_algorithm_raises_400(self, db_session, tmp_path):
+        repo = self._ranked_repo(db_session, tmp_path)
+        compute_subsystems_endpoint(repo.id, user=None, db=db_session)
+        with pytest.raises(HTTPException) as exc_info:
+            get_subsystems(repo.id, algorithm="nonsense", user=None, db=db_session)
+        assert exc_info.value.status_code == 400
+
+    def test_get_subsystem_members_returns_real_files(self, db_session, tmp_path):
+        repo = self._ranked_repo(db_session, tmp_path)
+        compute_subsystems_endpoint(repo.id, user=None, db=db_session)
+        modularity = get_subsystems(repo.id, algorithm="modularity", user=None, db=db_session)
+        first = modularity["subsystems"][0]
+        result = get_subsystem_members(repo.id, first["id"], user=None, db=db_session)
+        assert len(result["files"]) == first["member_count"]
+
+    def test_get_subsystem_members_wrong_repo_raises_404(self, db_session, tmp_path):
+        repo = self._ranked_repo(db_session, tmp_path)
+        compute_subsystems_endpoint(repo.id, user=None, db=db_session)
+        modularity = get_subsystems(repo.id, algorithm="modularity", user=None, db=db_session)
+        first_id = modularity["subsystems"][0]["id"]
+        with pytest.raises(HTTPException) as exc_info:
+            get_subsystem_members(repo.id + 999, first_id, user=None, db=db_session)
+        assert exc_info.value.status_code == 404
+
+    def test_rename_persists_custom_label(self, db_session, tmp_path):
+        repo = self._ranked_repo(db_session, tmp_path)
+        compute_subsystems_endpoint(repo.id, user=None, db=db_session)
+        modularity = get_subsystems(repo.id, algorithm="modularity", user=None, db=db_session)
+        first_id = modularity["subsystems"][0]["id"]
+
+        result = rename_subsystem(repo.id, first_id, SubsystemRenameIn(custom_label="Auth Subsystem"),
+                                   user=None, db=db_session)
+        assert result["custom_label"] == "Auth Subsystem"
+        assert result["active_label_rule"] == "custom"
+
+        refetched = get_subsystems(repo.id, algorithm="modularity", user=None, db=db_session)
+        renamed = next(s for s in refetched["subsystems"] if s["id"] == first_id)
+        assert renamed["custom_label"] == "Auth Subsystem"
+
+
+def _fake_embed_by_group(texts: list):
+    """Same stand-in as test_subsystems.py's own fixture -- deterministic,
+    no ONNX model, no CPU inference pass. Kept as a free function here
+    (rather than importing test_subsystems.py's copy) since test files in
+    this suite don't import from one another. This fixture's groupA/groupB
+    never fall into the "else" branch (no iso-style file here), but it
+    stays angularly distinct from both groups after L2 normalization
+    anyway, matching test_subsystems.py's own fix for why a magnitude-only
+    outlier like [50, 50] stops being an outlier at all once normalized
+    in 2D."""
+    import numpy as np
+    vecs = []
+    for i, t in enumerate(texts):
+        jitter = (i % 5) * 0.001
+        if "groupA" in t:
+            vecs.append([1.0 + jitter, 0.0])
+        elif "groupB" in t:
+            vecs.append([0.0, 1.0 + jitter])
+        else:
+            vecs.append([-1.0, -1.0])
+    return np.array(vecs)
+
+
+class TestSubsystemHdbscanEndpoint:
+    """Phase I6: HTTP-layer scoping/serialization only -- the clustering
+    math itself (cluster_hdbscan, compute_subsystems_hdbscan) is already
+    covered in test_subsystems.py. Reuses TestSubsystemEndpoints' own
+    groupA/groupB fixture shape."""
+
+    def _make_repo(self, tmp_path) -> Path:
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "groupA" / "a1.py", "from groupA.a2 import f2\nfrom groupA.a3 import f3\n")
+        _write(root / "groupA" / "a2.py", "from groupA.a3 import f3\ndef f2(): pass\n")
+        _write(root / "groupA" / "a3.py", "def f3(): pass\n")
+        _write(root / "groupB" / "b1.py", "from groupB.b2 import g2\nfrom groupB.b3 import g3\n")
+        _write(root / "groupB" / "b2.py", "from groupB.b3 import g3\ndef g2(): pass\n")
+        _write(root / "groupB" / "b3.py", "def g3(): pass\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=Alice", "-c", "user.email=alice@t.com", "commit", "-m", "initial")
+        return root
+
+    def _ranked_repo(self, db_session, tmp_path):
+        root = self._make_repo(tmp_path)
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        return repo
+
+    def test_compute_endpoint_returns_shape(self, db_session, tmp_path, monkeypatch):
+        import app.services.codebase.subsystems as subsystems_module
+
+        monkeypatch.setattr(subsystems_module.embeddings, "embed_texts", _fake_embed_by_group)
+        repo = self._ranked_repo(db_session, tmp_path)
+        result = compute_subsystems_hdbscan_endpoint(repo.id, user=None, db=db_session)
+        assert result["algorithm"] == "hdbscan"
+        assert result["cluster_count"] == 2
+        assert result["agreement_with_modularity"] is None  # modularity never ran in this test
+
+    def test_compute_unknown_repo_raises_404(self, db_session):
+        with pytest.raises(HTTPException) as exc_info:
+            compute_subsystems_hdbscan_endpoint(999999, user=None, db=db_session)
+        assert exc_info.value.status_code == 404
+
+    def test_get_subsystems_hdbscan_scoped_separately_from_graph_algorithms(self, db_session, tmp_path, monkeypatch):
+        import app.services.codebase.subsystems as subsystems_module
+
+        monkeypatch.setattr(subsystems_module.embeddings, "embed_texts", _fake_embed_by_group)
+        repo = self._ranked_repo(db_session, tmp_path)
+        compute_subsystems_endpoint(repo.id, user=None, db=db_session)  # modularity + louvain
+        compute_subsystems_hdbscan_endpoint(repo.id, user=None, db=db_session)
+
+        hdbscan = get_subsystems(repo.id, algorithm="hdbscan", user=None, db=db_session)
+        modularity = get_subsystems(repo.id, algorithm="modularity", user=None, db=db_session)
+        assert hdbscan["algorithm"] == "hdbscan"
+        assert len(hdbscan["subsystems"]) == 2
+        assert hdbscan["agreement"] == 1.0  # hdbscan vs modularity, not modularity vs louvain
+        assert modularity["agreement"] == 1.0  # modularity vs louvain -- a different number, same value by coincidence of this fixture's shape
+        hdbscan_ids = {s["id"] for s in hdbscan["subsystems"]}
+        modularity_ids = {s["id"] for s in modularity["subsystems"]}
+        assert hdbscan_ids.isdisjoint(modularity_ids)
+
+    def test_get_subsystem_members_hdbscan_returns_real_files(self, db_session, tmp_path, monkeypatch):
+        import app.services.codebase.subsystems as subsystems_module
+
+        monkeypatch.setattr(subsystems_module.embeddings, "embed_texts", _fake_embed_by_group)
+        repo = self._ranked_repo(db_session, tmp_path)
+        compute_subsystems_hdbscan_endpoint(repo.id, user=None, db=db_session)
+        hdbscan = get_subsystems(repo.id, algorithm="hdbscan", user=None, db=db_session)
+        first = hdbscan["subsystems"][0]
+        result = get_subsystem_members(repo.id, first["id"], user=None, db=db_session)
+        assert len(result["files"]) == first["member_count"]
+
+    def test_compute_hdbscan_busy_raises_409(self, db_session, tmp_path, monkeypatch):
+        import app.services.codebase.subsystems as subsystems_module
+
+        monkeypatch.setattr(subsystems_module.embeddings, "embed_texts", _fake_embed_by_group)
+        repo = self._ranked_repo(db_session, tmp_path)
+        with repo_lock(repo.id, "ingest"):
+            with pytest.raises(HTTPException) as exc_info:
+                compute_subsystems_hdbscan_endpoint(repo.id, user=None, db=db_session)
+        assert exc_info.value.status_code == 409
+
+
+class TestGetGraphClusterFields:
+    """Phase I2: dominant-cluster fields on directory nodes at
+    level=directory. groupA (3 files, one clique) and groupB (3 files,
+    a separate clique with one file also weakly tied to groupA) --
+    groupB's split is what proves purity isn't silently reported as 1.0
+    for every directory."""
+
+    def _make_repo(self, tmp_path) -> Path:
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "groupA" / "a1.py", "from groupA.a2 import f2\nfrom groupA.a3 import f3\n")
+        _write(root / "groupA" / "a2.py", "from groupA.a3 import f3\ndef f2(): pass\n")
+        _write(root / "groupA" / "a3.py", "def f3(): pass\n")
+        _write(root / "groupB" / "b1.py", "from groupB.b2 import g2\nfrom groupB.b3 import g3\n")
+        _write(root / "groupB" / "b2.py", "from groupB.b3 import g3\ndef g2(): pass\n")
+        _write(root / "groupB" / "b3.py", "def g3(): pass\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=Alice", "-c", "user.email=alice@t.com", "commit", "-m", "initial")
+        return root
+
+    def _clustered_repo(self, db_session, tmp_path):
+        from app.services.codebase.subsystems import compute_subsystems
+
+        root = self._make_repo(tmp_path)
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        compute_subsystems(db_session, repo)
+        return repo
+
+    def test_directory_nodes_carry_dominant_cluster_and_full_purity(self, db_session, tmp_path):
+        repo = self._clustered_repo(db_session, tmp_path)
+        result = get_graph(repo.id, level="directory", user=None, db=db_session)
+        by_path = {n["path"]: n for n in result["nodes"]}
+        assert by_path["groupA"]["cluster_id"] is not None
+        assert by_path["groupA"]["cluster_purity"] == 1.0
+        assert by_path["groupB"]["cluster_purity"] == 1.0
+        assert by_path["groupA"]["cluster_id"] != by_path["groupB"]["cluster_id"]
+
+    def test_cluster_fields_null_before_clustering_has_run(self, db_session, tmp_path):
+        root = self._make_repo(tmp_path)
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        result = get_graph(repo.id, level="directory", user=None, db=db_session)
+        for n in result["nodes"]:
+            assert n["cluster_id"] is None
+            assert n["cluster_purity"] is None

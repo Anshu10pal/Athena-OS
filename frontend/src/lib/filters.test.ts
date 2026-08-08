@@ -3,6 +3,7 @@ import { RankedFileT } from "./api";
 import {
   applyFilterStateToSearchParams,
   deriveLanguages,
+  deriveSubsystemIds,
   deriveTopLevelSegments,
   EMPTY_FILTER_STATE,
   filterFiles,
@@ -26,6 +27,9 @@ function makeFile(overrides: Partial<RankedFileT>): RankedFileT {
     distinct_authors: null,
     days_since_last_change: null,
     computed_at: "",
+    subsystem_modularity_id: null,
+    subsystem_louvain_id: null,
+    subsystem_hdbscan_id: null,
     ...overrides,
   };
 }
@@ -53,6 +57,33 @@ describe("deriveTopLevelSegments / deriveLanguages", () => {
   it("derives languages from data", () => {
     const files = [makeFile({ language: "python" }), makeFile({ language: "typescript" }), makeFile({ language: "python" })];
     expect(deriveLanguages(files)).toEqual(["python", "typescript"]);
+  });
+});
+
+describe("deriveSubsystemIds", () => {
+  it("returns distinct, sorted subsystem ids, excluding null/unclustered files", () => {
+    const files = [
+      makeFile({ subsystem_modularity_id: 3 }),
+      makeFile({ subsystem_modularity_id: 1 }),
+      makeFile({ subsystem_modularity_id: 3 }),
+      makeFile({ subsystem_modularity_id: null }),
+    ];
+    expect(deriveSubsystemIds(files, "modularity")).toEqual([1, 3]);
+  });
+
+  it("returns an empty list when clustering hasn't run", () => {
+    const files = [makeFile({ subsystem_modularity_id: null }), makeFile({ subsystem_modularity_id: null })];
+    expect(deriveSubsystemIds(files, "modularity")).toEqual([]);
+  });
+
+  it("reads a different column per algorithm -- a Louvain id has no meaning under modularity's column", () => {
+    const files = [
+      makeFile({ subsystem_modularity_id: 1, subsystem_louvain_id: 9, subsystem_hdbscan_id: 20 }),
+      makeFile({ subsystem_modularity_id: 1, subsystem_louvain_id: 8, subsystem_hdbscan_id: 20 }),
+    ];
+    expect(deriveSubsystemIds(files, "modularity")).toEqual([1]);
+    expect(deriveSubsystemIds(files, "louvain")).toEqual([8, 9]);
+    expect(deriveSubsystemIds(files, "hdbscan")).toEqual([20]);
   });
 });
 
@@ -109,6 +140,39 @@ describe("filterFiles", () => {
     expect(visible.map((f) => f.file_id)).toEqual([2]);
   });
 
+  it("filters by subsystem id when one is selected", () => {
+    const files = [
+      makeFile({ file_id: 1, subsystem_modularity_id: 5 }),
+      makeFile({ file_id: 2, subsystem_modularity_id: 9 }),
+      makeFile({ file_id: 3, subsystem_modularity_id: null }),
+    ];
+    const visible = filterFiles(files, { ...EMPTY_FILTER_STATE, subsystemId: 5 });
+    expect(visible.map((f) => f.file_id)).toEqual([1]);
+  });
+
+  it("filters by the selected algorithm's own column, not modularity's, when subsystemAlgorithm is louvain/hdbscan", () => {
+    // Same shape as the real bug this closed: a file whose LOUVAIN cluster
+    // matches the selected id but whose MODULARITY cluster doesn't (or is
+    // null) must still show up when subsystemAlgorithm is "louvain".
+    const files = [
+      makeFile({ file_id: 1, subsystem_modularity_id: null, subsystem_louvain_id: 7, subsystem_hdbscan_id: 3 }),
+      makeFile({ file_id: 2, subsystem_modularity_id: 7, subsystem_louvain_id: 2, subsystem_hdbscan_id: 3 }),
+    ];
+    const louvain = filterFiles(files, { ...EMPTY_FILTER_STATE, subsystemId: 7, subsystemAlgorithm: "louvain" });
+    expect(louvain.map((f) => f.file_id)).toEqual([1]);
+    const hdbscan = filterFiles(files, { ...EMPTY_FILTER_STATE, subsystemId: 3, subsystemAlgorithm: "hdbscan" });
+    expect(hdbscan.map((f) => f.file_id)).toEqual([1, 2]);
+  });
+
+  it("shows all files, including unclustered ones, when no subsystem filter is active", () => {
+    const files = [
+      makeFile({ file_id: 1, subsystem_modularity_id: 5 }),
+      makeFile({ file_id: 2, subsystem_modularity_id: null }),
+    ];
+    const visible = filterFiles(files, EMPTY_FILTER_STATE);
+    expect(visible.map((f) => f.file_id)).toEqual([1, 2]);
+  });
+
   it("matches path search as a case-insensitive substring", () => {
     const files = [
       makeFile({ file_id: 1, path: "backend/app/Security.py" }),
@@ -142,6 +206,8 @@ describe("URL round-trip", () => {
       hideNoise: true,
       hideZeroFanIn: true,
       query: "security",
+      subsystemId: 7,
+      subsystemAlgorithm: "louvain" as const,
     };
     const params = new URLSearchParams();
     applyFilterStateToSearchParams(params, state);
@@ -150,5 +216,21 @@ describe("URL round-trip", () => {
 
   it("empty search params round-trip to the empty filter state", () => {
     expect(filterStateFromSearchParams(new URLSearchParams())).toEqual(EMPTY_FILTER_STATE);
+  });
+
+  it("an invalid subsystem param round-trips to null rather than NaN", () => {
+    const params = new URLSearchParams({ subsystem: "not-a-number" });
+    expect(filterStateFromSearchParams(params).subsystemId).toBeNull();
+  });
+
+  it("does not encode subsystemAlgo when no subsystem filter is active, even if non-default", () => {
+    const params = new URLSearchParams();
+    applyFilterStateToSearchParams(params, { ...EMPTY_FILTER_STATE, subsystemAlgorithm: "hdbscan" });
+    expect(params.get("subsystemAlgo")).toBeNull();
+  });
+
+  it("an unrecognized subsystemAlgo param falls back to modularity", () => {
+    const params = new URLSearchParams({ subsystem: "1", subsystemAlgo: "not-a-real-algorithm" });
+    expect(filterStateFromSearchParams(params).subsystemAlgorithm).toBe("modularity");
   });
 });

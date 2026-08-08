@@ -422,6 +422,41 @@ class Repo(Base):
     # agree). Nullable: None means no history-computing rank run has ever
     # completed for this repo.
     reduced_confidence: Mapped[bool] = mapped_column(Boolean, nullable=True, default=None)
+    # Phase I1: repo-wide agreement between the two subsystem-clustering
+    # algorithms (modularity vs. Louvain), computed over files in
+    # multi-member clusters only -- see subsystems.py's compute_subsystems
+    # for why singletons are excluded from the denominator. Repo-wide, not
+    # per-file or per-cluster: it's one number describing whether the two
+    # independent clusterings agree on this repo's structure at all, the
+    # same "one scalar describing the whole run" shape as reduced_confidence
+    # above. Null until subsystem clustering has run at least once.
+    subsystem_algorithm_agreement: Mapped[float] = mapped_column(Float, nullable=True, default=None)
+    # Phase I1: the last compute_subsystems run's cycle-cluster-coherence
+    # findings (subsystems.cycle_cluster_coherence's return shape, JSON
+    # list), persisted rather than recomputed on every GET. Doing this live
+    # on a read endpoint is exactly the H1.5 mistake (entry_detection
+    # re-scanning the filesystem on every /graph request) applied to a new
+    # computation -- cycle_cluster_coherence rebuilds a directory-level
+    # import graph from CodeImport rows, which is cheap at this repo's
+    # scale but is still real work a read endpoint has no business redoing
+    # on every request when POST /subsystems already computed it once.
+    subsystem_cycle_coherence: Mapped[list] = mapped_column(JSON, nullable=True, default=None)
+    # Phase I6: HDBSCAN (over FastEmbed embeddings of symbol signatures +
+    # docstrings -- see embeddings.py/subsystems.py) is a THIRD, separately
+    # triggered clustering algorithm, not a peer of the modularity/Louvain
+    # pair above -- it answers a different question (what a file's code
+    # SAYS it does, not who imports it) and is compared AGAINST modularity
+    # rather than against Louvain. Kept as its own scalar/JSON pair rather
+    # than reusing subsystem_algorithm_agreement/subsystem_cycle_coherence
+    # above, since those two specifically mean "modularity vs Louvain" in
+    # every place that already reads them (GET /subsystems for those two
+    # algorithms) -- overloading their meaning per-algorithm would silently
+    # break that existing contract. Null until POST /subsystems/hdbscan has
+    # run at least once, or if no modularity clustering exists yet to
+    # compare against (agreement has no defined value with nothing to
+    # compare to).
+    subsystem_hdbscan_agreement: Mapped[float] = mapped_column(Float, nullable=True, default=None)
+    subsystem_hdbscan_cycle_coherence: Mapped[list] = mapped_column(JSON, nullable=True, default=None)
 
 
 # ---------------- Codebase agent: parse + import graph (Phase B) ----------------
@@ -505,6 +540,23 @@ class CodeFile(Base):
     commit_count: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
     distinct_authors: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
     days_since_last_change: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+    # Phase I1 (extended I6): which subsystem this file belongs to, one
+    # column per algorithm rather than a generic scorer-style table --
+    # there are exactly three fixed algorithms (modularity and Louvain,
+    # both community-detected over the import graph; hdbscan, density-
+    # clustered over FastEmbed embeddings of symbol text -- see
+    # subsystems.py), not an open set that could grow, so the
+    # CodeFileRank-style per-scorer join would be unjustified indirection
+    # here. Null means either no clustering run has completed yet, or this
+    # file landed in a singleton (unclustered) "cluster" that was never
+    # persisted as a CodeSubsystem row -- see subsystems.py.
+    subsystem_modularity_id: Mapped[int] = mapped_column(ForeignKey("code_subsystems.id"), nullable=True, default=None, index=True)
+    subsystem_louvain_id: Mapped[int] = mapped_column(ForeignKey("code_subsystems.id"), nullable=True, default=None, index=True)
+    # Phase I6: third algorithm, HDBSCAN over FastEmbed embeddings -- see
+    # Repo.subsystem_hdbscan_agreement above for why it's not folded into
+    # the two columns above despite the identical NULL-means-unclustered
+    # convention.
+    subsystem_hdbscan_id: Mapped[int] = mapped_column(ForeignKey("code_subsystems.id"), nullable=True, default=None, index=True)
 
 
 class CodeSymbol(Base):
@@ -596,6 +648,68 @@ class CodeFileRank(Base):
     # among whatever subset happens to be currently displayed.
     rank: Mapped[int] = mapped_column(Integer, default=0)
     pagerank: Mapped[float] = mapped_column(Float, default=0.0)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------- Codebase agent: subsystem clustering (Phase I1) ----------------
+
+
+class CodeSubsystem(Base):
+    """One row per (repo, algorithm, cluster) from the last successful
+    clustering run -- replaced wholesale per algorithm on every run, same
+    "decoupled from ingest" shape as CodeFileRank, except clustering
+    depends on the resolved import graph rather than the ranking scorers.
+    Singleton clusters (a single file with no edges dense/weighted enough
+    to join anything) are deliberately NOT given a row here -- they're
+    reported in the UI as one aggregated "Unclustered" bucket, not as
+    hundreds of one-file cards. A file in a singleton has NULL
+    subsystem_modularity_id/subsystem_louvain_id on CodeFile, which is how
+    "unclustered" is detected without a sentinel row."""
+
+    __tablename__ = "code_subsystems"
+    __table_args__ = (UniqueConstraint("repo_id", "algorithm", "cluster_index", name="uq_code_subsystem_repo_algo_index"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), index=True)
+    # "modularity" (networkx greedy_modularity_communities) or "louvain"
+    # (networkx louvain_communities, seed=42) -- kept as two independent,
+    # simultaneously-persisted clusterings per repo, not a single "current"
+    # algorithm, so the agreement number on Repo can be recomputed/audited
+    # and a future repo where they genuinely disagree has both available
+    # without a re-run.
+    algorithm: Mapped[str] = mapped_column(String(20))
+    # Stable ordinal within one computation run, assigned by sorting
+    # clusters (size descending, then minimum file id) before assigning
+    # indices -- same "sort outputs, not just inputs" discipline as I0's
+    # determinism check, since networkx's own community-list order is an
+    # implementation detail, not a documented guarantee.
+    cluster_index: Mapped[int] = mapped_column(Integer)
+    member_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Label option 1: the most common immediate directory (dir_aggregation's
+    # dirname_of) among members, plus how many members share it -- e.g.
+    # "backend/app/api" with dominant_prefix_count=20 out of member_count=42.
+    dominant_prefix_label: Mapped[str] = mapped_column(String(500), default="")
+    dominant_prefix_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Label option 2: the basename (no extension) of whichever member has
+    # the highest CodeFile.fan_in -- a plausible "centerpiece" name when a
+    # cluster has a clear center, misleading when it doesn't (I0 confirmed
+    # both cases occur on the same repo).
+    top_fan_in_label: Mapped[str] = mapped_column(String(255), default="")
+    top_fan_in_file_id: Mapped[int] = mapped_column(ForeignKey("code_files.id"), nullable=True, default=None)
+    # Label option 3 (numeric) has no stored field -- it's just
+    # f"Subsystem {cluster_index}", derivable, not worth persisting.
+    # User override. Survives a re-cluster IF the new cluster overlaps the
+    # old custom-labeled cluster by >=50% of the OLD cluster's members
+    # (compute_subsystems' carry-over match) -- below that threshold the
+    # label resets to the default dominant_prefix rule, since the "same"
+    # subsystem can no longer be said to exist. Every reset is reported,
+    # never silent -- same discipline as G1's category_flips.
+    custom_label: Mapped[str] = mapped_column(String(255), nullable=True, default=None)
+    # Which of the three rules the UI should currently display -- state
+    # this explicitly rather than inferring it from which fields are
+    # non-empty, same "state the source of truth" pattern as G3's glossary
+    # tooltips. One of "dominant_prefix" | "top_fan_in" | "numeric" | "custom".
+    active_label_rule: Mapped[str] = mapped_column(String(20), default="dominant_prefix")
     computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

@@ -1,3 +1,5 @@
+import { SubsystemAlgorithmT } from "./api";
+
 // Phase G4: the minimal shape filterFiles/deriveTopLevelSegments/
 // deriveLanguages actually need -- both RankedFileT and GraphNodeT satisfy
 // this structurally, so the same filter logic (and the same URL state)
@@ -8,6 +10,29 @@ export interface Filterable {
   language: string;
   prior_category: string;
   fan_in: number;
+  // Phase I1 (extended I6): optional -- only RankedFileT (the Reading
+  // list) carries subsystem membership; GraphNodeT/DirNodeT (Layers/
+  // Architecture) don't, and filtering them by subsystem is out of scope
+  // (the subsystem filter control is wired into the Reading list only --
+  // see RepoDetail.tsx). Left optional here rather than duplicating a
+  // second Filterable-like interface, so the same filterFiles keeps
+  // working on every existing caller unchanged. One column per algorithm,
+  // same shape as RankedFileT itself -- which one filterFiles/
+  // deriveSubsystemIds actually reads is chosen by FilterState's own
+  // subsystemAlgorithm, not hardcoded to modularity.
+  subsystem_modularity_id?: number | null;
+  subsystem_louvain_id?: number | null;
+  subsystem_hdbscan_id?: number | null;
+}
+
+// Phase I6: which algorithm's cluster id a given Filterable carries for
+// the currently active filter -- kept as a plain function (not inlined at
+// every call site) since deriveSubsystemIds and filterFiles both need the
+// exact same mapping.
+export function subsystemIdOf(f: Filterable, algorithm: SubsystemAlgorithmT): number | null | undefined {
+  if (algorithm === "louvain") return f.subsystem_louvain_id;
+  if (algorithm === "hdbscan") return f.subsystem_hdbscan_id;
+  return f.subsystem_modularity_id;
 }
 
 // Phase G2: prior_category values that are noise for reading-order purposes
@@ -22,6 +47,14 @@ export interface FilterState {
   hideNoise: boolean; // hide prior_category in NOISE_CATEGORIES
   hideZeroFanIn: boolean; // hide the dangling floor
   query: string; // substring match against path
+  // Phase I1 (extended I6): null = show all (no subsystem filter active).
+  // A specific CodeSubsystem id, not a cluster_index -- ids are stable
+  // identifiers, cluster_index is only stable within one compute_
+  // subsystems run. subsystemAlgorithm records WHICH algorithm's id this
+  // is -- a Louvain or HDBSCAN cluster id means nothing compared against
+  // subsystem_modularity_id, so the two travel together.
+  subsystemId: number | null;
+  subsystemAlgorithm: SubsystemAlgorithmT;
 }
 
 export const EMPTY_FILTER_STATE: FilterState = {
@@ -30,6 +63,8 @@ export const EMPTY_FILTER_STATE: FilterState = {
   hideNoise: false,
   hideZeroFanIn: false,
   query: "",
+  subsystemId: null,
+  subsystemAlgorithm: "modularity",
 };
 
 // "(root)" for a file with no "/" at all -- a repo's own top-level files
@@ -51,6 +86,18 @@ export function deriveLanguages(files: Filterable[]): string[] {
   return Array.from(new Set(files.map((f) => f.language))).sort();
 }
 
+// Distinct subsystem ids actually present among these files for ONE
+// algorithm, sorted -- the caller looks up display labels from the
+// fetched SubsystemsResponseT (this module has no knowledge of labels,
+// same separation as deriveTopLevelSegments not knowing which segment is
+// "important").
+export function deriveSubsystemIds(files: Filterable[], algorithm: SubsystemAlgorithmT): number[] {
+  const ids = files
+    .map((f) => subsystemIdOf(f, algorithm))
+    .filter((id): id is number => id != null);
+  return Array.from(new Set(ids)).sort((a, b) => a - b);
+}
+
 // Deliberately does NOT touch or recompute `rank` -- a filtered-out file is
 // simply absent from the result, and every surviving file keeps the exact
 // rank value the rank run assigned it. A visible sequence like 1, 2, 3, 7, 9
@@ -64,6 +111,7 @@ export function filterFiles<T extends Filterable>(files: T[], state: FilterState
     if (state.languages.length > 0 && !state.languages.includes(f.language)) return false;
     if (state.hideNoise && NOISE_CATEGORIES.includes(f.prior_category)) return false;
     if (state.hideZeroFanIn && f.fan_in === 0) return false;
+    if (state.subsystemId !== null && subsystemIdOf(f, state.subsystemAlgorithm) !== state.subsystemId) return false;
     if (query && !f.path.toLowerCase().includes(query)) return false;
     return true;
   });
@@ -71,14 +119,24 @@ export function filterFiles<T extends Filterable>(files: T[], state: FilterState
 
 // URL <-> FilterState, so a filtered view is reloadable and shareable.
 // Absent params mean "no filter" (EMPTY_FILTER_STATE), not an error.
+const VALID_SUBSYSTEM_ALGORITHMS: SubsystemAlgorithmT[] = ["modularity", "louvain", "hdbscan"];
+
 export function filterStateFromSearchParams(params: URLSearchParams): FilterState {
   const csv = (key: string) => (params.get(key) ?? "").split(",").filter(Boolean);
+  const subsystemRaw = params.get("subsystem");
+  const subsystemId = subsystemRaw !== null && subsystemRaw !== "" ? Number(subsystemRaw) : null;
+  const algorithmRaw = params.get("subsystemAlgo");
+  const subsystemAlgorithm = VALID_SUBSYSTEM_ALGORITHMS.includes(algorithmRaw as SubsystemAlgorithmT)
+    ? (algorithmRaw as SubsystemAlgorithmT)
+    : "modularity";
   return {
     segments: csv("segments"),
     languages: csv("languages"),
     hideNoise: params.get("hideNoise") === "1",
     hideZeroFanIn: params.get("hideZeroFanIn") === "1",
     query: params.get("q") ?? "",
+    subsystemId: subsystemId !== null && !Number.isNaN(subsystemId) ? subsystemId : null,
+    subsystemAlgorithm,
   };
 }
 
@@ -93,4 +151,14 @@ export function applyFilterStateToSearchParams(params: URLSearchParams, state: F
   else params.delete("hideZeroFanIn");
   if (state.query) params.set("q", state.query);
   else params.delete("q");
+  if (state.subsystemId !== null) params.set("subsystem", String(state.subsystemId));
+  else params.delete("subsystem");
+  // Only encoded when a subsystem filter is actually active and the
+  // algorithm isn't the default -- keeps the common case's URL unchanged
+  // from before this field existed.
+  if (state.subsystemId !== null && state.subsystemAlgorithm !== "modularity") {
+    params.set("subsystemAlgo", state.subsystemAlgorithm);
+  } else {
+    params.delete("subsystemAlgo");
+  }
 }

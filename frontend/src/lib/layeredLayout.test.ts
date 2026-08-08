@@ -25,6 +25,7 @@ function makeNode(id: string, overrides: Partial<DirNodeT> = {}): DirNodeT {
   return {
     id, path: id, short_label: id, file_count: 1, kind: "source", region: "backend",
     internal_edge_count: 0, fan_in_dirs: 0, fan_out_dirs: 0, import_count_in: 0, import_count_out: 0,
+    cluster_id: null, cluster_purity: null, cluster_unclustered_count: 0,
     ...overrides,
   };
 }
@@ -262,6 +263,34 @@ describe("buildRenderNodes", () => {
     const toOut = renderEdges.filter((e) => e.source === cycleNode.id && e.target === "out");
     expect(toOut).toHaveLength(1);
     expect(toOut[0].weight).toBe(3.0);
+  });
+
+  it("Phase I2: singleton render node passes through its own cluster fields unchanged", () => {
+    const nodes = [
+      makeNode("app", { short_label: "app", cluster_id: 5, cluster_purity: 0.8, cluster_unclustered_count: 1 }),
+    ];
+    const layout = computeLayeredLayout(nodes, []);
+    const { renderNodes } = buildRenderNodes(nodes, [], layout);
+    expect(renderNodes[0].clusterId).toBe(5);
+    expect(renderNodes[0].clusterPurity).toBe(0.8);
+    expect(renderNodes[0].clusterUnclusteredCount).toBe(1);
+  });
+
+  it("Phase I2: a cycle group's cluster fields come from its largest-file-count member", () => {
+    // core (3 files, cluster 1, purity 1.0) <-> db (5 files, cluster 2,
+    // purity 0.4) -- db is bigger, so db's cluster info wins. This is a
+    // stated approximation (see buildRenderNodes' own comment) since this
+    // module has no per-file data to recompute a true merged purity from.
+    const nodes = [
+      makeNode("core", { short_label: "core", region: "backend", file_count: 3, cluster_id: 1, cluster_purity: 1.0 }),
+      makeNode("db", { short_label: "db", region: "backend", file_count: 5, cluster_id: 2, cluster_purity: 0.4 }),
+    ];
+    const edges = [makeEdge("core", "db", 0.65), makeEdge("db", "core", 0.4)];
+    const layout = computeLayeredLayout(nodes, edges);
+    const { renderNodes } = buildRenderNodes(nodes, edges, layout);
+    const cycleNode = renderNodes.find((n) => n.isCycle)!;
+    expect(cycleNode.clusterId).toBe(2);
+    expect(cycleNode.clusterPurity).toBe(0.4);
   });
 });
 

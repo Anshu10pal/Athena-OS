@@ -6,7 +6,7 @@ but its own arguments can influence. The caller (repos.py's GET
 /{repo_id}/graph) supplies whatever DB- or filesystem-derived facts
 (entry detection, the file-level nodes/edges it already built) this needs.
 """
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Optional
 
 from app.services.codebase.edge_weights import is_test_file
@@ -84,6 +84,32 @@ def _roll_up_to_cap(groups: dict, max_groups: int) -> int:
             groups.setdefault(parent, []).extend(files)
             rollups += 1
     return rollups
+
+
+def _cluster_of(files: list) -> tuple:
+    """Majority CodeFile.subsystem_modularity_id among this directory's
+    files, plus a purity fraction -- same "state the fraction, don't just
+    pick a winner" discipline as I5's per-component recall/homogeneity
+    metrics (see docs/external-validation-eslint.md's Round 3 correction,
+    which is the direct reason this function exists: a directory's files
+    can genuinely split across multiple dependency clusters, and coloring
+    the whole box one color without saying so would repeat the exact
+    overclaim that correction fixed in the Dependency Clusters tab).
+
+    Files with no cluster assignment (None -- clustering never run, or
+    genuinely unclustered) are EXCLUDED from the purity denominator, for
+    the same reason None was excluded from I5's recall/homogeneity: a
+    handful of files independently failing to cluster with anything is
+    not evidence they'd agree with each other if they had. Returns
+    (cluster_id, purity, unclustered_count) -- cluster_id/purity are both
+    None if no member has any cluster assignment at all."""
+    clustered = [f["subsystem_modularity_id"] for f in files if f.get("subsystem_modularity_id") is not None]
+    unclustered_count = len(files) - len(clustered)
+    if not clustered:
+        return None, None, unclustered_count
+    counts = Counter(clustered)
+    majority_id, majority_count = counts.most_common(1)[0]
+    return majority_id, majority_count / len(clustered), unclustered_count
 
 
 def _kind_of(files: list) -> str:
@@ -188,6 +214,7 @@ def aggregate_to_directories(
     dir_nodes = []
     for gpath, files in groups.items():
         ranks = [f["rank"] for f in files if f.get("rank") is not None]
+        cluster_id, cluster_purity, cluster_unclustered_count = _cluster_of(files)
         dir_nodes.append({
             "id": gpath,
             "path": gpath,
@@ -200,6 +227,14 @@ def aggregate_to_directories(
             "fan_out_dirs": fan_out_dirs.get(gpath, 0),
             "import_count_in": import_in.get(gpath, 0.0),
             "import_count_out": import_out.get(gpath, 0.0),
+            # Phase I2: dominant dependency-cluster id among this
+            # directory's files, plus purity -- see _cluster_of's
+            # docstring. cluster_id is None if no member has ANY cluster
+            # assignment (clustering never run, or the directory is
+            # entirely composed of unclustered files).
+            "cluster_id": cluster_id,
+            "cluster_purity": cluster_purity,
+            "cluster_unclustered_count": cluster_unclustered_count,
             "_rank": min(ranks) if ranks else None,
         })
 

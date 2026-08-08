@@ -26,6 +26,37 @@ const KIND_LABEL: Record<DirKindT, string> = {
 };
 const ALL_KINDS: DirKindT[] = ["entry", "source", "test", "tooling", "migration"];
 
+// Phase I2: a categorical palette for coloring by dependency cluster
+// instead of by kind -- same "canvas/SVG needs literal color strings"
+// exception as KIND_COLOR above. Cluster count varies per repo (4 on this
+// one, 9 on the ESLint validation repo) and isn't bounded the way the 5
+// kinds are, so this cycles via modulo past 10 clusters -- a known,
+// stated limit (colors repeat), not a silent one.
+const CLUSTER_PALETTE = [
+  "#3DDC97", "#4FC7D4", "#E0B450", "#D4739B", "#9B87F5",
+  "#F2A65A", "#6EC6C1", "#B5D96C", "#E2646E", "#7FA8D9",
+];
+const NO_CLUSTER_COLOR = "#E9F1EE33"; // no cluster data at all -- neutral, recedes
+// Below this, a box's dominant cluster covers less than 3/4 of its files
+// -- same threshold and reasoning as CYCLE_COHERENCE_WEAK_THRESHOLD on
+// the backend (subsystems.py): a real split, not a rendering artifact,
+// worth surfacing rather than painting the whole box one clean color.
+// Exported so MatrixView.tsx applies the identical threshold.
+export const CLUSTER_PURITY_WEAK_THRESHOLD = 0.75;
+
+// Exported so MatrixView.tsx uses the exact same cluster->color mapping --
+// one source of truth, same reasoning as lib/neighborGrouping.ts being
+// shared between Focus and Mermaid, so the two views can never disagree
+// about which color a given cluster id is.
+export function clusterColor(clusterId: number | null): string {
+  if (clusterId === null) return NO_CLUSTER_COLOR;
+  return CLUSTER_PALETTE[clusterId % CLUSTER_PALETTE.length];
+}
+
+function isImpureCluster(n: RenderNode): boolean {
+  return n.clusterPurity !== null && n.clusterPurity < CLUSTER_PURITY_WEAK_THRESHOLD;
+}
+
 const COLLAPSED_H = 32;
 const CYCLE_COLLAPSED_H = 46;
 const COLUMN_W = 190;
@@ -124,11 +155,18 @@ function anchorPoint(b: Box, other: Box): { x: number; y: number } {
 
 export function ArchitectureMap({
   nodes, edges, files, selectedFileId, onSelectFile, pairFilter, onClearPairFilter, onSelectDir,
+  colorMode, onColorModeChange, clusterLabelById,
 }: {
   nodes: DirNodeT[];
   edges: DirEdgeT[];
   files: FileRef[];
   selectedFileId: number | null;
+  // Phase I2: shared with MatrixView via RepoDetail so switching tabs
+  // keeps the same coloring active, same pattern as the algorithm toggle
+  // on the Dependency Clusters tab.
+  colorMode: "kind" | "cluster";
+  onColorModeChange: (mode: "kind" | "cluster") => void;
+  clusterLabelById: Map<number, string>;
   // Sets shared selection state; the caller (RepoDetail) also switches
   // the active view to Focus -- "clicking a file dot goes to the focus
   // view" per the brief. Deferred until H4 built Focus to consume it;
@@ -322,6 +360,20 @@ export function ArchitectureMap({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded border border-line p-0.5 gap-0.5">
+          {(["kind", "cluster"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => onColorModeChange(m)}
+              className={
+                "font-mono text-[9px] uppercase tracking-widest rounded px-2 py-1 transition-colors " +
+                (colorMode === m ? "bg-accent/15 text-accent" : "text-fog hover:text-snow")
+              }
+            >
+              {m}
+            </button>
+          ))}
+        </div>
         <button
           onClick={() => toggleKind("__all")}
           className={
@@ -350,9 +402,34 @@ export function ArchitectureMap({
         </span>
       </div>
 
+      {/* Phase I2: kind filtering above stays active regardless of color
+          mode -- this row is purely informational, showing which color
+          maps to which dependency cluster when colorMode="cluster". Not
+          a second filter mechanism, to keep this a small, scoped
+          addition rather than a parallel activeClusters filter state. */}
+      {colorMode === "cluster" && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[9px] text-fog tracking-wide uppercase">Clusters:</span>
+          {[...new Set(renderNodes.map((n) => n.clusterId).filter((id): id is number => id !== null))]
+            .sort((a, b) => a - b)
+            .map((id) => (
+              <span
+                key={id}
+                className="font-mono text-[10px] rounded-full px-2.5 py-1 border border-line/50 text-fog flex items-center gap-1.5"
+              >
+                <span className="inline-block w-2 h-2 rounded-full" style={{ background: clusterColor(id) }} />
+                {clusterLabelById.get(id) ?? `Cluster ${id}`}
+              </span>
+            ))}
+          <span className="font-mono text-[9px] text-fog/70 tracking-wide">
+            DASHED ACCENT = LESS THAN {Math.round(CLUSTER_PURITY_WEAK_THRESHOLD * 100)}% OF FILES SHARE THE DOMINANT CLUSTER
+          </span>
+        </div>
+      )}
+
       <div
         ref={stageRef}
-        className={"relative border border-line rounded overflow-hidden bg-void " + (fullscreen ? "" : "")}
+        className={"relative border border-line rounded overflow-hidden bg-ink " + (fullscreen ? "" : "")}
         style={{ height: 560 }}
       >
         <div className="absolute left-3 top-3 z-10 font-mono text-[10px] text-fog tracking-wide">
@@ -493,7 +570,22 @@ export function ArchitectureMap({
                       fill="none" stroke="rgba(255,255,255,.18)" strokeWidth={0.8} strokeDasharray="3 3"
                     />
                   )}
-                  <rect x={b.x} y={b.y} width={3.5} height={b.h} rx={2} fill={KIND_COLOR[n.kind]} opacity={0.92} />
+                  {/* Phase I2: impure-cluster indicator is its OWN dashed
+                      rect around just the accent bar, not the cycle
+                      rect's whole-box dashed border above -- the two
+                      facts (this is a cycle / this cluster is impure)
+                      are independent and shouldn't visually collide. */}
+                  {colorMode === "cluster" && isImpureCluster(n) && (
+                    <rect
+                      x={b.x + 0.5} y={b.y + 0.5} width={3.5} height={b.h - 1}
+                      fill="none" stroke={clusterColor(n.clusterId)} strokeWidth={0.8} strokeDasharray="2 2"
+                    />
+                  )}
+                  <rect
+                    x={b.x} y={b.y} width={3.5} height={b.h} rx={2}
+                    fill={colorMode === "kind" ? KIND_COLOR[n.kind] : clusterColor(n.clusterId)}
+                    opacity={colorMode === "cluster" && isImpureCluster(n) ? 0.5 : 0.92}
+                  />
                   {(tier > 0 || isOpen) && (
                     <>
                       <text
@@ -508,6 +600,21 @@ export function ArchitectureMap({
                           fill="#E2646E" fontFamily="var(--mono)" fontSize={8.5} letterSpacing={0.9}
                         >
                           CYCLE GROUP · {n.memberIds.length} DIRS
+                        </text>
+                      )}
+                      {/* Phase I2: only rendered for non-cycle, EXPANDED
+                          boxes -- a collapsed box is COLLAPSED_H=32px, no
+                          room for a second text line (the cycle sublabel
+                          above only fits because cycle boxes collapse
+                          taller, CYCLE_COLLAPSED_H=46). Collapsed impure
+                          boxes still get the dashed accent bar as their
+                          visual cue; the percentage appears on expand. */}
+                      {!n.isCycle && isOpen && colorMode === "cluster" && isImpureCluster(n) && (
+                        <text
+                          x={b.x + 13} y={b.y + 19 + 13}
+                          fill={clusterColor(n.clusterId)} fontFamily="var(--mono)" fontSize={8.5} letterSpacing={0.9}
+                        >
+                          MIXED · {Math.round((n.clusterPurity ?? 0) * 100)}% ONE CLUSTER
                         </text>
                       )}
                       <text

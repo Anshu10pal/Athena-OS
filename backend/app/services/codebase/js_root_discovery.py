@@ -37,19 +37,31 @@ def _strip_json_comments(raw: str) -> str:
     return "\n".join(line for line in raw.splitlines() if not line.strip().startswith("//"))
 
 
-def _iter_files_named(repo_root: Path, *names: str):
+def _iter_files_named(search_root: Path, *names: str):
     for name in names:
-        for p in repo_root.rglob(name):
+        for p in search_root.rglob(name):
             if not any(part in _IGNORED_DIR_NAMES for part in p.parts):
                 yield p
 
 
-def _rel_dir(path: Path, repo_root: Path) -> str:
-    rel = path.parent.relative_to(repo_root).as_posix()
+def _rel_dir_within_root(path: Path, repo_root: Path) -> Optional[str]:
+    """Same as _rel_dir, but for a `path` that may have come from a WIDER
+    config_search_root scan -- returns None (discard) if `path` isn't
+    actually a descendant of repo_root, instead of raising. Resolves both
+    sides first, same robustness step as entry_detection's
+    `repo_root.resolve()`. See find_ts_configs/find_package_json_
+    workspace_dirs' docstrings for why this can't just report the wider
+    match as-is: their return values are used downstream as paths
+    relative to repo_root, not matched against an absolute CodeFile path
+    the way entry_detection's widened search is."""
+    try:
+        rel = path.parent.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        return None
     return "" if rel == "." else rel
 
 
-def find_ts_configs(repo_root: Path) -> list:
+def find_ts_configs(repo_root: Path, config_search_root: Optional[Path] = None) -> list:
     """Every tsconfig.json/jsconfig.json in the tree (not the single fixed
     repo-root lookup Phase E1 shipped with), each contributing its own
     scoped resolution context. Returns a list of
@@ -57,16 +69,32 @@ def find_ts_configs(repo_root: Path) -> list:
     "paths": {alias: [targets]}, "module_resolution": str|None}, sorted by
     dir depth ascending (shallowest first) -- config_for_file relies on
     this order only as a tiebreak convenience, not correctness (it always
-    picks the deepest matching one explicitly)."""
+    picks the deepest matching one explicitly).
+
+    config_search_root: same parameter/reasoning as
+    find_marker_candidate_roots' -- defaults to repo_root (identical
+    behavior to before). A config found while scanning a wider
+    config_search_root is discarded (via _rel_dir_within_root) unless it's
+    actually a descendant of repo_root: config_dir is used downstream as a
+    path relative to repo_root (config_for_file's ancestor matching,
+    resolve_js_module's target paths), not matched against an absolute
+    CodeFile path, so a config outside repo_root's subtree has no valid
+    representation here -- see find_marker_candidate_roots' docstring for
+    the full reasoning and its "confirmed no observed behavior change on
+    any registered repo, closes a correctness gap not an observed bug"
+    caveat, which applies identically here."""
+    search_root = config_search_root if config_search_root is not None else repo_root
     configs = []
-    for config_path in _iter_files_named(repo_root, *CONFIG_FILENAMES):
+    for config_path in _iter_files_named(search_root, *CONFIG_FILENAMES):
+        config_dir = _rel_dir_within_root(config_path, repo_root)
+        if config_dir is None:
+            continue
         try:
             data = json.loads(_strip_json_comments(config_path.read_text(encoding="utf-8", errors="ignore")))
         except (json.JSONDecodeError, OSError):
             continue
         opts = data.get("compilerOptions", {}) or {}
         base_url = opts.get("baseUrl", ".")
-        config_dir = _rel_dir(config_path, repo_root)
         raw_paths = opts.get("paths", {}) or {}
         # targets in tsconfig.json are relative to THIS config's own
         # directory + its baseUrl, not to the repo root -- a nested
@@ -147,14 +175,26 @@ def _resolve_workspace_glob(repo_root: Path, pattern: str) -> list:
     return [literal] if literal.is_dir() else []
 
 
-def find_package_json_workspace_dirs(repo_root: Path) -> set:
+def find_package_json_workspace_dirs(repo_root: Path, config_search_root: Optional[Path] = None) -> set:
     """Directories (repo-relative POSIX) named by a package.json
     `workspaces` field -- either the array form or Yarn's
     {"packages": [...]} object form. Only entries that resolve to a real
     directory containing its OWN package.json count as a genuine workspace
-    boundary, not just any directory a glob happened to match."""
+    boundary, not just any directory a glob happened to match.
+
+    config_search_root: same parameter as find_ts_configs', but discards
+    at a DIFFERENT point, deliberately -- the declaring package.json
+    itself doesn't need to be inside repo_root (a root package.json above
+    a source_root-scoped ingest declaring `workspaces: ["backend/*"]` is
+    a completely legitimate, real-world shape), only the resolved
+    workspace BOUNDARY directories that come out of it do, since those
+    are what get returned and used downstream as repo_root-relative
+    paths. A boundary that resolves outside repo_root's subtree is
+    dropped the same way an out-of-scope tsconfig is."""
+    search_root = config_search_root if config_search_root is not None else repo_root
+    resolved_repo_root = repo_root.resolve()
     boundaries = set()
-    for pkg_path in _iter_files_named(repo_root, "package.json"):
+    for pkg_path in _iter_files_named(search_root, "package.json"):
         try:
             data = json.loads(pkg_path.read_text(encoding="utf-8", errors="ignore"))
         except (json.JSONDecodeError, OSError):
@@ -167,8 +207,13 @@ def find_package_json_workspace_dirs(repo_root: Path) -> set:
         base_dir = pkg_path.parent
         for pattern in workspaces:
             for candidate in _resolve_workspace_glob(base_dir, pattern):
-                if (candidate / "package.json").is_file():
-                    boundaries.add(candidate.relative_to(repo_root).as_posix())
+                if not (candidate / "package.json").is_file():
+                    continue
+                try:
+                    rel = candidate.resolve().relative_to(resolved_repo_root).as_posix()
+                except ValueError:
+                    continue  # workspace boundary resolves outside repo_root's own subtree
+                boundaries.add(rel)
     return boundaries
 
 

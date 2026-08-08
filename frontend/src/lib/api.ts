@@ -85,6 +85,13 @@ export interface RankedFileT {
   distinct_authors: number | null;
   days_since_last_change: number | null;
   computed_at: string;
+  // Phase I1 (extended I6): same "property of the file, not the scorer"
+  // shape as fan_in above -- null until POST /subsystems (or, for
+  // hdbscan, POST /subsystems/hdbscan) has run, or if this file landed in
+  // a singleton (never given a CodeSubsystem row).
+  subsystem_modularity_id: number | null;
+  subsystem_louvain_id: number | null;
+  subsystem_hdbscan_id: number | null;
 }
 
 // Phase G1: reduced_confidence is repo-wide (one git-log call per rank
@@ -158,6 +165,15 @@ export interface DirNodeT {
   fan_out_dirs: number;
   import_count_in: number;
   import_count_out: number;
+  // Phase I2: dominant dependency-cluster id among this directory's files,
+  // plus purity -- see backend/app/services/codebase/dir_aggregation.py's
+  // _cluster_of. Both null if clustering has never run, or if every file
+  // in this directory is itself unclustered. purity < 1 means this
+  // directory's files genuinely split across multiple clusters -- do not
+  // render it as if the whole directory were one clean cluster.
+  cluster_id: number | null;
+  cluster_purity: number | null;
+  cluster_unclustered_count: number;
 }
 
 export interface DirEdgeT {
@@ -194,6 +210,88 @@ export interface NeighborsResponseT {
   importers_total_before_cap: number;
   imports: NeighborT[];
   imports_total_before_cap: number;
+}
+
+// Phase I1 (extended I6): subsystem clustering -- modularity/louvain over
+// the resolved import graph, hdbscan over FastEmbed embeddings of symbol
+// text (see backend/app/services/codebase/subsystems.py's module
+// docstring for why three independent algorithms run and what each
+// answers).
+export type SubsystemAlgorithmT = "modularity" | "louvain" | "hdbscan";
+
+export type SubsystemLabelRuleT = "dominant_prefix" | "top_fan_in" | "numeric" | "custom";
+
+export interface SubsystemT {
+  id: number;
+  algorithm: SubsystemAlgorithmT;
+  cluster_index: number;
+  member_count: number;
+  dominant_prefix_label: string;
+  dominant_prefix_count: number;
+  top_fan_in_label: string;
+  top_fan_in_file_id: number | null;
+  custom_label: string | null;
+  active_label_rule: SubsystemLabelRuleT;
+  computed_at: string;
+}
+
+export interface CycleCoherenceEntryT {
+  directories: string[];
+  total_files: number;
+  majority_cluster_index: number;
+  majority_count: number;
+  coherence: number;
+  weak: boolean;
+}
+
+// The shape of POST /subsystems specifically -- modularity+louvain only,
+// always both keys present. HDBSCAN is a separate endpoint (POST
+// /subsystems/hdbscan) with its own response shape below, not a third key
+// here -- it's compared against modularity, not run alongside it in the
+// same call.
+export interface ComputeSubsystemsResultT {
+  agreement: number | null;
+  algorithms: Record<"modularity" | "louvain", {
+    cluster_count: number;
+    unclustered_count: number;
+    labels_carried_over: number;
+    labels_reset: number;
+  }>;
+  cycle_coherence: CycleCoherenceEntryT[];
+}
+
+// The shape of POST /subsystems/hdbscan -- see subsystems.py's
+// compute_subsystems_hdbscan. agreement_with_modularity is null when
+// modularity hasn't been computed yet for this repo.
+export interface ComputeSubsystemsHdbscanResultT {
+  algorithm: "hdbscan";
+  cluster_count: number;
+  unclustered_count: number;
+  labels_carried_over: number;
+  labels_reset: number;
+  agreement_with_modularity: number | null;
+  cycle_coherence: CycleCoherenceEntryT[];
+  embedded_file_count: number;
+  embedding_seconds: number;
+}
+
+export interface SubsystemsResponseT {
+  algorithm: SubsystemAlgorithmT;
+  agreement: number | null;
+  cycle_coherence: CycleCoherenceEntryT[] | null;
+  unclustered_count: number;
+  subsystems: SubsystemT[];
+}
+
+export interface SubsystemMemberT {
+  id: number;
+  path: string;
+  language: string;
+  fan_in: number | null;
+}
+
+export interface SubsystemMembersResponseT {
+  files: SubsystemMemberT[];
 }
 
 export function timeAgo(iso: string | null): string {

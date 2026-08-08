@@ -268,8 +268,15 @@ def _ingest_repo_locked(
     all_rows = db.query(CodeImport).filter(CodeImport.repo_id == repo.id).all()
     imports_resolved = 0
 
-    js_configs = js_root_discovery.find_ts_configs(root)
-    workspace_dirs = js_root_discovery.find_package_json_workspace_dirs(root)
+    # config_search_root is always the true repo.local_path, NOT `root`
+    # (which is source_root-scoped) -- same reasoning, same value, as
+    # ranking.py's entry_detection call. Confirmed (docs/external-
+    # validation-eslint.md's Round 2) that neither function discards
+    # anything found within `root`'s own subtree; this only lets a config/
+    # workspace-declaration file living ABOVE `root` be found at all,
+    # never mis-mapped to a wrong coordinate.
+    js_configs = js_root_discovery.find_ts_configs(root, config_search_root=Path(repo.local_path))
+    workspace_dirs = js_root_discovery.find_package_json_workspace_dirs(root, config_search_root=Path(repo.local_path))
     js_config = js_root_discovery.load_js_root_discovery_config()
     js_cross_root_edges = 0
 
@@ -332,7 +339,7 @@ def _ingest_repo_locked(
 
         python_files = {f.path for f in files_by_path.values() if f.language == "python"}
         candidate_roots = (
-            root_discovery.find_marker_candidate_roots(root)
+            root_discovery.find_marker_candidate_roots(root, config_search_root=Path(repo.local_path))
             | root_discovery.find_structural_candidate_roots(
                 python_files, [r["raw_specifier"] for r in not_yet_classified]
             )

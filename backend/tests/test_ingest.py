@@ -377,6 +377,68 @@ class TestIngestTsRepo:
         assert row.to_symbol_id == helper_symbol.id
 
 
+class TestIngestConfigSearchRootAboveSourceRoot:
+    """Closes the confirmed-but-not-yet-fixed config-discovery bug class
+    (docs/external-validation-eslint.md's Round 2): find_marker_candidate_
+    roots/find_ts_configs/find_package_json_workspace_dirs all searched
+    only from `_repo_root(repo)` (source_root-scoped), missing config
+    files that live above it. Fixed via a config_search_root parameter,
+    same shape as entry_detection's.
+
+    find_package_json_workspace_dirs is the one function where this
+    produces an ACTUALLY OBSERVABLE difference at the ingest level (proven
+    below) -- find_marker_candidate_roots and find_ts_configs discard any
+    match outside repo_root's own subtree by construction (their return
+    values are used as repo_root-relative paths), so widening never adds
+    a new usable candidate for those two; only proven not to regress/crash
+    here, honestly, not claimed to change behavior."""
+
+    def test_workspace_declared_above_source_root_is_found_and_flags_cross_root(self, db_session, tmp_path):
+        # True repo root: package.json declares a workspace glob that
+        # resolves to a directory INSIDE source_root -- the declaring
+        # file's own location (above source_root) doesn't matter, only
+        # where the boundary it names lands (see find_package_json_
+        # workspace_dirs' own docstring for why this discards at a
+        # different point than find_ts_configs).
+        root = tmp_path / "repo"
+        _write(root / "package.json", '{"workspaces": ["app/packages/*"]}')
+        _write(root / "app" / "packages" / "ui" / "package.json", '{"name": "ui"}')
+        _write(root / "app" / "packages" / "ui" / "index.ts", 'import { x } from "../../main";\n')
+        _write(root / "app" / "main.ts", "export const x = 1;\n")
+
+        repo = register_from_path(db_session, str(root), source_root="app")
+        report = ingest_repo(db_session, repo)
+
+        assert report.files_total == 2
+        files = {f.path: f for f in db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).all()}
+        row = db_session.query(CodeImport).filter(
+            CodeImport.from_file_id == files["packages/ui/index.ts"].id
+        ).one()
+        assert row.to_file_id == files["main.ts"].id
+        assert row.cross_root_kind == "workspace_boundary"
+        assert report.js_cross_root_edges == 1
+
+    def test_marker_and_config_above_source_root_do_not_crash_or_regress(self, db_session, tmp_path):
+        # Python marker + tsconfig.json both live above source_root.
+        # Neither can ever nominate a usable candidate from outside
+        # repo_root's own subtree (see the class docstring) -- this test
+        # proves the widened scan doesn't crash and doesn't corrupt the
+        # in-scope resolution that already worked before this fix.
+        root = tmp_path / "repo"
+        _write(root / "pyproject.toml", "[project]\nname = \"x\"\n")
+        _write(root / "tsconfig.json", '{"compilerOptions": {"baseUrl": "."}}')
+        _write(root / "backend" / "app" / "__init__.py", "")
+        _write(root / "backend" / "app" / "utils.py", "def helper():\n    return 1\n")
+        _write(root / "backend" / "app" / "main.py", "from app.utils import helper\n")
+
+        repo = register_from_path(db_session, str(root), source_root="backend")
+        report = ingest_repo(db_session, repo)
+
+        files = {f.path: f for f in db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).all()}
+        row = db_session.query(CodeImport).filter(CodeImport.from_file_id == files["app/main.py"].id).one()
+        assert row.to_file_id == files["app/utils.py"].id  # in-scope resolution unaffected
+
+
 class TestIngestPythonStage2RootDiscovery:
     """Phase E2.3: rows stage 1 (default "", "src") can't resolve get a
     second attempt using Phase E2.1's evidence-based root discovery. Needs

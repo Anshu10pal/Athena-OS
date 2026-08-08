@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user, require_write_access
 from app.db.database import SessionLocal, get_db
-from app.db.models import CodeFile, CodeFileRank, CodeImport, Repo, RepoJob, User
+from app.db.models import CodeFile, CodeFileRank, CodeImport, CodeSubsystem, Repo, RepoJob, User
 from app.services.codebase import edge_weights, jobs, registry
 from app.services.codebase.dir_aggregation import DEFAULT_MAX_GROUPS, aggregate_to_directories
 from app.services.codebase.discovery import TooManyFilesError
@@ -18,6 +18,13 @@ from app.services.codebase.ingest import ingest_repo
 from app.services.codebase.ordering import compute_layers
 from app.services.codebase.policy import RepoBlocked
 from app.services.codebase.ranking import _build_graph, rank_repo
+from app.services.codebase.repo_lock import RepoBusyError
+from app.services.codebase.subsystems import (
+    VALID_ALGORITHMS,
+    compute_subsystems,
+    compute_subsystems_hdbscan,
+    subsystem_column_for,
+)
 
 router = APIRouter(prefix="/api/repos", tags=["repos"])
 
@@ -30,6 +37,10 @@ class RepoAddIn(BaseModel):
 
 class RepoSeedExcludeIn(BaseModel):
     seed_exclude_paths: list[str]
+
+
+class SubsystemRenameIn(BaseModel):
+    custom_label: str
 
 
 def serialize_repo(r: Repo) -> dict:
@@ -132,6 +143,8 @@ def ingest_repo_endpoint(repo_id: int, user: User = Depends(require_write_access
         raise HTTPException(400, str(e))
     except TooManyFilesError as e:
         raise HTTPException(413, str(e))
+    except RepoBusyError as e:
+        raise HTTPException(409, str(e))
     return {
         "repo_id": report.repo_id,
         "files_total": report.files_total,
@@ -172,6 +185,15 @@ def _serialize_rank(r: CodeFileRank, f: CodeFile) -> dict:
         "distinct_authors": f.distinct_authors,
         "days_since_last_change": f.days_since_last_change,
         "computed_at": r.computed_at.isoformat(),
+        # Phase I1: same reasoning as the fan_in/fan_out block above --
+        # subsystem membership is a property of the FILE (from the last
+        # POST /subsystems run), identical regardless of which scorer
+        # produced this rank row, so it's read straight off CodeFile with
+        # no extra query. Null until subsystem clustering has run, or if
+        # this file landed in a singleton (never given a CodeSubsystem row).
+        "subsystem_modularity_id": f.subsystem_modularity_id,
+        "subsystem_louvain_id": f.subsystem_louvain_id,
+        "subsystem_hdbscan_id": f.subsystem_hdbscan_id,
     }
 
 
@@ -184,6 +206,8 @@ def rank_repo_endpoint(repo_id: int, user: User = Depends(require_write_access),
         result = rank_repo(db, repo)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except RepoBusyError as e:
+        raise HTTPException(409, str(e))
     return result
 
 
@@ -340,6 +364,11 @@ def get_graph(
             "fan_in": f.fan_in, "fan_out": f.fan_out, "pagerank": r.pagerank,
             "is_entry_point": f.is_entry_point, "seed_eligible": f.seed_eligible,
             "reachable": layers.get(f.id) is not None,
+            # Phase I2: read straight off CodeFile, same "property of the
+            # file" shape as everything else here -- lets
+            # aggregate_to_directories compute a directory's dominant
+            # dependency cluster without a second query.
+            "subsystem_modularity_id": f.subsystem_modularity_id,
         }
         for r, f in capped
     ]
@@ -538,3 +567,146 @@ def stream_job(repo_id: int, job_id: int, user: User = Depends(get_current_user)
             time.sleep(0.5)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _serialize_subsystem(s: CodeSubsystem) -> dict:
+    return {
+        "id": s.id,
+        "algorithm": s.algorithm,
+        "cluster_index": s.cluster_index,
+        "member_count": s.member_count,
+        "dominant_prefix_label": s.dominant_prefix_label,
+        "dominant_prefix_count": s.dominant_prefix_count,
+        "top_fan_in_label": s.top_fan_in_label,
+        "top_fan_in_file_id": s.top_fan_in_file_id,
+        "custom_label": s.custom_label,
+        "active_label_rule": s.active_label_rule,
+        "computed_at": s.computed_at.isoformat(),
+    }
+
+
+@router.post("/{repo_id}/subsystems")
+def compute_subsystems_endpoint(
+    repo_id: int, user: User = Depends(require_write_access), db: Session = Depends(get_db),
+):
+    """Phase I1: community-detection clustering over the resolved import
+    graph (see subsystems.py's module docstring for why two algorithms run
+    and what each answers). Synchronous, same convention as POST /rank --
+    this repo's scale (hundreds of files) makes it fast enough not to need
+    a background job."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    try:
+        return compute_subsystems(db, repo)
+    except RepoBusyError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.post("/{repo_id}/subsystems/hdbscan")
+def compute_subsystems_hdbscan_endpoint(
+    repo_id: int, user: User = Depends(require_write_access), db: Session = Depends(get_db),
+):
+    """Phase I6: a third, separately-triggered clustering algorithm --
+    HDBSCAN over FastEmbed embeddings of each file's symbol signatures and
+    docstrings (subsystems.py/embeddings.py), rather than the import graph
+    modularity/Louvain use. Deliberately its own endpoint, not folded into
+    POST /subsystems above: embedding every file is real CPU work (seconds,
+    not the near-instant graph math the other two do), and it answers a
+    different question (what a file's code says it does, not who imports
+    it) worth keeping optional and explicit rather than automatic.
+
+    FastEmbed runs entirely local -- ONNX runtime, CPU-only, no network
+    call, no data leaving this machine. An earlier design for this feature
+    considered a hosted embeddings API gated behind an explicit
+    confirm-before-sending step; with FastEmbed there is nothing to
+    confirm, since nothing is sent anywhere -- this endpoint needs no such
+    gate."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    try:
+        return compute_subsystems_hdbscan(db, repo)
+    except RepoBusyError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.get("/{repo_id}/subsystems")
+def get_subsystems(
+    repo_id: int, algorithm: str = "modularity",
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Reads ONLY what a POST /subsystems or /subsystems/hdbscan run
+    already persisted -- no live graph rebuild, no live clustering re-run,
+    no live embedding. Filtered by BOTH repo_id and algorithm, not just
+    repo_id -- the exact scoping bug G1 fixed for CodeFileRank/scorer,
+    applied here to a second dimension that has the same "N incompatible
+    values sharing one table" shape."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    if algorithm not in VALID_ALGORITHMS:
+        raise HTTPException(400, f"Unknown algorithm {algorithm!r} -- must be one of {VALID_ALGORITHMS}")
+
+    subsystem_col = subsystem_column_for(algorithm)
+    rows = (
+        db.query(CodeSubsystem)
+        .filter(CodeSubsystem.repo_id == repo_id, CodeSubsystem.algorithm == algorithm)
+        .order_by(CodeSubsystem.cluster_index.asc())
+        .all()
+    )
+    unclustered_count = (
+        db.query(CodeFile)
+        .filter(CodeFile.repo_id == repo_id, subsystem_col.is_(None))
+        .count()
+    )
+    # hdbscan's agreement/cycle_coherence are its own fields on Repo (see
+    # models.py) -- modularity vs Louvain's agreement number specifically
+    # means "modularity vs Louvain" everywhere else it's read, so hdbscan
+    # (compared against modularity instead) can't reuse those same fields
+    # without silently changing what an existing caller's number means.
+    if algorithm == "hdbscan":
+        agreement = repo.subsystem_hdbscan_agreement
+        cycle_coherence = repo.subsystem_hdbscan_cycle_coherence
+    else:
+        agreement = repo.subsystem_algorithm_agreement
+        cycle_coherence = repo.subsystem_cycle_coherence
+    return {
+        "algorithm": algorithm,
+        "agreement": agreement,
+        "cycle_coherence": cycle_coherence,
+        "unclustered_count": unclustered_count,
+        "subsystems": [_serialize_subsystem(s) for s in rows],
+    }
+
+
+@router.get("/{repo_id}/subsystems/{subsystem_id}/members")
+def get_subsystem_members(
+    repo_id: int, subsystem_id: int,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    subsystem = db.get(CodeSubsystem, subsystem_id)
+    if not subsystem or subsystem.repo_id != repo_id:
+        raise HTTPException(404, "Subsystem not found")
+    subsystem_col = subsystem_column_for(subsystem.algorithm)
+    files = (
+        db.query(CodeFile)
+        .filter(CodeFile.repo_id == repo_id, subsystem_col == subsystem_id)
+        .order_by(CodeFile.path.asc())
+        .all()
+    )
+    return {"files": [{"id": f.id, "path": f.path, "language": f.language, "fan_in": f.fan_in} for f in files]}
+
+
+@router.patch("/{repo_id}/subsystems/{subsystem_id}")
+def rename_subsystem(
+    repo_id: int, subsystem_id: int, payload: SubsystemRenameIn,
+    user: User = Depends(require_write_access), db: Session = Depends(get_db),
+):
+    subsystem = db.get(CodeSubsystem, subsystem_id)
+    if not subsystem or subsystem.repo_id != repo_id:
+        raise HTTPException(404, "Subsystem not found")
+    subsystem.custom_label = payload.custom_label
+    subsystem.active_label_rule = "custom"
+    db.commit()
+    return _serialize_subsystem(subsystem)

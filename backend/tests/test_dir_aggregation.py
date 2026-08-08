@@ -13,6 +13,7 @@ import pytest
 
 from app.services.codebase.dir_aggregation import (
     DEFAULT_MAX_GROUPS,
+    _cluster_of,
     _kind_of,
     _roll_up_to_cap,
     aggregate_to_directories,
@@ -21,10 +22,12 @@ from app.services.codebase.dir_aggregation import (
 )
 
 
-def _node(id, path, prior_category="source", rank=None, is_entry_point=False, seed_eligible=False):
+def _node(id, path, prior_category="source", rank=None, is_entry_point=False, seed_eligible=False,
+          subsystem_modularity_id=None):
     return {
         "id": id, "path": path, "prior_category": prior_category, "rank": rank,
         "is_entry_point": is_entry_point, "seed_eligible": seed_eligible,
+        "subsystem_modularity_id": subsystem_modularity_id,
     }
 
 
@@ -111,6 +114,59 @@ class TestRollUpToCap:
         rollups = _roll_up_to_cap(groups, max_groups=DEFAULT_MAX_GROUPS)
         assert len(groups) <= DEFAULT_MAX_GROUPS
         assert rollups > 0
+
+
+class TestClusterOf:
+    """Phase I2. None (unclustered) is deliberately excluded from the
+    purity denominator -- see the docstring on _cluster_of, and
+    docs/external-validation-eslint.md's Round 3 correction, which is the
+    exact reason this exclusion exists: letting None compete as a
+    "majority" inflated a recall number there, and would inflate a
+    directory's purity here the same way."""
+
+    def test_majority_cluster_and_full_purity(self):
+        files = [
+            _node(1, "a/x.py", subsystem_modularity_id=5),
+            _node(2, "a/y.py", subsystem_modularity_id=5),
+        ]
+        cluster_id, purity, unclustered = _cluster_of(files)
+        assert cluster_id == 5
+        assert purity == 1.0
+        assert unclustered == 0
+
+    def test_partial_purity_when_members_split_across_clusters(self):
+        files = [
+            _node(1, "a/x.py", subsystem_modularity_id=5),
+            _node(2, "a/y.py", subsystem_modularity_id=5),
+            _node(3, "a/z.py", subsystem_modularity_id=9),
+        ]
+        cluster_id, purity, unclustered = _cluster_of(files)
+        assert cluster_id == 5
+        assert purity == pytest.approx(2 / 3)
+        assert unclustered == 0
+
+    def test_unclustered_files_excluded_from_purity_denominator(self):
+        # 1 of 2 REAL cluster members agree; the two unclustered files
+        # must not dilute or inflate that ratio in either direction.
+        files = [
+            _node(1, "a/x.py", subsystem_modularity_id=5),
+            _node(2, "a/y.py", subsystem_modularity_id=9),
+            _node(3, "a/z.py", subsystem_modularity_id=None),
+            _node(4, "a/w.py", subsystem_modularity_id=None),
+        ]
+        cluster_id, purity, unclustered = _cluster_of(files)
+        assert purity == 0.5
+        assert unclustered == 2
+
+    def test_all_unclustered_returns_none_not_a_fabricated_purity(self):
+        files = [
+            _node(1, "a/x.py", subsystem_modularity_id=None),
+            _node(2, "a/y.py", subsystem_modularity_id=None),
+        ]
+        cluster_id, purity, unclustered = _cluster_of(files)
+        assert cluster_id is None
+        assert purity is None
+        assert unclustered == 2
 
 
 class TestKindOf:
@@ -278,3 +334,19 @@ class TestAggregateToDirectories:
         assert result["edges"] == []
         assert result["group_rollups"] == 0
         assert result["truncated"] is False
+
+    def test_cluster_fields_surfaced_on_directory_nodes(self):
+        # Phase I2: a/two files share cluster 1 (pure); b/two files split
+        # across clusters 1 and 2 (impure, purity 0.5).
+        nodes = [
+            _node(1, "a/x.py", rank=1, subsystem_modularity_id=1),
+            _node(2, "a/y.py", rank=2, subsystem_modularity_id=1),
+            _node(3, "b/x.py", rank=3, subsystem_modularity_id=1),
+            _node(4, "b/y.py", rank=4, subsystem_modularity_id=2),
+        ]
+        result = aggregate_to_directories(nodes, [])
+        by_path = {n["path"]: n for n in result["nodes"]}
+        assert by_path["a"]["cluster_id"] == 1
+        assert by_path["a"]["cluster_purity"] == 1.0
+        assert by_path["a"]["cluster_unclustered_count"] == 0
+        assert by_path["b"]["cluster_purity"] == 0.5

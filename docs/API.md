@@ -205,3 +205,70 @@ Semantic search over your vector memory. Top 8 hits with relevance scores.
 
 ### `GET /api/analytics/dashboard`
 Drives the Command Hub. Returns XP, level, streak, roadmap progress, interview readiness, presentations analyzed, speech count, vault entries, oratory filler rate, skills, digital twin metrics.
+
+## Codebase Agent
+
+A separate feature from the rest of this app: ingests a git repo (clone or local checkout), builds its import graph, and produces a ranked reading list, an architecture map, and dependency clusters — zero LLM calls anywhere in this section. Full design/status doc: `docs/codebase-agent-handoff.md`.
+
+### `GET /api/repos`
+List all registered repos.
+
+### `POST /api/repos`
+```json
+{ "url": "https://github.com/owner/repo.git", "source_root": null }
+```
+Or `{ "local_path": "D:\\path\\to\\checkout" }` instead of `url` — exactly one of the two, not both. `source_root` (optional) scopes ingestion to a subdirectory of the checkout.
+
+### `GET /api/repos/{id}`
+Single repo's metadata (host/owner/name, `source_kind`, `last_ingested_at`, `file_count`, `seed_exclude_paths`, etc.).
+
+### `PUT /api/repos/{id}/seed-exclude-paths`
+```json
+{ "seed_exclude_paths": ["scripts/", "tools/cron/"] }
+```
+Per-repo override: prefix-matched paths excluded from seeding weighted PageRank (they still earn the entry prior, just don't carry teleport mass) — every repo has some auxiliary surface no ecosystem-wide marker catches.
+
+### `POST /api/repos/{id}/resync`
+Fetch + checkout latest (clone-kind repos only; 400 on a `local` repo).
+
+### `POST /api/repos/{id}/ingest`
+Synchronous parse + import-graph build. Returns a report (`files_total`, `files_parsed`, `imports_resolved`, `promoted_python_roots`, `blind_spots`, etc.). 409 if this repo has an ingest/rank already in flight.
+
+### `POST /api/repos/{id}/rank`
+Synchronous ranking with the `legacy` scorer (weighted-sum composite). 409 if busy. `weighted_pagerank`/`rrf` scorers are computed by their own service functions, not yet a distinct endpoint each — call `POST /rank` then read `GET /ranking?scorer=weighted_pagerank` after a job that runs all three, or see `jobs.py`.
+
+### `GET /api/repos/{id}/ranking?scorer=legacy`
+One row per file for the given scorer (`legacy` | `weighted_pagerank` | `rrf`), ordered by stored rank. Includes `reduced_confidence` (repo-wide) and each file's `subsystem_modularity_id`/`subsystem_louvain_id`.
+
+### `GET /api/repos/{id}/graph?scorer=&level=directory&limit=&language=&path_prefix=&min_score=`
+Nodes + edges for the Architecture/Matrix/Layers views. `level=directory` (default) returns aggregated directory nodes (`kind`, `cluster_id`, `cluster_purity`, cross-directory edges); `level=file` returns the underlying file-level graph. `limit` caps directories/files by rank *after* aggregation, never before — filtering never distorts the aggregate.
+
+### `GET /api/repos/{id}/files/{file_id}/neighbors?scorer=`
+Importers/imports for one file, each direction capped independently (`NEIGHBORS_ENDPOINT_CAP`) with a `*_total_before_cap` field.
+
+### `POST /api/repos/{id}/jobs`
+Starts a background resync→ingest→rank job. Returns `{ job_id }`.
+
+### `GET /api/repos/{id}/jobs/latest`
+Most recent job's status/progress/result for this repo.
+
+### `GET /api/repos/{id}/jobs/{job_id}/stream`
+Server-Sent Events, same wire shape as `/api/chat/stream`: `{"type":"progress",...}` / `{"type":"done","result":{...}}` / `{"type":"error","message":"..."}`.
+
+### `POST /api/repos/{id}/subsystems`
+Runs dependency-cluster detection (modularity + Louvain community detection over the resolved import graph) and persists both. Returns per-algorithm cluster counts, the modularity⇄Louvain agreement number, and cycle-cluster coherence findings. 409 if busy. These are measured coupling groups, not confirmed architectural subsystems — see `docs/external-validation-eslint.md`'s Round 3 for why that distinction is load-bearing.
+
+### `POST /api/repos/{id}/subsystems/hdbscan`
+Runs a third, separately-triggered clustering algorithm — HDBSCAN over FastEmbed embeddings (local, `BAAI/bge-small-en-v1.5`, no network call) of each file's symbol signatures + docstrings, rather than the import graph. Slower than `POST /subsystems` (real CPU embedding work — seconds per hundred files, not near-instant graph math), so it stays its own button/endpoint. Returns `agreement_with_modularity` (null if modularity hasn't run yet), its own `cycle_coherence`, and embedding timing/coverage. 409 if busy. **Validated (docs/external-validation-eslint.md's Round 4) to currently underperform modularity/Louvain on a repo with many structurally-similar files** (ESLint's ~294 individual lint rule implementations collapsed into one 81%-of-repo mega-cluster) — reported honestly, not smoothed over; treat as experimental, not a proven improvement.
+
+### `GET /api/repos/{id}/subsystems?algorithm=modularity`
+Persisted clusters for one algorithm (`modularity` | `louvain` | `hdbscan`) — read-only, never recomputes. Includes `agreement`, `cycle_coherence`, and `unclustered_count` (for `hdbscan`, `agreement` means agreement WITH modularity, not modularity⇄Louvain).
+
+### `GET /api/repos/{id}/subsystems/{subsystem_id}/members`
+Real files belonging to one cluster.
+
+### `PATCH /api/repos/{id}/subsystems/{subsystem_id}`
+```json
+{ "custom_label": "Auth" }
+```
+Renames a cluster. Survives the next `POST /subsystems` run if the new clustering's best-overlapping cluster shares ≥50% of the old cluster's members; otherwise resets to the default label.

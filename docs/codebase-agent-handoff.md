@@ -1,4 +1,4 @@
-# Codebase Agent — Status & Handoff (Phases A–H complete; H5 was the last checkpoint)
+# Codebase Agent — Status & Handoff (Phases A–H complete, Phase I in progress — I0/I1/I2/I5/I6 done)
 
 **Hand this file to a fresh Claude Code session to resume work with full
 context. It supersedes any memory of the conversation that produced it.**
@@ -6,20 +6,55 @@ This version replaces the previous handoff (which only covered Phases A–D)
 and folds forward everything through Phase H5. If you are the assistant
 reading this in a new session: read this entire file before doing anything
 else, then wait for the user's next instruction — **do not assume there is
-a Phase I brief.** There isn't one yet (see "What's NOT done" at the
-bottom).
+a Phase I brief.** There isn't one yet (see "What's NOT done" and "Scope
+reconciliation" below).
+
+## 2026-08-08 reconciliation note — read this before trusting anything below
+
+A separate Claude Desktop session, working from conversational memory only
+(not the repo), produced two different verbal status summaries that
+disagreed with this file and with each other — one claimed H4 was "next"
+and H5 "pending" (Raw-view fate undecided), and both introduced a "phases
+3–9" roadmap (subsystem clustering, comprehension cards, drift detection,
+knowledge-coloured map, adaptive scheduler) framed as agreed future scope.
+**Both claims were checked directly against this repo and did not hold
+up:**
+
+- `frontend/src/pages/RepoDetail.tsx` line 31 contains the literal comment
+  *"Phase H5: the old force-directed 'Raw' view is gone, not demoted."*
+  `ViewT` has exactly five values (`reading`, `architecture`, `matrix`,
+  `focus`, `layers`) — no `raw`/`graph`. No `GraphView.tsx` or
+  `graphLayout.ts` exists anywhere on disk. `d3-force` is not in
+  `frontend/package.json`. **H4 and H5 are done, and the Raw-view decision
+  was already made and executed (deleted), not left pending.** The Desktop
+  session's summary was stale — most likely answering from a point in its
+  own context before H4/H5 actually wrapped.
+- No file named anything like `codebase-atlas-proposal.md` exists anywhere
+  in this repo (tracked or untracked), and no occurrence of "nine-phase",
+  "comprehension card", "knowledge-coloured", or "adaptive scheduler"
+  exists anywhere in the tree. **The "phases 3–9" roadmap is not a repo
+  artifact and cannot be verified as agreed scope.** Treat it as, at most,
+  something discussed conversationally in a prior session and never
+  committed to writing or code — not a backlog. See "Scope reconciliation"
+  below for what this means for what comes next.
+
+This file's own account of A–H (below) was independently verified against
+the live repo (file existence, `git log`, and both test suites) and holds
+up. The correction above applies to claims made *outside* this file, in
+later verbal summaries — flagging it here so a future session doesn't
+re-import that confusion.
 
 ## Read this first — three things that will bite you if you skip them
 
-1. **This entire feature (Phases A through H) is UNCOMMITTED.** `git log`
-   on this repo shows the last real commit is `e12e7c8` ("Add content
-   library..."), which predates the codebase agent entirely. Every file
-   below is either modified-uncommitted or untracked-new — `git status
-   --short` at the time this doc was written showed **79 changed/new
-   paths**. There is no safety net. Do not run `git checkout .`, `git
-   reset --hard`, `git clean`, or anything destructive, ever, without
-   explicit confirmation — it would delete weeks of work with no recovery
-   path. If you get the chance, recommend the user commit this work soon.
+1. **This entire feature (Phases A through H) is now COMMITTED.** It went
+   in as a single commit, `78d778d` ("Add codebase repository analysis
+   workflow"), on top of `e12e7c8` ("Add content library..."). At the time
+   the previous version of this doc was written, it was 79
+   changed/untracked paths with no safety net — that is no longer true,
+   this note is kept only so nobody re-warns about a risk that's already
+   closed. Standard git hygiene applies from here (don't force-push,
+   don't `reset --hard` without checking `git status` first), but there is
+   no longer an uncommitted-weeks-of-work risk specific to this feature.
 2. **Two dev servers may already be running**: backend on `:8000`
    (`uvicorn app.main:app --reload`, started from `backend/`), frontend on
    `:5173` (`npm run dev` from `frontend/`). Check with
@@ -801,45 +836,233 @@ remote (use `source_root` to scope a subdirectory instead).
   center well outside content bounds) if a genuinely circular arc look is
   wanted somewhere else.
 
-## What's NOT done — next steps
+## Scope reconciliation — resolving the "phases 3–9" question
 
-**There is no Phase I brief.** Phase H (H1 through H5) is complete, fully
-tested, and fully browser-verified as of this document. The user has not
-yet defined what comes next. **If you are a fresh session reading this:
-do not invent a Phase I. Summarize this document back to the user briefly
-to confirm you've absorbed it, then wait for their actual next
-instruction.**
+Per the note at the top: a "phases 3–9" roadmap (subsystem clustering,
+module-library integration, comprehension cards, flow tracing, a
+knowledge-coloured map, drift detection, an adaptive scheduler) was
+described verbally in a separate session as pending future work, allegedly
+sourced from an original proposal document. That document does not exist
+anywhere in this repo, tracked or untracked, and none of those terms
+appear anywhere in the codebase or docs. This handoff's own, independently
+verified "Explicitly OUT of scope" list (Phase H section, above) states
+plainly: *"LLM summaries, review cards, 3D visualization, drift detection
+— per the original A–D brief and never revisited."*
 
-Carried-forward, never-fully-closed items from earlier phases (still true):
+**Verdict: the "phases 3–9" roadmap is not verified agreed scope.** It may
+reflect genuine long-term product thinking from a conversation that was
+never written down anywhere durable, but nothing in the repo backs it, and
+one item on it (drift detection) directly contradicts this file's own
+explicit scope boundary. Don't treat it as a backlog. If the user wants it
+back in scope, that needs to be a fresh, explicit decision — not something
+to resume by default because a prior session mentioned it.
+
+**What this means concretely: the feature, as actually built, is "reading
+list + architecture map, done."** That reframes what a real Phase I looks
+like — see the three options below.
+
+Two smaller items from that same verbal account were checked and are
+already resolved, not open:
+- *"`validate_ranking.py`'s scorer-filtering needs a second hardening
+  pass"* — checked: `get_tool_ranking()` already filters explicitly by
+  `CodeFileRank.scorer == scorer`, with an inline comment stating exactly
+  why (the same G1 scoping bug, applied here). **Already correct, nothing
+  to do.**
+- *"`llm_calls` accounting, security/RBAC, section 6 rewrite, homepage/
+  navigation"* — none of these touch `backend/app/services/codebase/` or
+  its API/frontend surface. They belong to the rest of ATHENA OS (chat/
+  interview/presentation agents use real LLM calls; the codebase agent's
+  own non-negotiable #5 is zero LLM calls, ever). **Not this feature's
+  backlog — track separately if real, don't carry them here.**
+
+**2026-08-08 update: the config-discovery bug class is now fixed.** All
+three functions (`find_marker_candidate_roots`, `find_ts_configs`,
+`find_package_json_workspace_dirs`) gained a `config_search_root`
+parameter, same name/shape as `entry_detection.detect_entry_points`'.
+Confirmed harder than entry detection's fix, exactly as flagged: these
+functions' return values are used directly as paths *relative to
+repo_root*, not matched against an absolute CodeFile path, so a marker/
+config found above `source_root` is discarded (not reported at a wrong
+coordinate) unless it's a real descendant of `repo_root`. Stated honestly
+in each function's own docstring: for `find_marker_candidate_roots` and
+`find_ts_configs`, this closes a correctness gap without changing any
+observed candidate set on any repo registered so far (a match outside
+`repo_root`'s subtree is always invalid regardless). `find_package_json_
+workspace_dirs` is the one with an actually observable difference — a
+root `package.json` above `source_root` declaring a workspace glob that
+resolves *inside* `source_root` is now found and correctly flags
+`cross_root_kind="workspace_boundary"`, proven end-to-end in
+`tests/test_ingest.py::TestIngestConfigSearchRootAboveSourceRoot`. Wired
+into `ingest.py`'s three call sites with `config_search_root=Path(repo.local_path)`,
+same value ranking.py already passes to entry_detection.
+
+One item from that account is still genuinely open, not resolved:
+- *A second structural test-case report for a "Repo 2"
+  (`AFDE_Jan26_Anshuman_Pal_LMS`).* No such report artifact was found
+  anywhere in `docs/` or `backend/scripts/`. If it was ever produced, it
+  wasn't saved to the repo — treat as not done.
+
+## What's NOT done — next phase options (pick one, none chosen yet)
+
+**There is no Phase I brief and none is being chosen in this pass.** Per
+the scope reconciliation above, here are three real candidates, each
+grounded in what's actually true about the repo right now. A fresh session
+should present these and wait for a pick — do not default to the one that
+sounds most interesting.
+
+**Option 1 — Ship phases A–H as a finished, exportable product.**
+Consistent with the scope reconciliation's finding that "reading list +
+architecture map" is the actually-agreed scope. Candidates: multi-repo
+comparison (today the tool is strictly one-repo-at-a-time), export (PDF/
+Mermaid/CSV — every artifact currently lives only in the browser),
+persistence of user notes/bookmarks across a re-ingest (a new SHA
+currently loses them), a UI surface for the weight/damping/edge-kind
+config that today only lives in `backend/config/*.yaml`.
+
+**Option 2 — Subsystem clustering, as a direct response to the F7 ESLint
+failure.** The diagnosis in `docs/external-validation-eslint.md`'s Round 2
+section is that import-graph centrality and a maintainer's architecture
+doc are answering *different questions* (load-bearing-ness vs. conceptual
+grouping) — a subsystem-clustering view is structurally closer to what the
+doc describes than a file ranking is. This is the one item from the
+verbal "phases 3–9" account that has real, specific, checkable support in
+this repo (the F7 diagnosis itself). It would need: a clustering algorithm
+(deterministic clustering over the existing import graph is achievable
+with zero new dependencies — actual technique TBD, don't assume HDBSCAN/
+embeddings without discussing the "zero LLM calls" and "pure-Python
+preferred" constraints first, since embedding-based labelling pulls in
+exactly the kind of heavy/LLM dependency this feature has avoided
+throughout), a persisted subsystem table, a UI tab, and a re-run of the
+ESLint validation against the subsystem output specifically (report the
+number honestly either way — clearing 12/20 is a real finding, missing it
+is also a real finding about the limits of the whole approach).
+
+**Option 3 — Close small technical debt before adding anything new.**
+Per the scope reconciliation above, this list is now much shorter than a
+prior verbal account claimed (the `validate_ranking.py` item turned out to
+already be fixed). What's actually left: verify correctness (not just
+existence) of the three root-discovery functions named above, decide
+whether a second structural test-case repo is worth producing, and the two
+carried-forward items below (F7 methodology, `API.md`).
+
+Carried-forward, never-fully-closed items from earlier phases (still true,
+independent of which option above is picked):
 
 1. **The answer-key validation protocol** (F7's own machinery) is
    reusable for any future repo, not just the ESLint one already run —
    `backend/scripts/validate_ranking.py <repo_id> <answer_key_path>`,
    reporting Overlap@20/@10, Spearman, and a go/no-go verdict (≥12/20).
-   The ESLint run's own answer key and result docs live in
-   `docs/external-validation-eslint*.md`. The project's own ranking
-   FAILED this threshold on ESLint (2/20, 3/20, 2/20 across the three
-   scorers) — this was diagnosed (not fixed) and written up honestly;
-   whether/how to actually improve ranking quality is still open.
-2. **`docs/API.md` doesn't document `/api/repos/*`** — every other API
-   surface in this app is documented there; this one still isn't, despite
-   having grown substantially since the original handoff noted the gap.
-3. **This entire feature is uncommitted** (see the critical warning at
-   the top). Committing it is a decision for the user, not something to
-   do unprompted, but it is increasingly overdue given the size of the
-   working-tree diff (79 paths) and the total absence of a safety net.
+   The project's own ranking FAILED this threshold on ESLint — final
+   Round-2 numbers, verified against `docs/external-validation-eslint.md`
+   directly: `legacy` 2/20, `weighted_pagerank` 3/20, `rrf` 2/20, all
+   NO-GO. This was diagnosed (not fixed) and written up honestly; whether/
+   how to actually improve ranking quality is still open (Option 2 above
+   is the concrete proposal for doing so).
+2. **`docs/API.md` doesn't document `/api/repos/*`.** **Fixed 2026-08-08**
+   — added a full `## Codebase Agent` section covering every endpoint
+   (register, resync, ingest, rank, ranking, graph, neighbors, jobs×3,
+   seed-exclude-paths, and the four `/subsystems` endpoints from Phase
+   I1), matching the terse `### METHOD /path` + short example convention
+   every other section already uses.
+3. **`POST /{repo_id}/rank` (and `/ingest`) didn't catch `RepoBusyError`.**
+   **Fixed 2026-08-08** — both now return a clean 409 instead of an
+   unhandled 500, matching `/subsystems`'s existing handling. Endpoint
+   tests added (`TestRepoBusyErrorHandling` in `test_repos_api.py`)
+   proving both under a real held lock, not just that the except clause
+   compiles.
+4. **The double-uvicorn-without-`--reload` incident (bug #19) recurred a
+   THIRD time**, during Phase I2's browser pass — and this recurrence
+   revealed exactly why the interlock kept missing it: the stray process
+   was a `--reload` worker launched via `multiprocessing.spawn`, whose
+   `CommandLine` does NOT contain the literal string "uvicorn" (only the
+   reloader supervisor's does). A kill command filtering on that string —
+   which is what "kill everything with 'uvicorn' in its command line" had
+   quietly become — leaves the actual worker running and holding the
+   port. Root cause now fully understood; the fix (kill by port-owning
+   PID via `Get-NetTCPConnection -LocalPort 8000 | Select
+   OwningProcess`, never by command-line text matching) is still a
+   procedural discipline change, not yet a code-level interlock. Worth
+   promoting to a real interlock (a PID lockfile checked at dev-server
+   startup) if it recurs a fourth time.
+   - **Recurred a FOURTH time, 2026-08-08, during Phase I6's browser
+     verification** — and this time even killing the port-owning PID
+     (`Get-NetTCPConnection`'s `OwningProcess`) wasn't enough: that PID was
+     the reload SUPERVISOR (already exited by the time it was killed), not
+     the actual worker holding the socket. `Get-CimInstance Win32_Process`
+     found the real worker as a `multiprocessing.spawn` child whose
+     `ParentProcessId` pointed at the (by then dead) supervisor PID —
+     `netstat`/`Get-NetTCPConnection` kept reporting the dead supervisor's
+     PID as the port owner well after it exited, which is itself worth
+     knowing: **don't trust `OwningProcess` at face value if `Get-Process`
+     on that PID comes back empty — find the actual live process via
+     `Get-CimInstance Win32_Process` filtered by command line
+     (`*multiprocessing*` / `*spawn_main*`) and kill that one.** Fourth
+     occurrence is a real signal this should become a code-level interlock
+     (a PID lockfile checked at dev-server startup) rather than a
+     procedural discipline restated a fifth time.
+5. **Phase I6 (2026-08-08): HDBSCAN added as a third, on-demand clustering
+   algorithm** — `backend/app/services/codebase/embeddings.py` (new) builds
+   one text blob per file from `CodeSymbol` rows (path + each symbol's
+   kind/name/signature/docstring) and embeds it via FastEmbed
+   (`BAAI/bge-small-en-v1.5`, the app's existing local/ONNX model, already
+   used by the roadmap module-search feature — no new dependency, no
+   network call, no hosted-API consent gate needed since nothing leaves the
+   machine). `subsystems.py` gained `cluster_hdbscan`/
+   `compute_subsystems_hdbscan` (new `hdbscan`+`scikit-learn` deps —
+   installed cleanly via prebuilt wheels, no compilation, breaking this
+   project's long-standing aversion to compiled deps in this one case
+   because the wheels made it a non-issue). New endpoint `POST
+   /{repo_id}/subsystems/hdbscan`, deliberately separate from `POST
+   /subsystems` (real CPU embedding work, not near-instant graph math).
+   Schema: `CodeFile.subsystem_hdbscan_id`, `Repo.subsystem_hdbscan_agreement`
+   (vs. modularity, not vs. Louvain — see the column's own docstring for
+   why it doesn't reuse the existing agreement field), `Repo.
+   subsystem_hdbscan_cycle_coherence`. Frontend: `SubsystemsView`/
+   `RepoDetail.tsx` gained a third algorithm-toggle option; `filters.ts`'s
+   subsystem filter was generalized from hardcoded `subsystem_modularity_id`
+   to algorithm-aware (`FilterState.subsystemAlgorithm` + `subsystemIdOf`)
+   — this closes a real, pre-existing gap: selecting a Louvain cluster's
+   "view files" button had been silently filtering against the wrong
+   column ever since Louvain was added in I1, invisible until a second
+   algorithm with actually-different ids existed to expose it. 23 new/
+   updated backend tests (`test_embeddings.py`, `test_subsystems.py`,
+   `test_repos_api.py`), 5 new frontend tests, browser-verified end to end
+   on repo 1 (173 files) via Playwright/system Chrome.
+   - **Round 4 validation (docs/external-validation-eslint.md) result:
+     HDBSCAN does NOT currently improve on modularity/Louvain's baseline.**
+     On repo 3 (`eslint/eslint`, 398 files), HDBSCAN's largest cluster
+     absorbed 324/398 files (81% of the repo) — nearly all of `lib/rules/`'s
+     ~294 structurally-near-identical individual lint rule files plus
+     scattered others — versus modularity's largest cluster at 56/398
+     (14%). The hypothesis this round was built to test (embeddings could
+     unite `cli-engine`'s import-blind formatter siblings, where the import
+     graph structurally can't) did not hold: `cli-engine` recall was
+     *lower* under HDBSCAN (16.7%) than modularity (33.3%), not higher.
+     Written up in full, prediction-then-measured, in external-validation-
+     eslint.md's Round 4 — treat HDBSCAN as experimental and likely
+     ill-suited to repos with large populations of highly-repetitive files
+     (many individual plugin/rule implementations sharing boilerplate)
+     until one of that section's follow-up ideas (richer embedding input,
+     larger `min_cluster_size`, or directory-scoped runs) is tried. The
+     feature itself works correctly end-to-end; the clustering QUALITY
+     question this whole effort was meant to answer came back negative on
+     the one repo with real ground truth to check it against.
 
 ## How to resume, concretely
 
-1. Confirm dev server state (don't blindly start new ones — see critical
-   warning #2).
-2. Confirm current test counts match this document (486 backend, 56
-   frontend) — if they don't, something changed outside this document's
-   knowledge and you should investigate before trusting anything else
-   here.
+1. Confirm dev server state — check `netstat -ano | findstr :8000` /
+   `:5173` before starting new ones (both were confirmed NOT running as of
+   this reconciliation pass).
+2. Confirm current test counts match this document (559 backend, 67
+   frontend, as of Phase I6, 2026-08-08 — both were re-run and confirmed
+   exactly matching then). If they don't match for you, something changed
+   outside this document's knowledge — investigate before trusting
+   anything else here.
 3. Read this document's "Standing process discipline" section again
    before writing any code — it's the distilled cost of eleven real bugs
    and is cheaper to re-read than to re-learn.
-4. Wait for the user's actual next request. If they say "go ahead" without
-   further specifics, ask what Phase I should cover — there's no brief to
-   default to.
+4. **Present the three Phase I options above to the user and wait for a
+   pick.** Do not resume the "phases 3–9" roadmap by default — it isn't
+   verified scope (see Scope reconciliation). If the user says "go ahead"
+   without picking, ask explicitly rather than defaulting to Option 2 just
+   because it sounds like the most novel capability.

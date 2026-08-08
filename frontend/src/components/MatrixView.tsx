@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { DirEdgeT, DirNodeT } from "../lib/api";
+import { CLUSTER_PURITY_WEAK_THRESHOLD, clusterColor, KIND_COLOR } from "./ArchitectureMap";
 import { buildWeightLookup, findSymmetricPairs, weightBetween } from "../lib/matrixLayout";
 
 // Above this printed weight, the cell shows its number directly -- the
@@ -7,12 +8,20 @@ import { buildWeightLookup, findSymmetricPairs, weightBetween } from "../lib/mat
 // the reference mockup's own threshold.
 const PRINT_THRESHOLD = 8;
 
+function headerDotColor(n: DirNodeT, colorMode: "kind" | "cluster"): string {
+  return colorMode === "kind" ? KIND_COLOR[n.kind] : clusterColor(n.cluster_id);
+}
+
 export function MatrixView({
-  nodes, edges, onSelectPair,
+  nodes, edges, onSelectPair, colorMode, onColorModeChange,
 }: {
   nodes: DirNodeT[];
   edges: DirEdgeT[];
   onSelectPair: (a: string, b: string) => void;
+  // Phase I2: shared with ArchitectureMap via RepoDetail -- switching
+  // tabs keeps the same coloring active.
+  colorMode: "kind" | "cluster";
+  onColorModeChange: (mode: "kind" | "cluster") => void;
 }) {
   const [hoverRow, setHoverRow] = useState<string | null>(null);
   const lookup = useMemo(() => buildWeightLookup(edges), [edges]);
@@ -29,9 +38,25 @@ export function MatrixView({
 
   return (
     <div className="space-y-3">
-      <p className="font-mono text-[10px] text-fog tracking-wide">
-        ROWS DEPEND ON COLUMNS · OUTLINED CELLS ARE CYCLES · {symmetricPairs.length} FOUND
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="font-mono text-[10px] text-fog tracking-wide">
+          ROWS DEPEND ON COLUMNS · OUTLINED CELLS ARE CYCLES · {symmetricPairs.length} FOUND
+        </p>
+        <div className="inline-flex rounded border border-line p-0.5 gap-0.5">
+          {(["kind", "cluster"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => onColorModeChange(m)}
+              className={
+                "font-mono text-[9px] uppercase tracking-widest rounded px-2 py-1 transition-colors " +
+                (colorMode === m ? "bg-accent/15 text-accent" : "text-fog hover:text-snow")
+              }
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="card overflow-auto" style={{ maxHeight: 620 }}>
         <table className="border-collapse font-mono text-[10px]">
           <thead>
@@ -44,7 +69,15 @@ export function MatrixView({
                   style={{ height: 110 }}
                   title={c.path}
                 >
-                  <div style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }} className="text-left">
+                  <div style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }} className="text-left flex items-center gap-1">
+                    <span
+                      className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+                      style={{
+                        background: headerDotColor(c, colorMode),
+                        outline: colorMode === "cluster" && c.cluster_purity !== null && c.cluster_purity < CLUSTER_PURITY_WEAK_THRESHOLD
+                          ? "1px dashed currentColor" : undefined,
+                      }}
+                    />
                     {c.short_label}
                   </div>
                 </th>
@@ -66,7 +99,17 @@ export function MatrixView({
                   }
                   title={r.path}
                 >
-                  {r.short_label}
+                  <span className="inline-flex items-center gap-1 justify-end w-full">
+                    {r.short_label}
+                    <span
+                      className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+                      style={{
+                        background: headerDotColor(r, colorMode),
+                        outline: colorMode === "cluster" && r.cluster_purity !== null && r.cluster_purity < CLUSTER_PURITY_WEAK_THRESHOLD
+                          ? "1px dashed currentColor" : undefined,
+                      }}
+                    />
+                  </span>
                 </th>
                 {nodes.map((c) => {
                   if (r.id === c.id) {

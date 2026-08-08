@@ -312,6 +312,16 @@ export interface RenderNode {
   layer: number;
   order: number; // for stable tie-breaking only -- actual vertical position is recomputed by the renderer
   isolated: boolean;
+  // Phase I2: for a cycle group, taken from whichever member has the most
+  // files -- an approximation, same shape as `kind`'s priority-merge one
+  // level up, not a real recomputed purity across the merged group's
+  // combined file set (this component doesn't have per-file data, only
+  // each member DIRECTORY's own already-aggregated cluster_id/purity).
+  // The Matrix tab stays uncondensed specifically so this approximation
+  // always has an exact answer one click away.
+  clusterId: number | null;
+  clusterPurity: number | null;
+  clusterUnclusteredCount: number;
 }
 
 export interface RenderEdge {
@@ -355,6 +365,9 @@ export function buildRenderNodes(
     const kind = isCycle
       ? KIND_MERGE_PRIORITY.find((k) => members.some((m) => m.kind === k)) ?? "source"
       : members[0].kind;
+    const dominantMember = isCycle
+      ? members.reduce((best, m) => (m.file_count > best.file_count ? m : best), members[0])
+      : members[0];
 
     renderNodes.push({
       id: renderId,
@@ -368,6 +381,9 @@ export function buildRenderNodes(
       layer: layout.layerOf.get(memberIds[0]) ?? 0,
       order: Math.min(...memberIds.map((id) => layout.orderOf.get(id) ?? 0)),
       isolated: memberIds.every((id) => isolatedIds.has(id)),
+      clusterId: dominantMember.cluster_id,
+      clusterPurity: dominantMember.cluster_purity,
+      clusterUnclusteredCount: members.reduce((sum, m) => sum + m.cluster_unclustered_count, 0),
     });
   }
 

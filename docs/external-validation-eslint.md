@@ -496,3 +496,309 @@ wasn't tried.
   artifact, and representative of a category (plugin-style dynamic
   loading in extensible tools) rather than an edge case specific to
   ESLint.
+
+## Round 3: does subsystem clustering (Phase I) do better than file ranking did?
+
+Phase I built community detection (modularity + Louvain) over the same
+resolved import graph, directly motivated by this file's own §"Why: what
+the tool measures vs. what the doc describes" — the hypothesis that
+import-centrality ranking and the doc's architectural narrative are
+answering *different questions*, and that clustering (which groups files,
+rather than ranking them) is structurally closer to what the doc
+describes. This round tests that hypothesis against the same ground
+truth, not a new one.
+
+### Prediction, written down before anything was computed
+
+The existing 30-file answer key has no per-component grouping preserved,
+so it was regrouped by directory prefix (the grouping already implicit in
+each path — `api.js`/`cli.js` are single-file "components" excluded from
+recall; `cli-engine` 6 files, `linter` 20 files — including three
+`source-code-*.js` files that live under `linter/`, not a separate
+directory, because ESLint's real `SourceCode` module has since moved to
+`languages/js/source-code/`, the same doc/code drift Round 2 already
+found, not a new one — and `rule-tester` 2 files):
+
+- `rule-tester` (2 files, a barrel pair): recall **≥ 0.9**.
+- `linter` (20 files): recall **0.45–0.65** — `code-path-analysis/` (7 of
+  the 20) is a genuinely dense internal clique expected to cluster
+  tightly; the other 13 peripheral files expected to be less consistent.
+- `cli-engine` (6 files): recall **≤ 0.4** — the four formatters are
+  independent siblings implementing a common interface, expected to share
+  little code with each other and scatter.
+- **Cluster homogeneity for labelled members, weighted: 0.4–0.6, not
+  higher** — reasoning: `cli.js → cli-engine → linter → rule-tester` is a
+  real dependency chain, not four independent subsystems, so at least one
+  large cluster was expected to mix files from several named components,
+  the same "architectural layering merges under modularity clustering"
+  shape already found on this project's own `core⇄db`/`agents⇄services`
+  pairs.
+
+### A methodology bug caught before trusting the first real run
+
+The first run of the recall computation let `None` (unclustered) compete
+as a candidate "majority cluster" — `cli-engine`'s raw distribution was
+`{None: 3, cluster 16: 1, cluster 10: 2}`, and picking the single most
+common value made `None` "win" at 3/6, reporting 50% recall. That's
+backwards: three files each independently failing to join *any* cluster
+is absence of evidence that they belong together, not agreement between
+them, and crediting it inflates recall in exactly the direction that
+would make the finding look better than it is. Fixed by excluding `None`
+from majority-cluster candidacy on both metrics (recall and homogeneity);
+`cli-engine`'s real recall is 2/6 = 33.3%, not 50%. Reported here rather
+than silently corrected, since a wrong number that happens to match a
+prediction is not confirmation.
+
+### Results, modularity (the leading algorithm; Louvain cross-check below)
+
+| Component | Members | Recall | Majority cluster |
+|---|---|---|---|
+| `api` | 1 | n/a (single file) | — |
+| `cli` | 1 | n/a (single file) | — |
+| `cli-engine` | 6 | **33.3%** (2/6) | cluster 10 |
+| `linter` | 20 | **65.0%** (13/20) | cluster 10 |
+| `rule-tester` | 2 | **100%** (2/2) | cluster 10 |
+
+`cli-engine`'s scatter is precisely the formatters, confirmed at the file
+level: `html.js`/`json.js`/`json-with-metadata.js` never joined any
+cluster; `stylish.js` landed alone in a cluster of one. The two
+`cli-engine` files that DID join the main cluster are `hash.js` and
+`lint-result-cache.js` — cache/hashing plumbing shared with the rest of
+the pipeline, not formatter logic. The prediction that formatters
+specifically would scatter, not `cli-engine` generally, held at the file
+level, not just in aggregate.
+
+`linter`'s 65.0% is carried by a real structural finding: `code-path-analysis/`'s
+7 files (plus one shared utility, `lib/shared/assert.js`) form their OWN
+separate cluster (cluster 13), 100% pure — not merged into the main
+cluster at all. The predicted "genuinely dense internal clique" is
+exactly what the algorithm found, as its own distinct community. The
+remaining 13 `linter` files split 13-into-cluster-10 vs. these 7 held
+apart, which is why the component's overall recall (65.0%, majority in
+cluster 10) undercounts how cleanly `code-path-analysis` itself separated
+out.
+
+**Cluster homogeneity for labelled members, real clusters only** (3
+`cli-engine` files that never clustered at all are reported separately,
+not folded into this number, for the same reason `None` was excluded from
+recall):
+
+| Cluster | Labelled members | Dominant component | Homogeneity |
+|---|---|---|---|
+| 10 (56 files total) | 19 | `linter` | 68.4% (13/19) — mixes `api`(1), `cli`(1), `cli-engine`(2), `linter`(13), `rule-tester`(2) |
+| 13 | 7 | `linter` | 100% — pure `code-path-analysis` |
+| 16 | 1 | `cli-engine` | 100% (trivial, single file) |
+| **Overall** | **27** | | **77.8%** (21/27) |
+
+**Correction made after this table was first drafted: 77.8% is not
+evidence that "one cluster = one subsystem" is a safe reading, and this
+document should not be cited as saying it is.** The 77.8% is a weighted
+average, and it is dominated by cluster 13 (7 files, 100% pure
+`code-path-analysis`) pulling the number up. Cluster 10 — the *largest*
+cluster, 19 of the 27 labelled files, 70% of everything this table
+covers — is only 68.4% homogeneous, and the files it mixes are not a
+near-miss: `api`, `cli`, `cli-engine`, `linter`, and `rule-tester` all
+present in one cluster is five of the doc's named parts in one bucket. If
+this were surfaced in the Architecture map as a single color, that color
+would visually claim those five components are one thing, which is
+exactly the claim the data contradicts. The corrected framing, and the
+one now used in the app itself (`RepoDetail.tsx`'s glossary and the
+Dependency Clusters tab): a cluster is a measured coupling group — "these
+files are entangled" — not a confirmed architectural subsystem. Where the
+UI colors or labels by cluster, it says "dependency cluster," never
+"subsystem."
+
+### The prediction, checked against the numbers
+
+Three of four predictions landed close: `cli-engine` 33.3% (predicted
+≤0.4), `rule-tester` 100% (predicted ≥0.9), and `linter`'s 65.0% sits at
+the very top of the predicted 0.45–0.65 band. **The homogeneity
+prediction (0.4–0.6) was wrong — the real number is 77.8%, clearly
+higher.** The directional reasoning behind it was half right: cluster 10
+does mix all five named components together, exactly as argued from the
+real `cli → cli-engine → linter → rule-tester` dependency chain. What the
+prediction missed is that `linter` alone is 13 of that cluster's 19
+labelled files, so even a "mixed" cluster stays majority-linter, and
+`code-path-analysis` splitting off as its own 100%-pure cluster pulls the
+weighted average up further. The mixing is real; the codebase's real
+architecture is more coherent than the "everything blurs into one thing"
+framing predicted. A prediction landing 3-for-4 with the miss explained
+by a mechanism (a large single component dominating a shared cluster) is
+a stronger outcome than either an unbroken hit or an unexplained miss
+would have been.
+
+### Louvain cross-check
+
+Same computation against Louvain's independent clustering: `cli-engine`
+33.3% (identical), `linter` 50.0% (10/20, vs. modularity's 65.0% — Louvain
+splits the same 20 files 10/10 instead of 13/7), `rule-tester` 100%
+(identical), overall homogeneity 77.8% (identical number, different
+composition: 16+10+1 vs. 19+7+1). The two algorithms agree on this repo
+at 94.1% overall (`Repo.subsystem_algorithm_agreement`) — lower than
+repo 1's 100%, the first real case where the two clusterings measurably
+diverge, though not on the numbers that matter for this validation.
+
+### What this means for the F7 hypothesis
+
+Subsystem clustering does not "pass" the file-ranking's original
+threshold in a directly comparable sense — there is no single Overlap@20-
+style number here, by design, since recall/homogeneity measure a
+different claim (does the algorithm group files the way the doc groups
+them) than Overlap@20 measured (does the algorithm rank files the way the
+doc implies importance). But on the terms this round set for itself:
+`rule-tester` recovers essentially perfectly, `code-path-analysis`
+recovers as its own clean community without being told the boundary
+exists, `cli-engine`'s formatters honestly fail to cluster (correctly —
+they don't share code, so an algorithm that clustered them anyway would
+be the bug), and the one large mixed cluster reflects a real dependency
+chain in the code, not algorithmic noise. This is meaningfully closer to
+"the tool recovers real coupling structure in the doc's territory" than
+file ranking's 2–3/20 ever was — but it is NOT evidence that clustering
+identifies confirmed subsystems, and shouldn't be cited as such: the same
+large cluster that shows the tool found something real also shows it
+merged five separately-named parts of the doc together (`api`, `cli`,
+`cli-engine`, `linter`, `rule-tester` — not four, corrected above) into
+one bucket. `cli-engine` at 33.3% recall and a five-component mixed
+cluster are real, stated limits, not smoothed over. The honest framing
+this round earns is "detects dependency clusters worth looking at," not
+"identifies subsystems" — which is also now the language used in the
+product itself (see the correction above).
+
+## Round 4: does HDBSCAN over embeddings do better than the import graph?
+
+Motivated directly by this file's own Round 3 correction: modularity/
+Louvain's biggest weakness on this repo is the one large cluster that mixes
+five of the doc's named components, driven by a real dependency chain
+(`cli -> cli-engine -> linter -> rule-tester`) the import graph can't help
+but see as one connected mass. HDBSCAN clusters files by what their code's
+symbol signatures and docstrings say (FastEmbed, `BAAI/bge-small-en-v1.5`,
+entirely local), a signal that doesn't see import edges at all -- the
+hypothesis was that this could split apart what the import graph is
+structurally forced to merge, and might also unite files that share
+vocabulary despite having zero import edges (`cli-engine`'s four
+formatters, siblings implementing a common interface, never import each
+other).
+
+### Prediction, written down before compute_subsystems_hdbscan was run
+
+- `cli-engine` (6 files): recall **higher** than modularity's 33.3%,
+  predicted 50-80% -- the four formatters don't import each other but
+  plausibly share enough vocabulary (formatter function signatures,
+  "results", "messages") for embeddings to unite them where the import
+  graph structurally cannot.
+- `linter` (20 files): recall **lower** than modularity's 65.0%, predicted
+  20-45% -- this component spans too many distinct topics (timing, file
+  I/O, source-code representation, fixing, code-path-analysis) to share one
+  embedding neighborhood, even though they all import each other.
+- `rule-tester` (2 files): no strong directional prediction -- a 2-member
+  component's recall under this formula is either 50% or 100%; leaned
+  toward 50% since a thin runner entry point and its implementation likely
+  read differently.
+- Overall homogeneity: **lower** than modularity's published 77.8%,
+  predicted 40-65% -- no reason to expect embeddings to reproduce the same
+  cluster shape modularity found, since embeddings can't see dependency
+  chains.
+- Unclustered proportion: **higher** than modularity's 10/398 -- a
+  semantically heterogeneous corpus (294 individual, largely distinct lint
+  rule files) gives HDBSCAN's density estimate a lot to call noise.
+
+### What actually happened
+
+Re-running modularity/Louvain's own recall and homogeneity computation live
+against the repo's *current* state surfaced a small, unrelated drift from
+this document's originally published modularity numbers (homogeneity
+21/25 = 84.0% now vs. 21/27 = 77.8% as published above) -- `cli-engine`'s
+`stylish.js` no longer sits alone in a true singleton cluster the way it
+did when Round 3 was written, most likely because the repo has been
+re-ingested/re-ranked at least once since then. This does not change
+anything about Round 3's conclusions; it means Round 4's fair comparison
+uses the numbers **recomputed just now, on the same live state, for all
+three algorithms side by side** -- not the number as originally published.
+
+| Metric | Modularity (now) | Louvain (now) | HDBSCAN |
+|---|---:|---:|---:|
+| `cli-engine` recall | 33.3% (2/6) | 33.3% (2/6) | **16.7%** (1/6) |
+| `linter` recall | 65.0% (13/20) | 50.0% (10/20) | 55.0% (11/20) |
+| `rule-tester` recall | 100% (2/2) | 100% (2/2) | 100% (2/2) |
+| Overall homogeneity | 84.0% (21/25) | 84.0% (21/25) | **78.6%** (11/14) |
+| Cluster count | 9 | 9 | **3** |
+| Unclustered files | 10/398 (2.5%) | 10/398 (2.5%) | **57/398** (14.3%) |
+
+The headline finding isn't in this table's percentages -- it's in the
+`cluster count` row. HDBSCAN's single largest cluster contains **324 of
+398 files (81% of the entire repo)**: 291 of the ~294 files under
+`lib/rules/` (each an individual, largely-independent lint rule
+implementation) plus 33 more files scattered across nearly every other
+directory (`linter`, `config`, `types`, `eslint`, `languages`,
+`rule-tester`, `cli-engine`). Individual ESLint rule files share a highly
+formulaic structure -- a `meta` object, a `create(context)` function, JSDoc
+conventions repeated near-verbatim across hundreds of files -- and that
+structural/boilerplate similarity dominates the embedding space more
+strongly than each rule's actual topical content does, at least with this
+configuration (whole-symbol-signature text, default `min_cluster_size=3`,
+`bge-small-en-v1.5`). The two clusters that DID split off cleanly
+(`lib/languages/js/source-code/token-store`, 13 files; a 4-file `lib/shared`
+group) show the mechanism can work -- it just didn't work on the biggest,
+most repetitive part of this particular repo, and `code-path-analysis`
+(the one clean split modularity/Louvain both found) did not survive as its
+own group under embeddings at all -- most of its files ended up unclustered
+rather than merged into the mega-cluster or grouped together.
+
+### The prediction, checked against the numbers
+
+Three of five predictions missed, and not in the hoped-for direction:
+
+- **`cli-engine` went the wrong way.** Predicted higher than modularity
+  (50-80%); actual is *lower* (16.7% vs. 33.3%) -- the formatter-vocabulary
+  hypothesis this round was built around did not hold. The four formatters
+  did not cluster together under embeddings any more than they did under
+  the import graph.
+- **`linter` landed above the predicted band** -- 55.0% exceeds the
+  predicted 20-45% ceiling, closer to Louvain's own 50.0% than to the low
+  end predicted. Not a sharp miss, but not the predicted direction either.
+- **`rule-tester`** hit the upper end of the acknowledged 50%/100% range
+  (100%), matching both graph algorithms.
+- **Overall homogeneity landed above the predicted band** (78.6%, vs. a
+  predicted 40-65% ceiling) -- closer to modularity/Louvain's 84.0% than
+  predicted. This number alone would read as "close to the baseline," but
+  it is computed over only 14 labelled files (most of `cli-engine` and half
+  of `linter` fell into "never clustered" and are excluded from it
+  entirely, same exclusion rule as everywhere else in this document) -- a
+  homogeneity number computed over a shrinking denominator, from an
+  algorithm that found only 3 clusters total, is not comparable in spirit
+  to modularity's even where the percentage happens to land close.
+- **Unclustered proportion was directionally right** (57/398 vs. 10/398) --
+  the one prediction that landed cleanly, though the real driver turned out
+  to be `code-path-analysis` scattering into noise, not primarily the
+  heterogeneous `lib/rules/` corpus predicted as the mechanism (most of
+  `lib/rules/` in fact clustered -- into the mega-cluster).
+
+### What this means for the "improve accuracy" goal
+
+**On this validation repo, HDBSCAN over FastEmbed embeddings of symbol
+signatures + docstrings does not improve on modularity/Louvain's baseline
+-- on the metric this whole round was designed to test (does clustering
+avoid the "one big mixed cluster" problem Round 3 flagged), it is
+measurably worse.** Modularity's largest cluster covers 56/398 files
+(14%) and is imperfectly mixed; HDBSCAN's largest cluster covers 324/398
+(81%) and is barely more differentiated than "everything that isn't
+`code-path-analysis`-adjacent." The one place this round hoped embeddings
+would show a concrete advantage -- uniting `cli-engine`'s import-blind
+formatter siblings -- didn't happen; if anything HDBSCAN did worse there
+than the graph-based algorithms it was meant to complement.
+
+This is not a reason to remove the feature -- the mechanism is now
+implemented, tested, and produces a real, inspectable result, and it may
+behave differently on a codebase without ESLint's extreme lib/rules/-style
+repetition (hundreds of near-identically-structured files is an unusual
+corpus shape, not typical of most repos this tool has been run against).
+But it is a reason not to claim HDBSCAN detects dependency clusters more
+accurately than the existing algorithms without further work -- candidates
+for a follow-up, none attempted yet: embedding richer content than bare
+signatures+docstrings (e.g. a snippet of each function's body, so two rule
+files that both implement *unrelated* checks stop looking identical),
+tuning `min_cluster_size` upward specifically to break up an
+indiscriminate mega-cluster, or restricting HDBSCAN to a hand-picked subset
+of directories rather than the whole repo when one directory's file count
+and structural homogeneity dominates the corpus the way `lib/rules/` does
+here.

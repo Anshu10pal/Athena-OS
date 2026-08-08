@@ -58,6 +58,49 @@ class TestFindMarkerCandidateRoots:
         candidates = find_marker_candidate_roots(tmp_path)
         assert candidates == {""}
 
+    def test_config_search_root_defaults_to_repo_root_unchanged(self, tmp_path):
+        # Backward compatibility: omitting config_search_root must behave
+        # exactly as before -- this is the same assertion every prior test
+        # in this class already makes, restated explicitly as its own test
+        # so a future change to the default can't silently regress it.
+        _write(tmp_path / "backend" / "requirements.txt")
+        assert find_marker_candidate_roots(tmp_path) == find_marker_candidate_roots(tmp_path, config_search_root=tmp_path)
+
+    def test_marker_above_repo_root_is_found_via_config_search_root(self, tmp_path):
+        # config_search_root/pyproject.toml lives ABOVE repo_root
+        # (config_search_root/backend) -- the exact source_root-scoped
+        # miss confirmed in docs/external-validation-eslint.md's Round 2.
+        _write(tmp_path / "pyproject.toml")
+        repo_root = tmp_path / "backend"
+        repo_root.mkdir()
+        candidates = find_marker_candidate_roots(repo_root, config_search_root=tmp_path)
+        # The marker itself sits OUTSIDE repo_root's own subtree, so it
+        # has no valid "relative to repo_root" representation -- correctly
+        # excluded, not silently mis-mapped to "" or some wrong path.
+        assert candidates == {""}
+
+    def test_marker_above_repo_root_never_produces_a_false_candidate(self, tmp_path):
+        # Same setup, but with a SECOND marker genuinely inside repo_root
+        # -- proves the above-root marker is cleanly ignored rather than
+        # somehow corrupting or duplicating a real, valid candidate.
+        _write(tmp_path / "pyproject.toml")
+        repo_root = tmp_path / "backend"
+        _write(repo_root / "services" / "requirements.txt")
+        candidates = find_marker_candidate_roots(repo_root, config_search_root=tmp_path)
+        assert candidates == {"", "services"}
+
+    def test_config_search_root_widening_matches_repo_root_only_scan_for_in_scope_markers(self, tmp_path):
+        # States plainly, as a test, the module docstring's own honest
+        # claim: for anything actually inside repo_root's subtree,
+        # widening the search changes nothing -- scanning from an
+        # ancestor and filtering down finds the identical set scanning
+        # repo_root directly would.
+        repo_root = tmp_path / "backend"
+        _write(repo_root / "svc" / "Pipfile")
+        widened = find_marker_candidate_roots(repo_root, config_search_root=tmp_path)
+        unwidened = find_marker_candidate_roots(repo_root)
+        assert widened == unwidened == {"", "svc"}
+
 
 class TestFindStructuralCandidateRoots:
     def test_top_level_package_nominates_repo_root(self):
