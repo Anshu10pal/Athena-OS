@@ -2,7 +2,7 @@ import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState } from "
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   api, DirGraphResponseT, GraphResponseT, RankedFileT, RankingResponseT, RepoJobT, RepoT, ScorerT,
-  SubsystemAlgorithmT, SubsystemsResponseT,
+  SubsystemAlgorithmT, SubsystemsResponseT, OverviewT,
   streamJobProgress, timeAgo,
 } from "../lib/api";
 import {
@@ -25,6 +25,7 @@ import { DetailPanel } from "../components/DetailPanel";
 import { FileSearch } from "../components/FileSearch";
 import { MermaidPanel } from "../components/MermaidPanel";
 import { SubsystemsView } from "../components/SubsystemsView";
+import { OverviewView } from "../components/OverviewView";
 import { dirnameOfPath } from "../lib/layeredLayout";
 
 // Phase J1: cytoscape + ELK are heavy and needed only by whoever actually
@@ -57,7 +58,7 @@ type SortKey = keyof Pick<
 // where the full graph exists only behind an explicit opt-in that warns
 // about exactly the failure H5 recorded. Different default, different
 // layout, different question answered -- see components/DependencyGraph.tsx.
-type ViewT = "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph";
+type ViewT = "overview" | "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph";
 
 const COLUMNS: { key: SortKey; label: string; align?: "left" | "center" | "right" }[] = [
   { key: "score", label: "Score" },
@@ -76,6 +77,7 @@ const SCORERS: { value: ScorerT; label: string }[] = [
 ];
 
 const VIEWS: { value: ViewT; label: string }[] = [
+  { value: "overview", label: "Overview" },
   { value: "reading", label: "Reading list" },
   { value: "architecture", label: "Architecture" },
   { value: "depgraph", label: "Dependency Graph" },
@@ -274,7 +276,7 @@ export default function RepoDetail() {
   });
   const [view, setView] = useState<ViewT>(() => {
     const fromUrl = searchParams.get("view");
-    return isValidView(fromUrl) ? fromUrl : "reading";
+    return isValidView(fromUrl) ? fromUrl : "overview";
   });
   const [filters, setFilters] = useState<FilterState>(() => filterStateFromSearchParams(searchParams));
   const [ranking, setRanking] = useState<RankingResponseT | null>(null);
@@ -328,6 +330,7 @@ export default function RepoDetail() {
   // the tab opens (see the effect below), then moved only by double-click.
   const [graphFocusFileId, setGraphFocusFileId] = useState<number | null>(null);
   const [graphFocusDir, setGraphFocusDir] = useState<string | null>(null);
+  const [overview, setOverview] = useState<OverviewT | null>(null);
 
   // DetailPanel shows file details whenever selectedFileId is set,
   // regardless of how stale -- without clearing the other one on every
@@ -349,6 +352,15 @@ export default function RepoDetail() {
     api<RepoT>(`/api/repos/${id}`)
       .then(setRepo)
       .catch((e) => setError(e.message));
+  };
+
+  // Phase K1: scorer-independent (it aggregates ingest/rank output, not any
+  // one scorer's ranking), so it is fetched once per repo load rather than
+  // on every scorer change -- same reasoning as loadSubsystems.
+  const loadOverview = () => {
+    api<OverviewT>(`/api/repos/${id}/overview`)
+      .then(setOverview)
+      .catch(() => setOverview(null));
   };
 
   const loadRanking = (activeScorer: ScorerT) => {
@@ -432,6 +444,7 @@ export default function RepoDetail() {
   useEffect(() => {
     loadRepo();
     loadSubsystems();
+    loadOverview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -630,7 +643,7 @@ export default function RepoDetail() {
         <div className="card p-5">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <h2 className="font-display text-xl font-semibold text-snow">
+              <h2 className="font-display text-2xl font-semibold tracking-tight text-snow/90">
                 {repo.owner ? `${repo.owner}/${repo.name}` : repo.name}
               </h2>
               <div className="flex gap-2 mt-2 flex-wrap font-mono text-[10px]">
@@ -711,7 +724,12 @@ export default function RepoDetail() {
         </div>
       )}
 
-      {files.length > 0 && (
+      {/* Phase K1: the filter bar is hidden on Overview. It filters the FILE
+          set, and nothing on the overview is a filtered file list -- leaving
+          it there would offer controls that visibly do nothing, which is the
+          same class of confusion as the "Showing 0 of 173" counter bug an
+          earlier browser pass caught. */}
+      {files.length > 0 && view !== "overview" && (
         <div className="card p-5 space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-[10px] uppercase tracking-widest text-fog w-24 shrink-0">Path</span>
@@ -795,6 +813,20 @@ export default function RepoDetail() {
           (selectedFileId/selectedDirId), not view-local state. */}
       <div className="flex items-start gap-4">
       <div className="flex-1 min-w-0 space-y-6">
+      {view === "overview" && overview && (
+        <OverviewView
+          data={overview}
+          onSelectFile={(fileId) => {
+            selectFile(fileId);
+            setView("reading");
+          }}
+          onGoToView={(next) => setView(next)}
+        />
+      )}
+      {view === "overview" && !overview && (
+        <p className="text-fog text-sm font-mono">Loading overview…</p>
+      )}
+
       {files.length > 0 && view === "reading" && (
         <div className="card overflow-x-auto">
           <div className="flex items-center justify-between gap-4 flex-wrap px-4 py-3 border-b border-line">
@@ -1010,7 +1042,12 @@ export default function RepoDetail() {
 
       </div>
 
-      {files.length > 0 && id && (
+      {/* Phase K1: hidden on Overview for the same reason as the filter bar
+          -- the overview has no selection concept, so the panel could only
+          ever show its "select something" placeholder, spending a 320px
+          column to say nothing on the one page whose whole purpose is
+          orientation rather than detail. */}
+      {files.length > 0 && id && view !== "overview" && (
         <div className="w-80 shrink-0">
           <DetailPanel
             repoId={id}

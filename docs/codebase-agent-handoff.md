@@ -1,4 +1,4 @@
-# Codebase Agent — Status & Handoff (Phases A–H complete; Phase I done through I6; Phase J1 done)
+# Codebase Agent — Status & Handoff (Phases A–H complete; Phase I done through I6; Phases J1 and K1 done)
 
 **Hand this file to a fresh Claude Code session to resume work with full
 context. It supersedes any memory of the conversation that produced it.**
@@ -1101,6 +1101,59 @@ independent of which option above is picked):
      while cycle-edges-only runs LAST and only on edges (it is a display
      filter, not a scoping one). Both have dedicated tests asserting
      exactly those properties, not just the happy path.
+
+7. **Phase K1 (2026-08-09): repo Overview landing page + a readability
+   pass.** RepoDetail had grown to seven analysis tabs sharing one filter
+   bar, so opening a repo dropped you straight into a 173-row ranked table
+   with no orientation. `GET /repos/{id}/overview` +
+   `components/OverviewView.tsx` add a landing view (now the default) with
+   identity/description, code health, contents, change hotspots, and
+   explicit jump cards to the analysis views. The filter bar AND the
+   detail panel are both hidden on it — neither has anything to act on
+   there.
+   - **The honesty decisions here are the load-bearing part.** The brief
+     asked for "Code Health" and "files producing maximum bugs." Neither
+     exists as data: this system has no defect history, no issue-tracker
+     linkage, no bug-fix commit classification. Rather than invent them:
+     - `health` is **structural** health from five genuinely measured
+       factors (import resolution, documented symbols, test presence,
+       connectedness, cycle freedom), each returned with its own value,
+       weight and plain-language detail, plus a `caveat` string in the
+       payload itself so the UI cannot quietly drop it.
+     - Unmeasurable factors are **excluded from the weighted mean**, not
+       scored as zero — the same exclude-don't-zero rule the clustering
+       metrics use for unclustered files.
+     - "Files producing maximum bugs" became **change hotspots** (churn ×
+       fan-in), labelled a risk proxy. It reports `available: false` with a
+       reason rather than ranking when churn has no variance.
+   - **Two real measurement biases were found by inspecting the numbers
+     rather than trusting them**, and both are now handled:
+     - `commit_count` is identical for all 398 files on the eslint repo
+       (`--depth 1`), so churn carries zero information there. Detected by
+       `churn_is_degenerate()`; hotspots refuses to rank.
+     - `CodeSymbol.docstring` is populated **only by the Python
+       extractor** — 0 of 110 TS/TSX symbols on this repo, 0 of 1031 on
+       heavily-JSDoc'd eslint. Scoring those as "undocumented" would report
+       a gap in THIS TOOL's parser as a deficiency in the analysed code, so
+       documentation is Python-scoped and excluded entirely for a repo with
+       no Python (which raised eslint's honest score from 0.57 to 0.67).
+   - **`Repo.description` is extracted, never generated** (zero LLM calls,
+     as everywhere else here): package.json → pyproject → setup.cfg →
+     README first prose paragraph, at ingest time so no read endpoint
+     touches disk. `(None, None)` is a legitimate result and the UI says
+     "no description found" rather than synthesising one.
+   - **Readability pass**, and a bug found while doing it: `bg-glass` /
+     `bg-glass-2` were already used in **17 places** across
+     ArchitectureMap, MatrixView, FileSearch and RepoDetail and generated
+     NOTHING — `--glass`/`--glass-2` are CSS custom properties that were
+     never registered as Tailwind colors, so every one of those hover
+     states was silently dead. This is the same bug class as `bg-void`
+     (now at four occurrences); registering the colors fixes all 17 at
+     once. Confirmed by the CSS bundle growing 71.1 → 72.8 kB. Separately,
+     `ink` moved off near-absolute black (#070B0A → #0A0F0E) and the
+     foreground off near-pure white (#E9F1EE → #DEE7E4) to cut glare on
+     dense monospace views, kept in lockstep between tailwind.config.js
+     and index.css.
 
 ## How to resume, concretely
 

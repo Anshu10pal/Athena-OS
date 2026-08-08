@@ -126,7 +126,7 @@ export function DetailPanel({
         <h3 className="font-mono text-[10px] uppercase tracking-widest text-accent">Directory</h3>
         <p className="font-mono text-xs text-snow break-all">{dir.path}</p>
         {cyclePartner && (
-          <div className="border border-danger/40 bg-danger/10 rounded p-2.5 text-xs text-fog-2 leading-relaxed">
+          <div className="border border-danger/40 bg-danger/10 rounded p-2.5 text-xs text-fog leading-relaxed">
             <b className="text-danger">Dependency cycle.</b> This directory and{" "}
             {(cyclePartner.a === selectedDirId ? cyclePartner.b : cyclePartner.a).split("/").pop()} import each
             other. Check the Matrix tab for the exact edge counts in each direction.

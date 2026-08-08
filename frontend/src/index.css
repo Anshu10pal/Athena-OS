@@ -8,14 +8,18 @@
    Tailwind opacity-modifier classes (e.g. border-accent/40) keep working —
    Tailwind can't inject an alpha channel into a var() reference. */
 :root {
-  --void: #070B0A;
+  /* Phase K1 readability pass -- kept in lockstep with tailwind.config.js,
+     which is the source of truth for the same values. Background lifted off
+     absolute black and foreground stepped back from pure white to cut glare
+     on dense monospace views without dropping below AA. */
+  --void: #0A0F0E;
   --jade: #3DDC97;
   --cyan: #4FC7D4;
   --amber: #E0B450;
   --danger: #E2646E;
-  --fg: #E9F1EE;
-  --fg-2: rgba(233, 241, 238, .62);
-  --fg-3: rgba(233, 241, 238, .40);
+  --fg: #DEE7E4;
+  --fg-2: rgba(226, 235, 232, .60);
+  --fg-3: rgba(226, 235, 232, .40);
   --glass: rgba(255, 255, 255, .045);
   --glass-2: rgba(255, 255, 255, .07);
   --edge: rgba(255, 255, 255, .09);

@@ -22,7 +22,7 @@ from app.core.config import settings
 from app.db.models import CodeFile, CodeImport, CodeSymbol, Repo, utcnow
 from app.services.codebase import (
     edge_weights, extract_js, extract_python, git_ops, js_root_discovery, node_priors, registry,
-    repo_lock, resolve_imports, root_discovery,
+    repo_description, repo_lock, resolve_imports, root_discovery,
 )
 from app.services.codebase.discovery import discover_files
 from app.services.codebase.languages import language_for_path
@@ -405,6 +405,14 @@ def _ingest_repo_locked(
     repo.last_ingested_sha = git_ops.get_head_sha(repo.local_path)
     repo.last_ingested_at = utcnow()
     repo.file_count = len(rel_paths)
+    # Phase K1: extracted here rather than on read, so the overview
+    # endpoint never opens a file on disk (the H1.5 rule). Searched at the
+    # TRUE repo root, not the source_root-scoped path -- packaging
+    # metadata and READMEs conventionally sit above a scoped source_root,
+    # the same reasoning as entry_detection's config_search_root.
+    description, description_source = repo_description.extract_description(Path(repo.local_path))
+    repo.description = description
+    repo.description_source = description_source
     db.commit()
 
     symbols_total = (

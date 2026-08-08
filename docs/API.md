@@ -258,6 +258,13 @@ Server-Sent Events, same wire shape as `/api/chat/stream`: `{"type":"progress",.
 ### `POST /api/repos/{id}/subsystems`
 Runs dependency-cluster detection (modularity + Louvain community detection over the resolved import graph) and persists both. Returns per-algorithm cluster counts, the modularity⇄Louvain agreement number, and cycle-cluster coherence findings. 409 if busy. These are measured coupling groups, not confirmed architectural subsystems — see `docs/external-validation-eslint.md`'s Round 3 for why that distinction is load-bearing.
 
+### `GET /api/repos/{id}/overview`
+Everything the repo landing page shows: identity + extracted description, aggregate counts (files, lines, directories, symbols by kind, imports + resolution rate, language/category breakdowns), a structural health score with its per-factor breakdown, and change hotspots. Pure read over what ingest/rank/clustering already persisted — no filesystem walk, no re-parse.
+
+Two honesty properties are part of the contract, not presentation details:
+- `health` is **structural** health, not defect prediction. This system holds no defect data (no issue-tracker linkage, no bug-fix commit classification), and the payload carries its own `caveat` string saying so. Each factor reports `available`; an unmeasurable factor is `value: null` and is **excluded from the score's weighted mean** rather than counted as zero (e.g. `documentation` is Python-only, because the JS/TS parser does not extract JSDoc — scoring JS symbols as undocumented would measure this tool's parser, not the code).
+- `hotspots` is a churn × fan-in **risk proxy**, not measured defects. When churn has no variance — every file reporting the same `commit_count`, the shallow-clone case — it returns `available: false` with a `reason` instead of ranking files by a constant.
+
 ### `POST /api/repos/{id}/subsystems/hdbscan`
 Runs a third, separately-triggered clustering algorithm — HDBSCAN over FastEmbed embeddings (local, `BAAI/bge-small-en-v1.5`, no network call) of each file's symbol signatures + docstrings, rather than the import graph. Slower than `POST /subsystems` (real CPU embedding work — seconds per hundred files, not near-instant graph math), so it stays its own button/endpoint. Returns `agreement_with_modularity` (null if modularity hasn't run yet), its own `cycle_coherence`, and embedding timing/coverage. 409 if busy. **Validated (docs/external-validation-eslint.md's Round 4) to currently underperform modularity/Louvain on a repo with many structurally-similar files** (ESLint's ~294 individual lint rule implementations collapsed into one 81%-of-repo mega-cluster) — reported honestly, not smoothed over; treat as experimental, not a proven improvement.
 

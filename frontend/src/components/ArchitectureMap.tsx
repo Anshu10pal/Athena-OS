@@ -444,7 +444,7 @@ export function ArchitectureMap({
           )}
           {expanded.size > 0 && (
             <>
-              <b className="text-fog-2">{expanded.size}</b> EXPANDED{" "}
+              <b className="text-fog">{expanded.size}</b> EXPANDED{" "}
               <button className="text-accent underline ml-1" onClick={() => setExpanded(new Set())}>
                 collapse all
               </button>

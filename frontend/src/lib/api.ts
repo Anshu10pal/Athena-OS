@@ -304,6 +304,74 @@ export interface SubsystemMembersResponseT {
   files: SubsystemMemberT[];
 }
 
+// Phase K1: the repo landing page. `health` is STRUCTURAL health, not
+// defect prediction -- this system holds no defect data, and the backend
+// carries that caveat in the payload itself so the UI can't quietly drop
+// it (see backend/app/services/codebase/overview.py).
+export interface HealthFactorT {
+  key: string;
+  label: string;
+  weight: number;
+  detail: string;
+  available: boolean;
+  /** Null when the factor could not be measured for this repo -- excluded
+   *  from the score entirely rather than counted as zero. */
+  value: number | null;
+}
+
+export interface HotspotFileT {
+  file_id: number;
+  path: string;
+  score: number;
+  commit_count: number | null;
+  distinct_authors: number | null;
+  fan_in: number | null;
+  lines: number;
+}
+
+export interface OverviewT {
+  repo: {
+    id: number;
+    name: string;
+    owner: string;
+    host: string;
+    source_kind: string;
+    description: string | null;
+    description_source: string | null;
+    last_ingested_at: string | null;
+    last_ingested_sha: string | null;
+    reduced_confidence: boolean | null;
+  };
+  counts: {
+    files: number;
+    lines: number;
+    bytes: number;
+    directories: number;
+    test_files: number;
+    languages: Record<string, number>;
+    categories: Record<string, number>;
+    symbols_total: number;
+    symbol_kinds: Record<string, number>;
+    imports_total: number;
+    imports_resolved: number;
+    imports_unresolved: number;
+    import_resolution_rate: number;
+  };
+  cluster_count: number;
+  health: {
+    score: number | null;
+    factors: HealthFactorT[];
+    factors_used: number;
+    factors_total: number;
+    caveat: string;
+  };
+  hotspots: {
+    available: boolean;
+    reason: string | null;
+    files: HotspotFileT[];
+  };
+}
+
 export function timeAgo(iso: string | null): string {
   if (!iso) return "never";
   const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);

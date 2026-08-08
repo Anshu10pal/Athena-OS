@@ -123,7 +123,7 @@ export function MatrixView({
                       <td
                         key={c.id}
                         title={`${r.short_label}: ${r.internal_edge_count} internal edge${r.internal_edge_count === 1 ? "" : "s"}`}
-                        className="w-[22px] h-[22px] text-center bg-glass border border-line/40 text-fog-2"
+                        className="w-[22px] h-[22px] text-center bg-glass border border-line/40 text-fog"
                       >
                         {r.internal_edge_count > 0 ? r.internal_edge_count : ""}
                       </td>

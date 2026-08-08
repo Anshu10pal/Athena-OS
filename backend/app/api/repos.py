@@ -16,6 +16,7 @@ from app.services.codebase.discovery import TooManyFilesError
 from app.services.codebase.git_ops import GitBinaryUnavailable
 from app.services.codebase.ingest import ingest_repo
 from app.services.codebase.ordering import compute_layers
+from app.services.codebase.overview import build_overview
 from app.services.codebase.policy import RepoBlocked
 from app.services.codebase.ranking import _build_graph, rank_repo
 from app.services.codebase.repo_lock import RepoBusyError
@@ -601,6 +602,24 @@ def compute_subsystems_endpoint(
         return compute_subsystems(db, repo)
     except RepoBusyError as e:
         raise HTTPException(409, str(e))
+
+
+@router.get("/{repo_id}/overview")
+def get_overview(repo_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Phase K1: aggregate stats, structural health, and change hotspots
+    for the repo landing page. Purely a read over what ingest/rank/
+    clustering already persisted -- no filesystem walk, no re-parse, no
+    re-clustering (H1.5's rule).
+
+    The `health` block is STRUCTURAL health, not defect prediction: this
+    system holds no defect data at all, and `hotspots` is a churn x fan-in
+    risk proxy that reports itself unavailable rather than ranking files
+    by a constant when churn has no variance (the shallow-clone case).
+    See overview.py's module docstring."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    return build_overview(db, repo)
 
 
 @router.post("/{repo_id}/subsystems/hdbscan")
