@@ -20,7 +20,7 @@ export function dirnameOfPath(path: string): string {
 
 export interface SCC {
   id: number;
-  members: string[]; // directory node ids
+  members: string[]; // node ids -- directory ids here, stringified file ids at file level
 }
 
 export interface CondensedEdge {
@@ -34,12 +34,25 @@ export interface CondensationResult {
   condensedEdges: CondensedEdge[];
 }
 
-// Tarjan's algorithm. Hand-rolled rather than a dependency -- the graph
-// this runs on is capped at 24 nodes (dir_aggregation.py's rollup),
-// nowhere near where a library's constant-factor optimizations would
-// matter, and this repo's own file graph is small enough that directory-
-// level cycles (if any) are also small.
-export function condenseSCCs(nodeIds: string[], edges: DirEdgeT[]): CondensationResult {
+// Phase J1: the minimal edge shape condenseSCCs actually reads. DirEdgeT
+// satisfies this structurally, so every existing directory-level caller
+// keeps working unchanged, while the file-level Dependency Graph
+// (dependencyGraphScope.ts) can pass its own stringified-id edges without
+// a cast or a second copy of Tarjan. Same "declare the minimal shape, let
+// both real types satisfy it" pattern as filters.ts's Filterable.
+export interface DirectedEdgeLike {
+  source: string;
+  target: string;
+}
+
+// Tarjan's algorithm. Hand-rolled rather than a dependency -- the
+// directory graph this was written for is capped at 24 nodes
+// (dir_aggregation.py's rollup), nowhere near where a library's
+// constant-factor optimizations would matter. Phase J1 also runs it over
+// the FILE graph (up to GRAPH_NODE_LIMIT_DEFAULT = 400 nodes), which is
+// still trivial for an O(V+E) iterative algorithm -- the bound moved, the
+// "no dependency needed" conclusion didn't.
+export function condenseSCCs(nodeIds: string[], edges: DirectedEdgeLike[]): CondensationResult {
   const adj = new Map<string, string[]>();
   for (const id of nodeIds) adj.set(id, []);
   for (const e of edges) {

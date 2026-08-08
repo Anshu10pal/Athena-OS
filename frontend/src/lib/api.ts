@@ -123,6 +123,16 @@ export interface GraphNodeT {
   // mirrors CodeFile.seed_eligible exactly, not derived client-side.
   seed_eligible: boolean | null;
   reachable: boolean;
+  // Phase J1: the backend's level=file node dict has sent this since I2
+  // (get_graph in api/repos.py) -- it was only ever consumed server-side
+  // by aggregate_to_directories, so this type never declared it. The
+  // Dependency Graph's "same cluster" filter reads it directly.
+  // Modularity only, deliberately: it is the same algorithm the
+  // Architecture map and Matrix already color by (dir_aggregation.py's
+  // _cluster_of reads no other), so the graph can't disagree with the map
+  // about which cluster a file is in. Null until POST /subsystems has run,
+  // or if the file landed in a singleton.
+  subsystem_modularity_id: number | null;
 }
 
 export interface GraphEdgeT {

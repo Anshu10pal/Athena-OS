@@ -1,4 +1,4 @@
-# Codebase Agent — Status & Handoff (Phases A–H complete, Phase I in progress — I0/I1/I2/I5/I6 done)
+# Codebase Agent — Status & Handoff (Phases A–H complete; Phase I done through I6; Phase J1 done)
 
 **Hand this file to a fresh Claude Code session to resume work with full
 context. It supersedes any memory of the conversation that produced it.**
@@ -1047,17 +1047,72 @@ independent of which option above is picked):
      feature itself works correctly end-to-end; the clustering QUALITY
      question this whole effort was meant to answer came back negative on
      the one repo with real ground truth to check it against.
+6. **Phase J1 (2026-08-09): the file-level graph is back, as a scoped
+   explorer — NOT as a restoration of the H5 "Raw" view.** This distinction
+   is the whole design and should not be collapsed in a future summary:
+   what H5 deleted was "every file at once, force-directed," which failed
+   its own three-question evidence check. What J1 adds is "one focus file
+   or folder, N import hops out, folders collapsed by default, ELK layered
+   left-to-right layout," where horizontal position encodes dependency
+   direction (importers left, imports right) instead of being a settling
+   artifact. The full graph is reachable only behind an explicit toggle
+   that warns, in the UI itself, about exactly the failure H5 recorded.
+   - **Stack decision, with the alternative considered and rejected:**
+     Cytoscape.js + `cytoscape-elk`, no Neo4j. Neo4j would have added a
+     second database server (storage, deployment, backup, tenant
+     isolation) to a feature whose data already lives in SQLite and is
+     already served by `GET /graph?level=file` — and, decisively, it would
+     not have solved the actual failure, which was layout readability, not
+     query capability. Revisit only for cross-repo Cypher queries or
+     multi-repo graph federation, neither of which exists as a requirement
+     today.
+   - **Two new frontend deps, both verified rather than assumed:**
+     `cytoscape` and `cytoscape-elk`. `elkjs` was installed at top level
+     first and then REMOVED on discovering `cytoscape-elk` nests its own
+     `elkjs@0.9.3` — keeping both would have shipped two copies of a
+     ~1.4MB solver. `@types/cytoscape` was likewise installed and removed:
+     cytoscape 3.34 ships its own `index.d.ts`, so the DefinitelyTyped
+     package was a redundant, separately-versioned second copy.
+     `cytoscape-elk` genuinely ships no types; `src/types/cytoscape-elk.d.ts`
+     declares the one export used. Both bundlers were smoke-tested
+     (esbuild for Vite dev, Rollup for `vite build`) BEFORE any code was
+     written against them, since the UMD-wrapping-a-CJS-require shape is
+     exactly what tends to break under Vite.
+   - **Lazy-loaded, measured not assumed** (same standard as G4's mermaid
+     note): a static import built the main chunk at 2,409 kB. `React.lazy`
+     splits that to a 483 kB main chunk plus a 1,457 kB ELK chunk and a
+     433 kB cytoscape chunk fetched only when the tab is first opened.
+   - **Reuses rather than duplicates:** `condenseSCCs` (layeredLayout.ts's
+     hand-rolled iterative Tarjan) was widened from `DirEdgeT` to a minimal
+     `DirectedEdgeLike` structural type, so the file-level graph gets cycle
+     detection from the SAME implementation the directory level uses.
+     `DirEdgeT` still satisfies it, so no existing caller changed. Same
+     "declare the minimal shape" pattern as filters.ts's `Filterable`.
+   - **All real logic is in two pure, DOM-free modules** —
+     `lib/dependencyGraphScope.ts` (BFS hop-scoping, direction/cluster/
+     cycle filters, node cap, SCC-based cycle-edge detection) and
+     `lib/dependencyGraphElements.ts` (collapse/expand folders into
+     cytoscape compound nodes, aggregate edges with counts) — with 39 unit
+     tests. The component is the cytoscape shell and the controls only.
+   - **Two ordering decisions inside the scoping are load-bearing and
+     documented in-code:** the cluster filter runs BEFORE the BFS (so a
+     path can't escape the cluster and come back, which would put a file
+     "two hops away" in view via a node the filter claims to exclude),
+     while cycle-edges-only runs LAST and only on edges (it is a display
+     filter, not a scoping one). Both have dedicated tests asserting
+     exactly those properties, not just the happy path.
 
 ## How to resume, concretely
 
 1. Confirm dev server state — check `netstat -ano | findstr :8000` /
    `:5173` before starting new ones (both were confirmed NOT running as of
    this reconciliation pass).
-2. Confirm current test counts match this document (559 backend, 67
-   frontend, as of Phase I6, 2026-08-08 — both were re-run and confirmed
-   exactly matching then). If they don't match for you, something changed
-   outside this document's knowledge — investigate before trusting
-   anything else here.
+2. Confirm current test counts match this document (559 backend as of
+   Phase I6 2026-08-08; 106 frontend as of Phase J1 2026-08-09 — up from
+   67 by J1's 39 new dependency-graph tests). Both were re-run and
+   confirmed exactly matching at those points. If they don't match for
+   you, something changed outside this document's knowledge — investigate
+   before trusting anything else here.
 3. Read this document's "Standing process discipline" section again
    before writing any code — it's the distilled cost of eleven real bugs
    and is cheaper to re-read than to re-learn.

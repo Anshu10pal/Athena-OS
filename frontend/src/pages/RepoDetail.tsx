@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   api, DirGraphResponseT, GraphResponseT, RankedFileT, RankingResponseT, RepoJobT, RepoT, ScorerT,
@@ -25,6 +25,19 @@ import { DetailPanel } from "../components/DetailPanel";
 import { FileSearch } from "../components/FileSearch";
 import { MermaidPanel } from "../components/MermaidPanel";
 import { SubsystemsView } from "../components/SubsystemsView";
+import { dirnameOfPath } from "../lib/layeredLayout";
+
+// Phase J1: cytoscape + ELK are heavy and needed only by whoever actually
+// opens the Dependency Graph tab -- so this is lazy, exactly like
+// MermaidPanel's dynamic import() of mermaid and for the same reason.
+// Measured against real builds, not assumed (the same standard the G4
+// bundle-size note set): with a static import the main chunk built at
+// 2,409 kB; lazy, it builds at 483 kB, with the graph engine moved into a
+// 1,457 kB ELK chunk plus a 433 kB cytoscape chunk that are fetched only
+// when this tab is first opened.
+const DependencyGraph = lazy(() =>
+  import("../components/DependencyGraph").then((m) => ({ default: m.DependencyGraph })),
+);
 
 type SortKey = keyof Pick<
   RankedFileT,
@@ -37,7 +50,14 @@ type SortKey = keyof Pick<
 // decided this. Architecture/Matrix/Focus/Layers answer all three better;
 // keeping a fourth tab and a d3-force dependency alive would have been
 // inertia, not justification.
-type ViewT = "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems";
+//
+// Phase J1 adds "depgraph" -- deliberately NOT a restoration of that Raw
+// view. The thing H5 deleted was "every file at once, force-directed";
+// this is "one focus, N hops, folders collapsed, ELK layered layout",
+// where the full graph exists only behind an explicit opt-in that warns
+// about exactly the failure H5 recorded. Different default, different
+// layout, different question answered -- see components/DependencyGraph.tsx.
+type ViewT = "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph";
 
 const COLUMNS: { key: SortKey; label: string; align?: "left" | "center" | "right" }[] = [
   { key: "score", label: "Score" },
@@ -58,6 +78,7 @@ const SCORERS: { value: ScorerT; label: string }[] = [
 const VIEWS: { value: ViewT; label: string }[] = [
   { value: "reading", label: "Reading list" },
   { value: "architecture", label: "Architecture" },
+  { value: "depgraph", label: "Dependency Graph" },
   { value: "matrix", label: "Matrix" },
   { value: "focus", label: "Focus" },
   { value: "layers", label: "Layers" },
@@ -174,6 +195,17 @@ const GLOSSARY: { term: string; desc: string }[] = [
       "the clustering is broken -- it means the cycle is carried by a small number of specific edges between " +
       "specific files, not by pervasive coupling across both directories, which is a more actionable finding.",
   },
+  {
+    term: "Dependency Graph (hops)",
+    desc:
+      "The Dependency Graph never draws the whole repo by default -- it draws one focus file (or folder) and " +
+      "everything within N import hops of it. Hop 1 is direct neighbours, hop 2 is neighbours-of-neighbours. This " +
+      "is the deliberate difference from the old force-directed view that was deleted: at full size a file graph " +
+      "is a hairball that answers nothing, so the question here is scoped to \"what does a change to THIS reach,\" " +
+      "not \"show me everything.\" Left-to-right position encodes direction -- importers on the left, imports on " +
+      "the right. Folders collapse to one node with an x-count until you expand them; a red edge closes a cycle " +
+      "among the files currently on screen.",
+  },
 ];
 
 function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -287,6 +319,15 @@ export default function RepoDetail() {
   const [subsystemsHdbscan, setSubsystemsHdbscan] = useState<SubsystemsResponseT | null>(null);
   const [computingSubsystems, setComputingSubsystems] = useState(false);
   const [computingSubsystemsHdbscan, setComputingSubsystemsHdbscan] = useState(false);
+  // Phase J1: the Dependency Graph's focus is deliberately SEPARATE state
+  // from selectedFileId. Selection drives the detail panel; focus drives
+  // which neighbourhood is scoped and laid out. Collapsing them into one
+  // would mean every click meant to read a node's label also re-scoped
+  // and re-laid-out the whole graph, which is the single fastest way to
+  // make a graph explorer unusable. Seeded from the current selection when
+  // the tab opens (see the effect below), then moved only by double-click.
+  const [graphFocusFileId, setGraphFocusFileId] = useState<number | null>(null);
+  const [graphFocusDir, setGraphFocusDir] = useState<string | null>(null);
 
   // DetailPanel shows file details whenever selectedFileId is set,
   // regardless of how stale -- without clearing the other one on every
@@ -500,6 +541,48 @@ export default function RepoDetail() {
   const subsystemIds = useMemo(() => deriveSubsystemIds(files, subsystemAlgorithm), [files, subsystemAlgorithm]);
   const visible = useMemo(() => filterFiles(files, filters), [files, filters]);
   const visibleGraphNodes = useMemo(() => filterFiles(graphNodes, filters), [graphNodes, filters]);
+
+  // Phase J1: opening the Dependency Graph adopts whatever is already
+  // selected -- click a directory on the Architecture map (or a file
+  // anywhere) and switching tabs explores THAT, rather than dropping the
+  // user on an empty canvas and making them re-pick what they just picked.
+  // Only seeds when the graph has no focus of its own yet; once the user
+  // has re-centered inside the view, later selections must not yank the
+  // focus out from under them.
+  useEffect(() => {
+    if (view !== "depgraph") return;
+    if (graphFocusFileId !== null || graphFocusDir !== null) return;
+    if (selectedFileId !== null) setGraphFocusFileId(selectedFileId);
+    else if (selectedDirId !== null) setGraphFocusDir(selectedDirId);
+  }, [view, selectedFileId, selectedDirId, graphFocusFileId, graphFocusDir]);
+
+  // Phase J1: the Dependency Graph honours the same filter chips every
+  // other tab does, so "hide config/migration/generated" narrows the graph
+  // too instead of silently applying to nothing -- and the page's own
+  // "Showing X of Y" counter stays true of what the graph is drawn from.
+  // Focus files are exempt: filtering away the node the view is centred on
+  // would empty the graph and look like a bug rather than a filter result,
+  // the same reasoning as scopeGraph's own focus exemption for clusters.
+  const depGraphNodes = useMemo(() => {
+    const visibleIds = new Set(visibleGraphNodes.map((n) => n.id));
+    const focusSet = new Set(graphFocusFileId !== null ? [graphFocusFileId] : []);
+    return graphNodes.filter((n) => visibleIds.has(n.id) || focusSet.has(n.id));
+  }, [graphNodes, visibleGraphNodes, graphFocusFileId]);
+
+  const graphFocus = useMemo((): { ids: number[]; label: string } => {
+    if (graphFocusFileId !== null) {
+      const node = graphNodes.find((n) => n.id === graphFocusFileId);
+      return { ids: [graphFocusFileId], label: node?.path ?? `file ${graphFocusFileId}` };
+    }
+    if (graphFocusDir !== null) {
+      // A directory focus seeds from every file in it -- the question
+      // "what does this folder depend on" is genuinely about the union of
+      // its files, not about any one representative file.
+      const ids = graphNodes.filter((n) => dirnameOfPath(n.path) === graphFocusDir).map((n) => n.id);
+      return { ids, label: `${graphFocusDir} (${ids.length} files)` };
+    }
+    return { ids: [], label: "" };
+  }, [graphFocusFileId, graphFocusDir, graphNodes]);
 
   const sorted = useMemo(() => {
     const copy = [...visible];
@@ -853,6 +936,25 @@ export default function RepoDetail() {
           onColorModeChange={setColorMode}
           clusterLabelById={modularityLabelById}
         />
+      )}
+
+      {files.length > 0 && view === "depgraph" && graph && (
+        <Suspense
+          fallback={<p className="text-fog text-sm font-mono">Loading graph engine…</p>}
+        >
+          <DependencyGraph
+            nodes={depGraphNodes}
+            edges={graph.edges}
+            focusIds={graphFocus.ids}
+            focusLabel={graphFocus.label}
+            onSelectFile={selectFile}
+            onFocusFile={(fileId) => {
+              setGraphFocusDir(null);
+              setGraphFocusFileId(fileId);
+              selectFile(fileId);
+            }}
+          />
+        </Suspense>
       )}
 
       {files.length > 0 && view === "matrix" && dirGraph && (
