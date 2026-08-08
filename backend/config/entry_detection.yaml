@@ -1,0 +1,31 @@
+# Phase E4: entry-point detection. The detection RULES (which config files
+# are authoritative, which code patterns are the fallback) are structural
+# facts about ecosystem conventions, not tunable numbers -- they live in
+# code (app/services/codebase/entry_detection.py), not here. The one real
+# knob is below.
+
+# A detected entry point whose OWN fan_in exceeds this is flagged as a
+# contradiction in the ranking report, not silently dropped from the entry
+# set -- nothing imports a real entry point except a build tool, so
+# fan_in > 0 on a detected entry usually means the wrong file was flagged
+# (e.g. a file one hop downstream of the real entry, imported once by it).
+# Do not raise this to suppress a specific false alarm -- a fan_in-1 file
+# adjacent to a real entry point (imported once by it) is exactly the case
+# this check exists to catch; the fix is correcting detection, not raising
+# the threshold.
+fan_in_contradiction_threshold: 0
+
+# Path substrings that make a FALLBACK-detected entry (a code pattern found
+# inside the file, e.g. if __name__ == "__main__") ineligible to seed
+# weighted PageRank, even though it still earns the entry prior. Generic
+# ecosystem conventions for "auxiliary, not the primary surface" -- not
+# repo-specific overrides (a genuinely ambiguous case, like a lone
+# standalone-utility directory that doesn't match any of these markers,
+# should be a considered addition here for that repo, not silently forced
+# into either tier). Authoritative detections (named by real deployment/
+# build config) are always seed-eligible regardless of this list.
+seed_ineligible_path_markers:
+  - "scripts/"
+  - "tools/"
+  - "tests/"
+  - "test/"

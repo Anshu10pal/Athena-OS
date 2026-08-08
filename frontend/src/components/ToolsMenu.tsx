@@ -26,6 +26,10 @@ const GROUPS = [
       { to: "/achievements", label: "Achievements", desc: "Badges and streaks" },
     ],
   },
+  {
+    title: "Build",
+    items: [{ to: "/repos", label: "Codebase Agent", desc: "Ingest a repo, get a ranked reading list" }],
+  },
 ];
 
 export default function ToolsMenu({ top }: { top: number }) {

@@ -14,6 +14,8 @@ import PresentationArena from "./pages/PresentationArena";
 import Communication from "./pages/Communication";
 import Review from "./pages/Review";
 import Achievements from "./pages/Achievements";
+import Repos from "./pages/Repos";
+import RepoDetail from "./pages/RepoDetail";
 import Roadmap from "./pages/Roadmap";
 import Settings from "./pages/Settings";
 import Vault from "./pages/Vault";
@@ -60,6 +62,8 @@ export default function App() {
           <Route path="/review" element={<Review />} />
           <Route path="/communication" element={<Communication />} />
           <Route path="/achievements" element={<Achievements />} />
+          <Route path="/repos" element={<Repos />} />
+          <Route path="/repos/:id" element={<RepoDetail />} />
         </Route>
       </Routes>
     </BrowserRouter>

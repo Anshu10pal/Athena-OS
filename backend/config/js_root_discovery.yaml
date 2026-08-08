@@ -1,0 +1,25 @@
+# Phase E2.2: TypeScript/JS root + alias discovery. Config file discovery
+# rules (which filenames, which fields) are code
+# (app/services/codebase/js_root_discovery.py) -- structural facts about
+# ecosystem conventions, not tunable numbers. The two knobs below are the
+# real ones.
+
+# The extension/index probe order for an extension-less specifier (e.g.
+# "./utils"), in the order they're tried. Order matters: when BOTH
+# utils.ts and utils/index.ts exist, whichever extension is tried first
+# silently becomes the resolution target, not a tie.
+#
+# This is ONE global order, not per-project moduleResolution-mode-aware
+# (TypeScript's real modes -- classic, node, node16, nodenext, bundler --
+# have genuinely different extension/index rules). Modeling every real
+# mode's nuances is disproportionate scope for a static heuristic resolver;
+# this file is exactly the seam a future refinement would plug into
+# without a code change, not a claim that this order is authoritative for
+# every project.
+extension_probe_order:
+  - ".ts"
+  - ".tsx"
+  - ".js"
+  - ".jsx"
+
+try_index_resolution: true

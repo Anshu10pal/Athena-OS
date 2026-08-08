@@ -1,0 +1,19 @@
+# Phase F1/F3: edge kind -> weight. `kind` is a categorical fact about the
+# code, computed once at parse time and stored on code_imports (see
+# app/services/codebase/edge_weights.py). `weight` is a tuning parameter,
+# resolved from THIS file at scoring time (Phase F3) -- retuning a number
+# here never requires re-parsing/re-ingesting any repo.
+weights:
+  inherits: 1.0
+  calls: 0.8
+  heavy_use: 0.8
+  light_use: 0.4
+  type_only: 0.25
+  reexport: 0.15
+  test_edge: 0.05
+  # No occurrence count is possible (wildcard import, or a bare require()
+  # whose assignment target isn't traced) -- treated as real, unquantified
+  # coupling rather than folded into a generic fallback, so it's visible in
+  # the kind distribution and tunable on its own once you see how often it
+  # actually fires. 0.7 is a starting guess, not a measured value.
+  unresolvable_binding: 0.7

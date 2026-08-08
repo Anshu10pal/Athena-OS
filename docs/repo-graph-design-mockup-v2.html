@@ -1,0 +1,470 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repo graph — design mockup v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --void:#070B0A; --ink:#0B100F;
+  --jade:#3DDC97; --cyan:#4FC7D4; --amber:#E0B450; --rose:#E06C75; --violet:#8B7FE8;
+  --fg:#E9F1EE; --fg-2:rgba(233,241,238,.66); --fg-3:rgba(233,241,238,.44);
+  --glass:rgba(255,255,255,.045); --glass-2:rgba(255,255,255,.08);
+  --edge:rgba(255,255,255,.09); --edge-2:rgba(255,255,255,.18);
+  --sans:'Instrument Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--void);color:var(--fg);font-family:var(--sans);-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--jade);outline-offset:2px;border-radius:4px}
+.shell{display:flex;flex-direction:column;height:100vh}
+
+/* row 1 */
+.top{display:flex;align-items:center;gap:16px;padding:11px 18px;flex-shrink:0}
+.repo{font-size:14px;font-weight:600;letter-spacing:-.02em;white-space:nowrap}
+.repo span{font-family:var(--mono);font-size:10.5px;color:var(--fg-3);margin-left:9px;letter-spacing:.05em}
+.search{flex:1;position:relative;max-width:520px}
+.search input{width:100%;padding:9px 12px 9px 34px;border-radius:9px;border:1px solid var(--edge);background:var(--glass);font-size:13px}
+.search input::placeholder{color:var(--fg-3)}
+.search>svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);opacity:.4}
+.hits{position:absolute;top:40px;left:0;right:0;background:rgba(12,18,17,.98);border:1px solid var(--edge);border-radius:9px;max-height:280px;overflow:auto;z-index:30;display:none}
+.hits.open{display:block}
+.hits button{display:block;width:100%;text-align:left;padding:8px 12px;font-family:var(--mono);font-size:11px;color:var(--fg-2);border-bottom:1px solid var(--edge)}
+.hits button:hover{background:var(--glass);color:var(--fg)}
+.seg{display:flex;gap:2px;background:var(--glass);padding:3px;border-radius:9px;border:1px solid var(--edge)}
+.seg button{font-family:var(--mono);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;padding:6px 12px;border-radius:6px;color:var(--fg-3)}
+.seg button:hover{color:var(--fg-2)}
+.seg button.on{background:var(--jade);color:#04120C;font-weight:500}
+.ico{display:flex;gap:6px}
+.ico button{width:32px;height:32px;border:1px solid var(--edge);border-radius:8px;color:var(--fg-3)}
+.ico button:hover{background:var(--glass-2);color:var(--fg)}
+.ico button.on{border-color:var(--jade);color:var(--jade)}
+
+/* row 2 — type chips double as legend and filter */
+.chips{display:flex;align-items:center;gap:7px;padding:0 18px 11px;flex-wrap:wrap;flex-shrink:0}
+.chip{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:20px;border:1px solid var(--edge);background:var(--glass);font-size:12px;color:var(--fg-3);transition:all .15s}
+.chip:hover{border-color:var(--edge-2);color:var(--fg-2)}
+.chip.on{color:var(--fg);border-color:var(--edge-2);background:var(--glass-2)}
+.chip i{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.chip b{font-family:var(--mono);font-size:10.5px;font-weight:400;color:var(--fg-3)}
+.chip.on b{color:var(--fg-2)}
+.chips .sp{flex:1}
+.chips .hint{font-family:var(--mono);font-size:9.5px;color:var(--fg-3);letter-spacing:.06em}
+
+.body{flex:1;display:flex;min-height:0;border-top:1px solid var(--edge)}
+.stage{flex:1;position:relative;min-width:0;overflow:hidden;background:var(--void)}
+.stage svg.canvas{width:100%;height:100%;display:block;cursor:grab}
+.stage svg.canvas.dragging{cursor:grabbing}
+.hud{position:absolute;left:14px;bottom:14px;display:flex;gap:7px;align-items:center;z-index:10}
+.hud button{width:29px;height:29px;border:1px solid var(--edge);border-radius:7px;background:rgba(11,16,15,.88);backdrop-filter:blur(8px);font-family:var(--mono);font-size:13px;color:var(--fg-2)}
+.hud button:hover{background:var(--glass-2);color:var(--fg)}
+.hud .zl{font-family:var(--mono);font-size:9.5px;color:var(--fg-3);letter-spacing:.07em;padding-left:5px}
+.crumb{position:absolute;left:14px;top:12px;font-family:var(--mono);font-size:10px;letter-spacing:.07em;color:var(--fg-3);z-index:10}
+.crumb b{color:var(--fg-2);font-weight:400}
+.crumb button{color:var(--jade);text-decoration:underline}
+.tier{position:absolute;right:14px;top:12px;font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;color:var(--fg-3);z-index:10}
+
+.side{width:310px;flex-shrink:0;border-left:1px solid var(--edge);background:var(--ink);overflow-y:auto;padding:16px 18px}
+.side h3{font-family:var(--mono);font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--jade);margin-bottom:11px}
+.side .path{font-family:var(--mono);font-size:11.5px;color:var(--fg);word-break:break-all;line-height:1.55;margin-bottom:14px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--edge);border:1px solid var(--edge);border-radius:8px;overflow:hidden;margin-bottom:16px}
+.stats div{background:var(--ink);padding:9px 11px}
+.stats dt{font-family:var(--mono);font-size:8.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--fg-3);margin-bottom:3px}
+.stats dd{font-size:15px;font-weight:600;letter-spacing:-.02em}
+.lst{margin-bottom:16px}
+.lst h4{font-family:var(--mono);font-size:9px;letter-spacing:.11em;text-transform:uppercase;color:var(--fg-3);margin-bottom:7px}
+.lst button{display:block;width:100%;text-align:left;font-family:var(--mono);font-size:10.5px;color:var(--fg-2);padding:5px 7px;border-radius:5px}
+.lst button:hover{background:var(--glass);color:var(--fg)}
+.warn{border:1px solid rgba(224,108,117,.4);background:rgba(224,108,117,.08);border-radius:8px;padding:9px 11px;margin-bottom:14px;font-size:11.5px;line-height:1.5;color:var(--fg-2)}
+.warn b{color:var(--rose)}
+.mm{background:rgba(0,0,0,.35);border:1px solid var(--edge);border-radius:8px;padding:9px 11px;font-family:var(--mono);font-size:9.5px;line-height:1.6;color:var(--fg-2);white-space:pre;overflow-x:auto}
+.p{font-size:12px;color:var(--fg-2);line-height:1.6;margin-bottom:12px}
+.mwrap{position:absolute;inset:0;overflow:auto;padding:52px 18px 18px}
+table.mx{border-collapse:collapse;font-family:var(--mono);font-size:9.5px}
+table.mx th{font-weight:400;color:var(--fg-3);padding:3px 5px;white-space:nowrap}
+table.mx th.rw{text-align:right;position:sticky;left:0;background:var(--void);z-index:2}
+table.mx th.cl{height:104px;vertical-align:bottom;position:sticky;top:0;background:var(--void);z-index:2}
+table.mx th.cl div{writing-mode:vertical-rl;transform:rotate(180deg);text-align:left}
+table.mx td{width:21px;height:21px;border:1px solid rgba(255,255,255,.05);text-align:center;color:#04120C;font-size:8.5px}
+table.mx td.self{background:rgba(255,255,255,.04)}
+table.mx td.cyc{outline:1.6px solid var(--rose);outline-offset:-1.6px}
+.mnote{position:absolute;left:18px;top:16px;font-family:var(--mono);font-size:9.5px;color:var(--fg-3);letter-spacing:.05em}
+</style>
+
+<div class="shell">
+  <div class="top">
+    <div class="repo">Anshu10pal/Athena-OS <span>171 FILES · 21 DIRS</span></div>
+    <div class="search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.5-4.5"/></svg>
+      <input id="q" placeholder="Search files and directories…   /" autocomplete="off">
+      <div class="hits" id="hits"></div>
+    </div>
+    <div class="seg" id="tabs">
+      <button data-v="map" class="on">Architecture</button>
+      <button data-v="matrix">Matrix</button>
+      <button data-v="focus">Focus</button>
+    </div>
+    <div class="ico">
+      <button id="core" title="Core only — hide weakly connected">◉</button>
+      <button id="fs" title="Fullscreen">⛶</button>
+    </div>
+  </div>
+  <div class="chips" id="chips"></div>
+
+  <div class="body">
+    <div class="stage" id="stage">
+      <div class="crumb" id="crumb"></div>
+      <div class="tier" id="tierlbl"></div>
+      <svg class="canvas" id="cv"></svg>
+      <div class="mwrap" id="mwrap" style="display:none"></div>
+      <div class="hud">
+        <button id="zo">−</button><button id="zi">+</button>
+        <button id="zr" style="width:auto;padding:0 9px;font-size:9.5px;letter-spacing:.07em">RESET</button>
+        <span class="zl" id="zl">100%</span>
+      </div>
+    </div>
+    <div class="side" id="side"></div>
+  </div>
+</div>
+
+<script>
+/* ───────── data: condensed directory graph.
+   Three cycle groups are the real ones found by SCC condensation. ───────── */
+const N = [
+ {id:'bapp', label:'app', path:'backend/app', kind:'entry', layer:0, region:'be', y:85,
+  files:['main.py','run.py']},
+ {id:'btest',label:'tests', path:'backend/tests', kind:'test', layer:0, region:'be', y:150,
+  files:['test_ingest.py','test_ranking.py','test_jobs.py','test_ordering.py','test_repo_registration.py','test_validate_ranking.py','test_entry_detection.py','test_edge_weights.py','test_root_discovery.py','test_comparison.py','test_repo_lock.py','test_dir_aggregation.py','test_layers.py','test_neighbors.py']},
+ {id:'bscr', label:'scripts', path:'backend/scripts', kind:'tooling', layer:0, region:'be', y:215,
+  files:['validate_ranking.py','compare_scorers.py','discover_roots.py','export_content.py']},
+ {id:'balem',label:'alembic/versions', path:'backend/alembic/versions', kind:'migration', layer:0, region:'be', y:280,
+  files:['204acbf.py','2efcd40.py','c0a6225.py','e4fb42c.py','a71bd0c.py','f3c2ab8.py']},
+ {id:'bapi', label:'api', path:'backend/app/api', kind:'source', layer:1, region:'be', y:150,
+  files:['repos.py','roadmaps.py','modules.py','topics.py','resources.py','content.py','review.py','analytics.py','chat.py','auth.py','voice.py','oratory.py','communication.py','achievements.py','briefing.py','interview.py']},
+ {id:'bsvc', label:'services ⇄ agents', path:'backend/app/services + agents', kind:'source', layer:2, region:'be', y:105, cycle:['backend/app/services','backend/app/agents'],
+  files:['resolution.py','seed.py','progress.py','uploads.py','text_metrics.py','commander.py','vector_store.py','prompts.py','roadmap_graph.py']},
+ {id:'bcb',  label:'services/codebase', path:'backend/app/services/codebase', kind:'source', layer:2, region:'be', y:230,
+  files:['registry.py','git_ops.py','discovery.py','parsing.py','resolve_imports.py','root_discovery.py','edge_weights.py','entry_detection.py','dir_aggregation.py','ranking.py','ordering.py','comparison.py','jobs.py','repo_lock.py']},
+ {id:'bcore',label:'core ⇄ db', path:'backend/app/core + db', kind:'source', layer:3, region:'be', y:160, cycle:['backend/app/core','backend/app/db'],
+  files:['config.py','security.py','llm.py','models.py','database.py','schemas.py']},
+
+ {id:'fsrc', label:'src', path:'frontend/src', kind:'entry', layer:0, region:'fe', y:420,
+  files:['main.tsx','App.tsx']},
+ {id:'fpg',  label:'pages', path:'frontend/src/pages', kind:'source', layer:1, region:'fe', y:420,
+  files:['Repos.tsx','RepoDetail.tsx','ModuleDetail.tsx','Roadmap.tsx','Chat.tsx','Communication.tsx','Dashboard.tsx','Hub.tsx']},
+ {id:'fcmp', label:'components', path:'frontend/src/components', kind:'source', layer:2, region:'fe', y:420,
+  files:['SlideOver.tsx','GraphView.tsx','LayersView.tsx','ArcGauge.tsx','NodeDossier.tsx']},
+ {id:'flib', label:'lib ⇄ store', path:'frontend/src/lib + store', kind:'source', layer:3, region:'fe', y:420, cycle:['frontend/src/lib','frontend/src/store'],
+  files:['api.ts','fx.tsx','sound.ts','graphLayout.ts','layeredLayout.ts','auth.tsx','orb.tsx']},
+
+ {id:'vl', label:'voice_listener', path:'voice_listener', kind:'entry', layer:0, region:'iso', isolated:true,
+  files:['wake_word.py']}
+];
+const E = [
+ ['bapp','bapi',16],['bapp','bcore',10],
+ ['bapi','bcore',90],['bapi','bsvc',30],['bapi','bcb',9],
+ ['bsvc','bcore',32],
+ ['bcb','bcore',24],
+ ['btest','bapi',12],['btest','bsvc',9],['btest','bcb',31],['btest','bcore',24],
+ ['bscr','bcb',7],['bscr','bcore',8],
+ ['balem','bcore',10],
+ ['fsrc','fpg',8],['fsrc','flib',3],
+ ['fpg','flib',23],['fpg','fcmp',11],
+ ['fcmp','flib',12]
+];
+const KIND = {
+  entry:{c:'var(--jade)',   l:'Entry'},
+  source:{c:'rgba(233,241,238,.62)', l:'Source'},
+  test:{c:'var(--cyan)',    l:'Tests'},
+  tooling:{c:'var(--amber)',l:'Tooling'},
+  migration:{c:'var(--rose)',l:'Migrations'}
+};
+const REG = {be:{label:'BACKEND — PYTHON',y:34,h:290},fe:{label:'FRONTEND — TYPESCRIPT',y:352,h:140}};
+const LX = {0:96,1:266,2:436,3:614};
+const D = Object.fromEntries(N.map(n=>[n.id,n]));
+const FILES=[]; N.forEach(n=>n.files.forEach(f=>FILES.push({dir:n.id,name:f,path:n.path+'/'+f})));
+const deg = id => E.filter(([a,b])=>a===id||b===id).length;
+
+/* ───────── state ───────── */
+let view='map', expanded=new Set(), sel=null, selFile=null, hover=null;
+let kinds=new Set(Object.keys(KIND)), coreOnly=false, T={k:1,x:0,y:0}, drag=null;
+
+const cv=document.getElementById('cv'), NS='http://www.w3.org/2000/svg';
+const el=(t,a={})=>{const n=document.createElementNS(NS,t);for(const k in a)n.setAttribute(k,a[k]);return n};
+const txt=(n,s)=>{n.textContent=s;return n};
+/* semantic zoom tiers, per the reference's three detail levels */
+const tier = () => T.k<0.72 ? 0 : T.k<1.45 ? 1 : 2;
+const vis = n => kinds.has(n.kind) && (!coreOnly || deg(n.id)>=3 || n.kind==='entry');
+
+function boxOf(n){
+  const cyc=!!n.cycle, open=expanded.has(n.id);
+  if(n.isolated){ return {x:n.sx-60,y:n.sy-15,w:120,h:30,cx:n.sx,cy:n.sy}; }
+  if(!open){
+    const w=cyc?168:Math.max(112,n.label.length*7.6+34), h=cyc?46:32;
+    return {x:LX[n.layer]-w/2,y:n.y-h/2,w,h,cx:LX[n.layer],cy:n.y};
+  }
+  const cols=Math.min(5,n.files.length), rows=Math.ceil(n.files.length/cols);
+  const cw = tier()===2 ? 78 : 24;
+  const w=Math.max(cols*cw+26, cyc?168:132), h=rows*(tier()===2?20:22)+(cyc?58:44);
+  return {x:LX[n.layer]-w/2,y:n.y-h/2,w,h,cx:LX[n.layer],cy:n.y};
+}
+function anchor(b,o){const dx=o.cx-b.cx,dy=o.cy-b.cy,hw=b.w/2+5,hh=b.h/2+5;
+  const s=Math.min(Math.abs(dx)?hw/Math.abs(dx):1e9,Math.abs(dy)?hh/Math.abs(dy):1e9);
+  return {x:b.cx+dx*s,y:b.cy+dy*s}}
+
+/* satellite arc for isolated nodes — deliberate placement, not wall-clamping */
+function placeSatellites(){
+  const iso=N.filter(n=>n.isolated&&vis(n));
+  const cx=380, cy=300, r=330;
+  iso.forEach((n,i)=>{
+    const a=(-38+ i*22)*Math.PI/180;
+    n.sx=cx+r*Math.cos(a)*1.05; n.sy=cy+r*Math.sin(a)*1.35;
+  });
+}
+
+function renderMap(){
+  placeSatellites();
+  cv.innerHTML=''; cv.setAttribute('viewBox','0 0 760 620');
+  const d=el('defs');
+  d.innerHTML=`<marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M2 2L8 5L2 8" fill="none" stroke="rgba(233,241,238,.45)" stroke-width="1.4" stroke-linecap="round"/></marker>
+  <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M2 2L8 5L2 8" fill="none" stroke="#3DDC97" stroke-width="1.6" stroke-linecap="round"/></marker>`;
+  cv.appendChild(d);
+  const g=el('g',{transform:`translate(${T.x},${T.y}) scale(${T.k})`}); cv.appendChild(g);
+
+  for(const k in REG){const r=REG[k];
+    g.appendChild(el('rect',{x:24,y:r.y,width:712,height:r.h,rx:16,fill:'none',stroke:'var(--edge)','stroke-width':.6,'stroke-dasharray':'5 5'}));
+    g.appendChild(txt(el('text',{x:38,y:r.y+19,fill:'var(--fg-3)','font-family':'var(--mono)','font-size':9.5,'letter-spacing':1.5}),REG[k].label));}
+
+  const B={}; N.forEach(n=>{if(vis(n))B[n.id]=boxOf(n)});
+  const mx=Math.max(...E.map(e=>e[2]));
+
+  E.forEach(([s,t,w])=>{
+    if(!B[s]||!B[t])return;
+    const a=anchor(B[s],B[t]), b=anchor(B[t],B[s]);
+    const len=Math.hypot(b.x-a.x,b.y-a.y);
+    const act = !hover || hover===s || hover===t;
+    const mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2-Math.min(42,len*.13)};
+    g.appendChild(el('path',{d:`M${a.x} ${a.y} Q${mid.x} ${mid.y} ${b.x} ${b.y}`,fill:'none',
+      stroke: hover&&act?'var(--jade)':'rgba(233,241,238,.5)',
+      'stroke-width':0.8+(w/mx)*3.4,
+      /* long edges fainter — Holten */
+      opacity: act ? (hover?0.75:0.46-Math.min(.2,len/3400)) : 0.07,
+      'marker-end': act?(hover?'url(#a2)':'url(#a1)'):''}));
+    if(hover&&act) g.appendChild(txt(el('text',{x:mid.x,y:mid.y-4,fill:'var(--jade)','font-family':'var(--mono)','font-size':9,'text-anchor':'middle'}),w));
+  });
+
+  N.forEach(n=>{
+    if(!vis(n))return;
+    const b=B[n.id], open=expanded.has(n.id), K=KIND[n.kind], cyc=!!n.cycle;
+    const linked = hover && (hover===n.id || E.some(([s,t])=>(s===hover&&t===n.id)||(t===hover&&s===n.id)));
+    const grp=el('g',{style:'cursor:pointer',opacity: hover&&!linked?.3:1});
+
+    grp.appendChild(el('rect',{x:b.x,y:b.y,width:b.w,height:b.h,rx:9,
+      fill: sel===n.id?'rgba(61,220,151,.15)':'rgba(255,255,255,.07)',
+      stroke: sel===n.id?'var(--jade)':'var(--edge-2)','stroke-width':sel===n.id?1.7:1}));
+    /* cycle groups: doubled border, not a different colour — colour is doing kind */
+    if(cyc) grp.appendChild(el('rect',{x:b.x+3.5,y:b.y+3.5,width:b.w-7,height:b.h-7,rx:6,fill:'none',stroke:'var(--edge-2)','stroke-width':.8,'stroke-dasharray':'3 3'}));
+    grp.appendChild(el('rect',{x:b.x,y:b.y,width:3.5,height:b.h,rx:2,fill:K.c,opacity:.92}));
+
+    if(tier()>0 || open){
+      const ly = open ? b.y+(cyc?20:19) : (cyc? b.cy-6 : b.cy+4);
+      grp.appendChild(txt(el('text',{x:b.x+13,y:ly,fill:'var(--fg)','font-family':'var(--sans)','font-size':cyc?12:12.5,'font-weight':600}),n.label));
+      if(cyc) grp.appendChild(txt(el('text',{x:b.x+13,y:ly+14,fill:'var(--rose)','font-family':'var(--mono)','font-size':8.5,'letter-spacing':.9}),'CYCLE GROUP · 2 DIRS'));
+      grp.appendChild(txt(el('text',{x:b.x+b.w-11,y:open?b.y+(cyc?20:19):(cyc?b.cy-6:b.cy+4),fill:'var(--fg-3)','font-family':'var(--mono)','font-size':9.5,'text-anchor':'end'}),open?'−':n.files.length));
+    }
+
+    if(open){
+      const cols=Math.min(5,n.files.length), t2=tier()===2;
+      n.files.forEach((f,i)=>{
+        const fx=b.x+ (t2?16:18) +(i%cols)*(t2?78:24), fy=b.y+(cyc?52:38)+Math.floor(i/cols)*(t2?20:22);
+        const on = selFile&&selFile.dir===n.id&&selFile.name===f;
+        const c=el('circle',{cx:t2?fx+4:fx,cy:fy,r:on?6.5:4.5,fill:on?'var(--jade)':'rgba(233,241,238,.46)',style:'cursor:pointer'});
+        c.addEventListener('click',ev=>{ev.stopPropagation();selFile={dir:n.id,name:f};sel=null;setView('focus')});
+        c.appendChild(txt(el('title'),f)); grp.appendChild(c);
+        /* tier 2: file labels, the reference's closest zoom level */
+        if(t2){const lb=txt(el('text',{x:fx+12,y:fy+3,fill:on?'var(--fg)':'var(--fg-3)','font-family':'var(--mono)','font-size':7.5}),f.length>13?f.slice(0,12)+'…':f);
+          lb.style.pointerEvents='none'; grp.appendChild(lb);}
+      });
+    }
+
+    grp.addEventListener('click',ev=>{ev.stopPropagation();
+      expanded.has(n.id)?expanded.delete(n.id):expanded.add(n.id); sel=n.id; selFile=null; draw()});
+    grp.addEventListener('mouseenter',()=>{hover=n.id;draw()});
+    grp.addEventListener('mouseleave',()=>{hover=null;draw()});
+    g.appendChild(grp);
+  });
+}
+
+/* ───────── focus ───────── */
+function nbrs(f){
+  const dir=f.dir;
+  const inn=E.filter(([,t])=>t===dir).map(([s,,w])=>({dir:s,w}));
+  const out=E.filter(([s])=>s===dir).map(([,t,w])=>({dir:t,w}));
+  const mk=({dir:o,w})=>({dir:o,total:Math.max(1,Math.min(D[o].files.length,Math.round(w/4))),files:D[o].files.slice(0,3)});
+  return {inn:inn.map(mk), out:out.map(mk)};
+}
+function renderFocus(){
+  cv.innerHTML=''; cv.setAttribute('viewBox','0 0 1000 600');
+  const g=el('g',{transform:`translate(${T.x},${T.y}) scale(${T.k})`}); cv.appendChild(g);
+  if(!selFile){g.appendChild(txt(el('text',{x:500,y:300,fill:'var(--fg-3)','font-family':'var(--mono)','font-size':11.5,'text-anchor':'middle'}),'Search a file, or expand a directory and click one'));return}
+  const {inn,out}=nbrs(selFile), my=300, cb={x:400,y:my-26,w:200,h:52};
+  const lay=(a,x,side)=>{const sp=Math.min(430,a.length*78);
+    return a.map((n,i)=>({...n,x,y:my-sp/2+(sp/Math.max(1,a.length))*(i+.5),w:196,h:46,side}))};
+  const L=lay(inn,64,'in'), R=lay(out,740,'out');
+  [...L,...R].forEach(n=>{
+    const f=n.side==='in'?{x:n.x+n.w,y:n.y}:{x:cb.x+cb.w,y:my};
+    const t=n.side==='in'?{x:cb.x,y:my}:{x:n.x,y:n.y}, m=(f.x+t.x)/2;
+    g.appendChild(el('path',{d:`M${f.x} ${f.y} C${m} ${f.y} ${m} ${t.y} ${t.x} ${t.y}`,fill:'none',
+      stroke:n.side==='in'?'rgba(79,199,212,.55)':'rgba(61,220,151,.6)','stroke-width':1.2+Math.min(3,n.total/3),'marker-end':'url(#a1)'}));
+  });
+  const d=el('defs'); d.innerHTML=`<marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M2 2L8 5L2 8" fill="none" stroke="rgba(233,241,238,.5)" stroke-width="1.4"/></marker>`; cv.appendChild(d);
+  const card=(n,ac)=>{const grp=el('g',{style:'cursor:pointer'});
+    grp.appendChild(el('rect',{x:n.x,y:n.y-n.h/2,width:n.w,height:n.h,rx:8,fill:'rgba(255,255,255,.06)',stroke:'var(--edge-2)'}));
+    grp.appendChild(el('rect',{x:n.x,y:n.y-n.h/2,width:3,height:n.h,rx:2,fill:ac}));
+    grp.appendChild(txt(el('text',{x:n.x+12,y:n.y-5,fill:'var(--fg)','font-family':'var(--mono)','font-size':10.5}),D[n.dir].label+'/'));
+    grp.appendChild(txt(el('text',{x:n.x+12,y:n.y+11,fill:'var(--fg-3)','font-family':'var(--mono)','font-size':9}),n.total>1?'× '+n.total+' files':n.files[0]||''));
+    grp.addEventListener('click',()=>{selFile={dir:n.dir,name:n.files[0]};draw()});
+    return grp};
+  L.forEach(n=>g.appendChild(card(n,'var(--cyan)'))); R.forEach(n=>g.appendChild(card(n,'var(--jade)')));
+  g.appendChild(el('rect',{x:cb.x,y:cb.y,width:cb.w,height:cb.h,rx:10,fill:'rgba(61,220,151,.15)',stroke:'var(--jade)','stroke-width':1.7}));
+  g.appendChild(txt(el('text',{x:cb.x+cb.w/2,y:my-3,fill:'var(--fg)','font-family':'var(--mono)','font-size':11.5,'text-anchor':'middle'}),selFile.name));
+  g.appendChild(txt(el('text',{x:cb.x+cb.w/2,y:my+14,fill:'var(--fg-3)','font-family':'var(--mono)','font-size':9,'text-anchor':'middle'}),D[selFile.dir].path));
+  g.appendChild(txt(el('text',{x:64,y:50,fill:'var(--cyan)','font-family':'var(--mono)','font-size':9.5,'letter-spacing':1.3}),'IMPORTED BY'));
+  g.appendChild(txt(el('text',{x:936,y:50,fill:'var(--jade)','font-family':'var(--mono)','font-size':9.5,'letter-spacing':1.3,'text-anchor':'end'}),'IMPORTS'));
+}
+
+/* ───────── matrix (uncondensed — this is where cycles are visible) ───────── */
+const MXD=[
+ {s:'app',p:'backend/app'},{s:'api',p:'backend/app/api'},{s:'agents',p:'backend/app/agents'},
+ {s:'services',p:'backend/app/services'},{s:'codebase',p:'…/codebase'},{s:'core',p:'backend/app/core'},
+ {s:'db',p:'backend/app/db'},{s:'tests',p:'backend/tests'},{s:'scripts',p:'backend/scripts'},
+ {s:'alembic',p:'…/versions'},{s:'src',p:'frontend/src'},{s:'pages',p:'…/pages'},
+ {s:'components',p:'…/components'},{s:'store',p:'…/store'},{s:'lib',p:'…/lib'},{s:'voice',p:'voice_listener'}];
+const MXE=[[0,1,16],[0,5,6],[0,6,4],[1,5,38],[1,6,52],[1,3,24],[1,4,9],[1,2,6],[3,5,14],[3,6,18],[3,2,4],
+ [2,3,6],[2,5,3],[4,5,11],[4,6,13],[5,6,2],[6,5,1],[7,1,12],[7,3,9],[7,4,31],[7,5,8],[7,6,16],
+ [8,4,7],[8,5,3],[8,6,5],[9,6,6],[9,5,4],[10,11,8],[10,13,3],[11,14,14],[11,13,9],[11,12,11],
+ [12,14,8],[12,13,4],[13,14,3],[14,13,2]];
+function renderMatrix(){
+  const M=MXD.map(()=>MXD.map(()=>0)); MXE.forEach(([i,j,w])=>{M[i][j]=w});
+  const max=Math.max(...MXE.map(e=>e[2]));
+  let h='<div class="mnote">ROWS DEPEND ON COLUMNS · OUTLINED PAIRS ARE CYCLES · 3 FOUND</div><table class="mx"><tr><th></th>';
+  MXD.forEach(d=>h+=`<th class="cl"><div>${d.s}</div></th>`); h+='</tr>';
+  MXD.forEach((r,i)=>{h+=`<tr><th class="rw">${r.s}</th>`;
+    MXD.forEach((c,j)=>{const v=M[i][j],cy=v&&M[j][i];
+      if(i===j){h+='<td class="self"></td>';return}
+      h+=`<td class="${cy?'cyc':''}" style="background:${v?`rgba(61,220,151,${.16+(v/max)*.84})`:'transparent'}" title="${r.s} → ${c.s}: ${v}">${v>=8?v:''}</td>`});
+    h+='</tr>'});
+  document.getElementById('mwrap').innerHTML=h+'</table>';
+}
+
+/* ───────── chips, side, chrome ───────── */
+function renderChips(){
+  const c=document.getElementById('chips');
+  const cnt=k=>N.filter(n=>n.kind===k).length;
+  const total=N.length, on=N.filter(vis).length;
+  let h=`<button class="chip ${kinds.size===5?'on':''}" data-k="__all"><i style="background:var(--fg-3)"></i>All <b>${total}</b></button>`;
+  for(const k in KIND) if(cnt(k)) h+=`<button class="chip ${kinds.has(k)?'on':''}" data-k="${k}"><i style="background:${KIND[k].c}"></i>${KIND[k].l} <b>${cnt(k)}</b></button>`;
+  h+=`<span class="sp"></span><span class="hint">${on} SHOWN · EDGE WIDTH = IMPORT COUNT · LEFT→RIGHT = DEPENDS ON</span>`;
+  c.innerHTML=h;
+  c.querySelectorAll('[data-k]').forEach(b=>b.addEventListener('click',()=>{
+    const k=b.dataset.k;
+    if(k==='__all') kinds = kinds.size===5 ? new Set(['entry','source']) : new Set(Object.keys(KIND));
+    else { kinds.has(k)?kinds.delete(k):kinds.add(k); if(!kinds.size)kinds=new Set(Object.keys(KIND)); }
+    draw();
+  }));
+}
+function renderSide(){
+  const s=document.getElementById('side');
+  if(selFile){
+    const {inn,out}=nbrs(selFile);
+    const ti=inn.reduce((a,b)=>a+b.total,0), to=out.reduce((a,b)=>a+b.total,0);
+    let mm='graph LR\n  T["'+selFile.name+'"]\n';
+    inn.forEach((n,i)=>mm+=`  A${i}["${D[n.dir].label}/ ×${n.total}"] --> T\n`);
+    out.forEach((n,i)=>mm+=`  T --> B${i}["${D[n.dir].label}/ ×${n.total}"]\n`);
+    s.innerHTML=`<h3>File</h3><div class="path">${D[selFile.dir].path}/<br><b>${selFile.name}</b></div>
+      <dl class="stats"><div><dt>Imported by</dt><dd>${ti}</dd></div><div><dt>Imports</dt><dd>${to}</dd></div></dl>
+      <div class="lst"><h4>Siblings</h4>${D[selFile.dir].files.slice(0,10).map(f=>`<button data-f="${f}">${f}</button>`).join('')}</div>
+      <h3>Mermaid — aggregated</h3><div class="mm">${mm.replace(/</g,'&lt;')}</div>
+      <p class="p" style="margin-top:10px">${ti} importers collapse to ${inn.length} nodes.</p>`;
+    s.querySelectorAll('[data-f]').forEach(b=>b.addEventListener('click',()=>{selFile={dir:selFile.dir,name:b.dataset.f};draw()}));
+    return;
+  }
+  if(sel){
+    const n=D[sel], out=E.filter(([a])=>a===sel), inn=E.filter(([,b])=>b===sel);
+    s.innerHTML=`<h3>${n.cycle?'Cycle group':'Directory'}</h3><div class="path">${n.path}</div>
+      ${n.cycle?`<div class="warn"><b>Dependency cycle.</b> ${n.cycle[0].split('/').pop()} and ${n.cycle[1].split('/').pop()} import each other, so they condense into one layout node. Worth looking at which direction is the accident.</div>`:''}
+      <dl class="stats"><div><dt>Files</dt><dd>${n.files.length}</dd></div><div><dt>Kind</dt><dd style="font-size:12px">${KIND[n.kind].l}</dd></div>
+      <div><dt>Depends on</dt><dd>${out.length}</dd></div><div><dt>Used by</dt><dd>${inn.length}</dd></div></dl>
+      <div class="lst"><h4>Depends on</h4>${out.length?out.map(([,t,w])=>`<button>${D[t].label} <span style="color:var(--fg-3)">· ${w}</span></button>`).join(''):'<p class="p">Nothing internal — terminal dependency</p>'}</div>
+      <div class="lst"><h4>Files</h4>${n.files.map(f=>`<button data-f="${f}">${f}</button>`).join('')}</div>`;
+    s.querySelectorAll('[data-f]').forEach(b=>b.addEventListener('click',()=>{selFile={dir:sel,name:b.dataset.f};sel=null;setView('focus')}));
+    return;
+  }
+  s.innerHTML=`<h3>Nothing selected</h3>
+    <p class="p">21 directories, not 171 files. Layout is by dependency layer — <b>left to right reads as "depends on"</b>, so terminal dependencies sit at the far right.</p>
+    <p class="p">Three boxes are <b>cycle groups</b>: directories that import each other, condensed into one layout node and marked with a doubled border.</p>
+    <p class="p"><b>Hover</b> isolates a box's edges with import counts. <b>Click</b> expands it in place — nothing else moves. <b>Zoom past 145%</b> and file names appear.</p>
+    <p class="p">Chips above filter and show composition. <b>◉</b> hides weakly connected directories. Isolated ones sit on the arc, placed deliberately rather than piled against a wall.</p>`;
+}
+function renderChrome(){
+  const c=document.getElementById('crumb');
+  if(view==='focus'&&selFile) c.innerHTML=`<button id="bk">← architecture</button> / <b>${D[selFile.dir].label}</b> / <b>${selFile.name}</b>`;
+  else if(view==='map'&&expanded.size) c.innerHTML=`<b>${expanded.size}</b> EXPANDED <button id="cl">collapse all</button>`;
+  else c.innerHTML='';
+  const bk=document.getElementById('bk'); if(bk)bk.onclick=()=>setView('map');
+  const cl=document.getElementById('cl'); if(cl)cl.onclick=()=>{expanded.clear();draw()};
+  document.getElementById('tierlbl').textContent = view==='map' ? ['DETAIL: SHAPES','DETAIL: LABELS','DETAIL: FILES'][tier()] : '';
+  document.getElementById('core').classList.toggle('on',coreOnly);
+}
+function draw(){
+  const m=view==='matrix';
+  cv.style.display=m?'none':'block';
+  document.getElementById('mwrap').style.display=m?'block':'none';
+  if(view==='map')renderMap(); else if(view==='focus')renderFocus(); else renderMatrix();
+  renderChips(); renderSide(); renderChrome();
+  document.getElementById('zl').textContent=Math.round(T.k*100)+'%';
+}
+function setView(v){view=v;T={k:1,x:0,y:0};
+  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));draw()}
+
+/* ───────── zoom / pan ───────── */
+function zoom(f,px,py){
+  const k=Math.max(.4,Math.min(3.2,T.k*f)), r=cv.getBoundingClientRect();
+  const vb=cv.getAttribute('viewBox').split(' ').map(Number);
+  const sx=vb[2]/r.width, sy=vb[3]/r.height;
+  const X=(px??r.width/2)*sx, Y=(py??r.height/2)*sy;
+  T.x=X-((X-T.x)/T.k)*k; T.y=Y-((Y-T.y)/T.k)*k; T.k=k; draw();
+}
+cv.addEventListener('wheel',e=>{e.preventDefault();const r=cv.getBoundingClientRect();
+  zoom(e.deltaY<0?1.13:1/1.13,e.clientX-r.left,e.clientY-r.top)},{passive:false});
+cv.addEventListener('mousedown',e=>{drag={x:e.clientX,y:e.clientY,tx:T.x,ty:T.y};cv.classList.add('dragging')});
+window.addEventListener('mousemove',e=>{if(!drag)return;const r=cv.getBoundingClientRect(),vb=cv.getAttribute('viewBox').split(' ').map(Number);
+  T.x=drag.tx+(e.clientX-drag.x)*(vb[2]/r.width); T.y=drag.ty+(e.clientY-drag.y)*(vb[3]/r.height); draw()});
+window.addEventListener('mouseup',()=>{drag=null;cv.classList.remove('dragging')});
+cv.addEventListener('click',()=>{if(view==='map'){sel=null;draw()}});
+document.getElementById('zi').onclick=()=>zoom(1.22);
+document.getElementById('zo').onclick=()=>zoom(1/1.22);
+document.getElementById('zr').onclick=()=>{T={k:1,x:0,y:0};draw()};
+document.getElementById('core').onclick=()=>{coreOnly=!coreOnly;draw()};
+document.getElementById('fs').onclick=()=>{const s=document.getElementById('stage');
+  document.fullscreenElement?document.exitFullscreen():s.requestFullscreen&&s.requestFullscreen()};
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>setView(b.dataset.v));
+
+const q=document.getElementById('q'), hits=document.getElementById('hits');
+q.addEventListener('input',()=>{const v=q.value.trim().toLowerCase();
+  if(v.length<2){hits.classList.remove('open');return}
+  const m=FILES.filter(f=>f.path.toLowerCase().includes(v)).slice(0,12);
+  hits.innerHTML=m.length?m.map(f=>`<button data-d="${f.dir}" data-n="${f.name}">${f.path}</button>`).join(''):'<button style="color:var(--fg-3)">No match</button>';
+  hits.classList.add('open');
+  hits.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{selFile={dir:b.dataset.d,name:b.dataset.n};hits.classList.remove('open');q.value='';setView('focus')});
+});
+document.addEventListener('click',e=>{if(!e.target.closest('.search'))hits.classList.remove('open')});
+document.addEventListener('keydown',e=>{
+  if(e.key==='/'&&document.activeElement!==q){e.preventDefault();q.focus()}
+  if(e.key==='Escape'){hits.classList.remove('open');q.blur()}});
+
+draw();
+</script>

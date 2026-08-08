@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
@@ -351,3 +351,274 @@ class ModuleAssessment(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")  # active|graded
     score: Mapped[int] = mapped_column(Integer, default=0)  # percent
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------- Codebase agent: repo registration and acquisition (Phase A) ----------------
+
+
+class Repo(Base):
+    """A registered repository -- either cloned into the local cache or an existing
+    local checkout used in place. Never modified for `local` repos; `clone` repos
+    are the codebase agent's own LRU-evicted cache, not a durable ledger."""
+
+    __tablename__ = "repos"
+    __table_args__ = (UniqueConstraint("host", "owner", "name", name="uq_repo_host_owner_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host: Mapped[str] = mapped_column(String(255))
+    owner: Mapped[str] = mapped_column(String(255), default="")
+    name: Mapped[str] = mapped_column(String(255))
+    url: Mapped[str] = mapped_column(String(1000), nullable=True, default=None)
+    local_path: Mapped[str] = mapped_column(String(1000))
+    source_kind: Mapped[str] = mapped_column(String(20))  # clone|local
+    default_branch: Mapped[str] = mapped_column(String(255), default="")
+    visibility: Mapped[str] = mapped_column(String(20), default="unknown")  # public|private|unknown
+    source_root: Mapped[str] = mapped_column(String(500), nullable=True, default=None)
+    allow_external_llm: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_ingested_sha: Mapped[str] = mapped_column(String(64), nullable=True, default=None)
+    last_ingested_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Phase E4 refinement: per-repo override for entry_detection's seed
+    # tier -- prefix-matched (unlike config/entry_detection.yaml's
+    # seed_ineligible_path_markers, which is substring-matched and
+    # ecosystem-wide). Every repo has SOME auxiliary surface no generic
+    # marker catches (a worker, a cron script, a dev harness); this is a
+    # permanent category of exception, not a repo-1 quirk, so it lives on
+    # the repo row rather than being folded into the global config.
+    seed_exclude_paths: Mapped[list] = mapped_column(JSON, default=list)
+    # Phase E2.3 incident tripwire (ranking.py's resolution-rate collapse
+    # check): the HIGHEST Python resolution rate ever recorded for this repo
+    # across rank runs that completed without tripping -- a true high-water
+    # mark, not the last-observed value. Phase F7 correction: storing
+    # "last observed" let a second consecutive bad run re-baseline against
+    # an already-collapsed rate and pass silently (each individual step's
+    # relative drop looks fine measured against its own already-degraded
+    # predecessor, even though the cumulative drop from the real peak is
+    # severe) -- comparing against the all-time high closes that gap. Null
+    # until the first rank run for this repo. Updated by ranking.py, not
+    # ingest.py -- the collapse this exists to catch was observed by a RANK
+    # read, so that's where the comparison (and the refusal) belongs.
+    python_resolution_high_water_mark: Mapped[float] = mapped_column(Float, nullable=True, default=None)
+    # Phase F7 incident (2nd hypothesis): ingest.py's stage 2 Python root
+    # promotion returning EMPTY (evidence pool empty, thresholds not
+    # cleared, whatever the cause) silently collapses resolution to the
+    # bare ["", "src"] fallback for every unresolved absolute import, with
+    # no exception raised -- deterministic, but invisible under a rank-time
+    # check alone since ranking never sees "promotion" as a concept. Null
+    # until Python root promotion has run at least once for this repo
+    # (distinct from "[]", which means promotion ran and legitimately
+    # promoted nothing, e.g. every absolute import already resolved in
+    # stage 1). Updated by ingest.py, not ranking.py -- this failure mode
+    # is an ingest-time fact, unlike python_resolution_high_water_mark above.
+    last_promoted_python_roots: Mapped[list] = mapped_column(JSON, nullable=True, default=None)
+    # Phase G1: whether the LAST rank run that computed git history at all
+    # (legacy_signal_snapshot -- weighted_pagerank never touches this) found
+    # history unavailable. Repo-wide, not file-level or scorer-level: one
+    # `git log` call per rank run determines this for every file
+    # simultaneously, regardless of which scorer triggered the run. Used to
+    # live on CodeFileRank, duplicated once per file per scorer (hundreds of
+    # copies of the same single boolean, no mechanism forcing them to
+    # agree). Nullable: None means no history-computing rank run has ever
+    # completed for this repo.
+    reduced_confidence: Mapped[bool] = mapped_column(Boolean, nullable=True, default=None)
+
+
+# ---------------- Codebase agent: parse + import graph (Phase B) ----------------
+
+
+class CodeFile(Base):
+    """One row per source file at last successful parse. `content_sha256` is the
+    re-ingest cache key -- unchanged hash means the file is not re-parsed."""
+
+    __tablename__ = "code_files"
+    __table_args__ = (UniqueConstraint("repo_id", "path", name="uq_code_file_repo_path"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), index=True)
+    path: Mapped[str] = mapped_column(String(1000))  # relative to repo local_path, POSIX separators
+    language: Mapped[str] = mapped_column(String(20))  # python|typescript|tsx|javascript
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    line_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_parsed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Phase F2: a multiplicative scoring prior -- category is a fact about
+    # the code (numeric prior values are tunable, resolved from
+    # config/node_priors.yaml at scoring time, not stored here -- same
+    # kind/weight split as CodeImport.kind). One of node_priors.ALL_CATEGORIES.
+    prior_category: Mapped[str] = mapped_column(String(20), default="source")
+    # How prior_category was determined:
+    #   "pattern"    -- filename/path pattern (config, migration, generated)
+    #   "structural" -- file-local structural fact (barrel; later, E4's
+    #                   positive entry signals once that lands)
+    #   "graph"      -- depends on current fan_in, recomputed at every rank
+    #                   run (see ranking.py) since it can go stale without
+    #                   this file itself changing. Only rows marked "graph"
+    #                   are ever touched by that write-back -- this is the
+    #                   guard against ranking clobbering E4's classification
+    #                   once entry detection becomes structural.
+    prior_source: Mapped[str] = mapped_column(String(20), default="graph")
+    # Phase G1: ranking signals that are properties of the FILE, not of
+    # whichever scorer last computed them -- fan_in/fan_out come from the
+    # same resolved import graph regardless of scorer, is_entry_point from
+    # the same entry_detection call, and commit_count/distinct_authors/
+    # days_since_last_change from one repo-wide `git log` call independent
+    # of which scorer triggered it. All five used to live on CodeFileRank,
+    # duplicated once per (file, scorer) with no mechanism forcing
+    # agreement -- exactly what let one scorer's row show real commit
+    # history and another's show null for the same file. Written by
+    # whichever rank_repo*/rank_repo_rrf/rank_repo_weighted_pagerank run
+    # last computed them; every scorer that computes a given signal
+    # computes the identical value, so it doesn't matter which one wins the
+    # write in a given run -- only weighted_pagerank ever writes fan_in/
+    # fan_out/is_entry_point without also writing the three history fields,
+    # since its formula has no history term at all (see ranking.py).
+    # Nullable throughout: None means no rank run has computed this yet,
+    # not "confirmed zero/false".
+    #
+    # is_entry_point sits here rather than being derived from prior_category
+    # above, deliberately: prior_category is a one-time classification that
+    # freezes after a file's first migration (_migrate_entry_priors only
+    # ever touches prior_source == "graph" rows -- see that function), while
+    # is_entry_point here is recomputed fresh from entry_detection on every
+    # single rank run, exactly matching what actually fed that run's score.
+    # Deriving one from the other would silently report the stale value.
+    fan_in: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+    fan_out: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+    is_entry_point: Mapped[bool] = mapped_column(Boolean, nullable=True, default=None)
+    # Phase H1.5: True for a seed-eligible entry, False for a prior-only
+    # entry (earns the entry prior via _migrate_entry_priors but shouldn't
+    # seed PageRank -- see entry_detection._is_seed_eligible), None for a
+    # non-entry file or one no rank run has touched yet -- same nullable
+    # convention as the rest of this block, same "recomputed fresh on every
+    # rank run" treatment as is_entry_point just above, for the same reason
+    # (it comes from the exact same entry_detection call). Added because
+    # GET /repos/{id}/graph's directory-level view (Phase H1) needed the
+    # seed-eligible/prior-only split for its entry-vs-tooling distinction,
+    # and was calling entry_detection live, on every read, to get it --
+    # the same duplicated-computation shape Phase G1 already fixed once
+    # for fan_in/fan_out/commit history (see the block comment above this
+    # one), except this instance was also measurably slow: entry detection
+    # walks the repo's filesystem, so a read endpoint was re-scanning disk
+    # on every request instead of reading what ranking already persisted.
+    seed_eligible: Mapped[bool] = mapped_column(Boolean, nullable=True, default=None)
+    commit_count: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+    distinct_authors: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+    days_since_last_change: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+
+
+class CodeSymbol(Base):
+    __tablename__ = "code_symbols"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    file_id: Mapped[int] = mapped_column(ForeignKey("code_files.id"), index=True)
+    parent_symbol_id: Mapped[int] = mapped_column(ForeignKey("code_symbols.id"), nullable=True, default=None, index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    kind: Mapped[str] = mapped_column(String(20))  # function|class|method
+    signature: Mapped[str] = mapped_column(Text, default="")
+    docstring: Mapped[str] = mapped_column(Text, nullable=True, default=None)
+    line_start: Mapped[int] = mapped_column(Integer)
+    line_end: Mapped[int] = mapped_column(Integer)
+
+
+class CodeImport(Base):
+    """Unified file-level and symbol-level import edges. A file-only import (e.g.
+    `import os`, `import * as ns from "lib"`) has `imported_names == []` and
+    `to_symbol_id == None` even when resolved; a name-level import additionally
+    resolves `to_symbol_id` when the target symbol can be found statically."""
+
+    __tablename__ = "code_imports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), index=True)
+    from_file_id: Mapped[int] = mapped_column(ForeignKey("code_files.id"), index=True)
+    raw_specifier: Mapped[str] = mapped_column(String(1000))
+    imported_names: Mapped[list] = mapped_column(JSON, default=list)
+    to_file_id: Mapped[int] = mapped_column(ForeignKey("code_files.id"), nullable=True, default=None, index=True)
+    to_symbol_id: Mapped[int] = mapped_column(ForeignKey("code_symbols.id"), nullable=True, default=None)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    line_number: Mapped[int] = mapped_column(Integer, default=0)
+    # Phase F1: a categorical fact about the code (occurrence-count proxy for
+    # coupling strength -- see app/services/codebase/edge_weights.py),
+    # computed once at parse time. Deliberately NOT a stored weight float --
+    # the numeric weight per kind is a tunable parameter resolved from
+    # config/edge_weights.yaml at scoring time, so retuning it never requires
+    # re-parsing. One of edge_weights.ALL_KINDS.
+    kind: Mapped[str] = mapped_column(String(30), default="light_use")
+    # Phase E2.3: set only when resolved is True and something about HOW it
+    # resolved is worth a second look -- null otherwise, never a separate
+    # boolean, so the reason is always machine-readable without knowing
+    # which language produced the edge. "root_fallback" (Python): the
+    # winning root wasn't the importing file's own nearest promoted root --
+    # a real fallback occurred, not the expected case. "workspace_boundary"
+    # (TS/JS): the resolved target sits in a different declared
+    # package.json workspace than the importer -- a direct cross-package
+    # import bypassing whatever public entry point that package meant to
+    # expose.
+    cross_root_kind: Mapped[str] = mapped_column(String(30), nullable=True, default=None)
+
+
+# ---------------- Codebase agent: ranking (Phase C) ----------------
+
+
+class CodeFileRank(Base):
+    """One row per (CodeFile, scorer), replaced wholesale for that scorer on
+    every rank run for it -- ranking is decoupled from ingest so re-ranking
+    with tuned weights never requires re-parsing.
+
+    Phase G1: holds ONLY values that genuinely differ by scorer -- score,
+    rank, and pagerank. Every field that's a property of the FILE rather
+    than of whichever scorer computed it (fan_in, fan_out, is_entry_point,
+    commit_count, distinct_authors, days_since_last_change) moved to
+    CodeFile; reduced_confidence (repo-wide, not even file-level) moved to
+    Repo. Storing them here, once per (file, scorer), was duplicated
+    storage with no mechanism forcing the copies to agree -- diagnosed live
+    on /repos/:id, which read this table without filtering by scorer and
+    showed the same file's commit count as a real number under one scorer
+    and null under another."""
+
+    __tablename__ = "code_file_ranks"
+    __table_args__ = (UniqueConstraint("file_id", "scorer", name="uq_code_file_rank_file_scorer"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), index=True)
+    file_id: Mapped[int] = mapped_column(ForeignKey("code_files.id"), index=True)
+    # Phase F3: which scorer produced this row -- "legacy" (the original
+    # weighted-sum composite) or "weighted_pagerank" (Phase F3's seeded,
+    # edge-weighted PageRank). Both can coexist per file; neither scorer's
+    # rank_repo* function ever deletes the other's rows.
+    scorer: Mapped[str] = mapped_column(String(30), default="legacy")
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    # Phase G1: 1-indexed position among ALL of this repo's files under
+    # this scorer, assigned once at write time from the same sort order the
+    # rank run itself produced -- never recomputed from a filtered or
+    # re-sorted view. A file's rank is its position in the whole repo, not
+    # among whatever subset happens to be currently displayed.
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    pagerank: Mapped[float] = mapped_column(Float, default=0.0)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------- Codebase agent: background jobs (Phase D) ----------------
+
+
+class RepoJob(Base):
+    """A background resync+ingest+rank run for one repo. Runs in its own thread
+    with its own DB session (see app/services/codebase/jobs.py) -- this row IS
+    the state a reconnecting SSE client reads, not something held in memory,
+    so the job survives a dropped connection and a page reload can reattach."""
+
+    __tablename__ = "repo_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|running|done|failed
+    stage: Mapped[str] = mapped_column(String(40), default="queued")
+    progress_current: Mapped[int] = mapped_column(Integer, default=0)
+    progress_total: Mapped[int] = mapped_column(Integer, default=0)
+    message: Mapped[str] = mapped_column(String(500), default="")
+    result: Mapped[dict] = mapped_column(JSON, nullable=True, default=None)
+    error: Mapped[str] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)
+    finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)

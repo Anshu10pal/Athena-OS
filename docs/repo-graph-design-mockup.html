@@ -1,0 +1,502 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repo graph — interactive design mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --void:#070B0A; --ink:#0B100F;
+  --jade:#3DDC97; --cyan:#4FC7D4; --amber:#E0B450; --rose:#E06C75;
+  --fg:#E9F1EE; --fg-2:rgba(233,241,238,.62); --fg-3:rgba(233,241,238,.40);
+  --glass:rgba(255,255,255,.045); --glass-2:rgba(255,255,255,.08);
+  --edge:rgba(255,255,255,.09); --edge-2:rgba(255,255,255,.18);
+  --sans:'Instrument Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--void);color:var(--fg);font-family:var(--sans);-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--jade);outline-offset:2px;border-radius:4px}
+
+.shell{display:flex;flex-direction:column;height:100vh}
+
+/* header */
+.top{display:flex;align-items:center;gap:20px;padding:12px 20px;border-bottom:1px solid var(--edge);flex-shrink:0}
+.repo{font-size:15px;font-weight:600;letter-spacing:-.02em}
+.repo span{font-family:var(--mono);font-size:11px;color:var(--fg-3);margin-left:10px;letter-spacing:.06em}
+.tabs{display:flex;gap:3px;background:var(--glass);padding:3px;border-radius:9px;border:1px solid var(--edge)}
+.tabs button{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:7px 14px;border-radius:6px;color:var(--fg-3);transition:all .16s}
+.tabs button:hover{color:var(--fg-2)}
+.tabs button.on{background:var(--jade);color:#04120C;font-weight:500}
+.search{margin-left:auto;position:relative}
+.search input{width:230px;padding:8px 12px 8px 32px;border-radius:8px;border:1px solid var(--edge);background:var(--glass);font-size:13px}
+.search input::placeholder{color:var(--fg-3)}
+.search svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.4}
+.hits{position:absolute;top:38px;left:0;right:0;background:rgba(12,18,17,.97);border:1px solid var(--edge);border-radius:8px;max-height:260px;overflow:auto;z-index:20;display:none}
+.hits.open{display:block}
+.hits button{display:block;width:100%;text-align:left;padding:8px 12px;font-family:var(--mono);font-size:11px;color:var(--fg-2);border-bottom:1px solid var(--edge)}
+.hits button:hover{background:var(--glass);color:var(--fg)}
+
+/* body */
+.body{flex:1;display:flex;min-height:0}
+.stage{flex:1;position:relative;min-width:0;overflow:hidden}
+.stage svg.canvas{width:100%;height:100%;display:block;cursor:grab}
+.stage svg.canvas.dragging{cursor:grabbing}
+
+.hud{position:absolute;left:16px;bottom:16px;display:flex;gap:8px;align-items:center;z-index:10}
+.hud button{width:30px;height:30px;border:1px solid var(--edge);border-radius:7px;background:rgba(11,16,15,.85);backdrop-filter:blur(8px);font-family:var(--mono);font-size:13px;color:var(--fg-2)}
+.hud button:hover{background:var(--glass-2);color:var(--fg)}
+.hud .zl{font-family:var(--mono);font-size:10px;color:var(--fg-3);letter-spacing:.08em;padding-left:6px}
+
+.crumb{position:absolute;left:16px;top:14px;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--fg-3);z-index:10}
+.crumb b{color:var(--fg-2);font-weight:400}
+.crumb button{color:var(--jade);text-decoration:underline;font:inherit}
+
+.legend{position:absolute;right:16px;top:14px;display:flex;flex-wrap:wrap;gap:12px;max-width:340px;justify-content:flex-end;z-index:10;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;color:var(--fg-3)}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:0}
+
+/* side panel */
+.side{width:320px;flex-shrink:0;border-left:1px solid var(--edge);background:var(--ink);overflow-y:auto;padding:18px 20px}
+.side h3{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--jade);margin-bottom:12px}
+.side .path{font-family:var(--mono);font-size:12px;color:var(--fg);word-break:break-all;line-height:1.55;margin-bottom:16px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--edge);border:1px solid var(--edge);border-radius:8px;overflow:hidden;margin-bottom:18px}
+.stats div{background:var(--ink);padding:10px 12px}
+.stats dt{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3);margin-bottom:4px}
+.stats dd{font-size:16px;font-weight:600;letter-spacing:-.02em}
+.side .lst{margin-bottom:18px}
+.side .lst h4{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3);margin-bottom:8px}
+.side .lst button{display:block;width:100%;text-align:left;font-family:var(--mono);font-size:11px;color:var(--fg-2);padding:5px 8px;border-radius:5px;margin-bottom:2px}
+.side .lst button:hover{background:var(--glass);color:var(--fg)}
+.side .empty{font-size:12px;color:var(--fg-3);font-style:normal}
+.mm{background:rgba(0,0,0,.35);border:1px solid var(--edge);border-radius:8px;padding:10px 12px;font-family:var(--mono);font-size:10px;line-height:1.6;color:var(--fg-2);white-space:pre;overflow-x:auto}
+.mmh{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.mmh button{font-family:var(--mono);font-size:10px;color:var(--jade)}
+
+/* matrix */
+.mwrap{position:absolute;inset:0;overflow:auto;padding:60px 20px 20px 20px}
+table.mx{border-collapse:collapse;font-family:var(--mono);font-size:10px}
+table.mx th{font-weight:400;color:var(--fg-3);padding:3px 5px;white-space:nowrap}
+table.mx th.rw{text-align:right;position:sticky;left:0;background:var(--void);z-index:2}
+table.mx th.cl{height:112px;vertical-align:bottom;position:sticky;top:0;background:var(--void);z-index:2}
+table.mx th.cl div{writing-mode:vertical-rl;transform:rotate(180deg);text-align:left}
+table.mx td{width:22px;height:22px;border:1px solid rgba(255,255,255,.05);text-align:center;color:#04120C;font-size:9px}
+table.mx tr.hl th.rw{color:var(--jade)}
+table.mx td.self{background:rgba(255,255,255,.045)}
+table.mx td.cyc{outline:1.5px solid var(--rose);outline-offset:-1.5px}
+.mnote{position:absolute;left:20px;top:20px;font-family:var(--mono);font-size:10px;color:var(--fg-3);letter-spacing:.06em}
+</style>
+
+<div class="shell">
+  <div class="top">
+    <div class="repo">Anshu10pal/Athena-OS <span>159 FILES &middot; 16 DIRS</span></div>
+    <div class="tabs" id="tabs">
+      <button data-v="map" class="on">Architecture</button>
+      <button data-v="matrix">Matrix</button>
+      <button data-v="focus">Focus</button>
+    </div>
+    <div class="search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.5-4.5"/></svg>
+      <input id="q" placeholder="Find a file…" autocomplete="off">
+      <div class="hits" id="hits"></div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="stage" id="stage">
+      <div class="crumb" id="crumb"></div>
+      <div class="legend" id="legend"></div>
+      <svg class="canvas" id="cv"></svg>
+      <div class="mwrap" id="mwrap" style="display:none"></div>
+      <div class="hud">
+        <button id="zo" title="Zoom out">&minus;</button>
+        <button id="zi" title="Zoom in">+</button>
+        <button id="zr" title="Reset" style="width:auto;padding:0 10px;font-size:10px;letter-spacing:.08em">RESET</button>
+        <span class="zl" id="zl">100%</span>
+      </div>
+    </div>
+    <div class="side" id="side"></div>
+  </div>
+</div>
+
+<script>
+/* ────────────────────────────────────────────────────────────
+   Representative data. Directory names and dependency edges
+   mirror the real repo; per-file counts are illustrative.
+   ──────────────────────────────────────────────────────────── */
+const DIRS = [
+  {id:'bapp',  label:'backend/app',              short:'app',        x:110, y:210, region:'be', kind:'entry',
+   files:['main.py','run.py']},
+  {id:'bapi',  label:'backend/app/api',          short:'api',        x:340, y:210, region:'be', kind:'src',
+   files:['repos.py','roadmaps.py','modules.py','topics.py','resources.py','content.py','review.py','analytics.py','chat.py','auth.py','voice.py','oratory.py','communication.py','achievements.py','briefing.py','interview.py']},
+  {id:'bag',   label:'backend/app/agents',       short:'agents',     x:600, y:100, region:'be', kind:'src',
+   files:['prompts.py','roadmap_graph.py']},
+  {id:'bsvc',  label:'backend/app/services',     short:'services',   x:600, y:210, region:'be', kind:'src',
+   files:['resolution.py','seed.py','progress.py','uploads.py','text_metrics.py','commander.py','vector_store.py']},
+  {id:'bcb',   label:'backend/app/services/codebase', short:'codebase', x:600, y:330, region:'be', kind:'src',
+   files:['registry.py','git_ops.py','discovery.py','parsing.py','resolve_imports.py','root_discovery.py','edge_weights.py','entry_detection.py','ranking.py','ordering.py','comparison.py','jobs.py','repo_lock.py']},
+  {id:'bcore', label:'backend/app/core',         short:'core',       x:900, y:150, region:'be', kind:'src',
+   files:['config.py','security.py','llm.py']},
+  {id:'bdb',   label:'backend/app/db',           short:'db',         x:900, y:290, region:'be', kind:'src',
+   files:['models.py','database.py','schemas.py']},
+  {id:'btest', label:'backend/tests',            short:'tests',      x:340, y:420, region:'be', kind:'test',
+   files:['test_ingest.py','test_ranking.py','test_jobs.py','test_ordering.py','test_repo_registration.py','test_validate_ranking.py','test_entry_detection.py','test_edge_weights.py','test_root_discovery.py','test_comparison.py','test_repo_lock.py','test_priors.py','test_layers.py','test_neighbors.py']},
+  {id:'bscr',  label:'backend/scripts',          short:'scripts',    x:600, y:445, region:'be', kind:'script',
+   files:['validate_ranking.py','compare_scorers.py','discover_roots.py','export_content.py']},
+  {id:'balem', label:'backend/alembic/versions', short:'migrations', x:900, y:425, region:'be', kind:'mig',
+   files:['204acbf515f7_.py','2efcd4008a96_.py','c0a62258a8f6_.py','e4fb42cd6944_.py','a71bd0c9e12f_.py','f3c2ab8815d4_.py']},
+
+  {id:'fsrc',  label:'frontend/src',             short:'src',        x:110, y:660, region:'fe', kind:'entry',
+   files:['main.tsx','App.tsx']},
+  {id:'fpg',   label:'frontend/src/pages',       short:'pages',      x:340, y:660, region:'fe', kind:'src',
+   files:['Repos.tsx','RepoDetail.tsx','ModuleDetail.tsx','Roadmap.tsx','Chat.tsx','Communication.tsx','Dashboard.tsx','Hub.tsx']},
+  {id:'fcmp',  label:'frontend/src/components',  short:'components', x:600, y:600, region:'fe', kind:'src',
+   files:['SlideOver.tsx','GraphView.tsx','LayersView.tsx','ArcGauge.tsx','NodeDossier.tsx']},
+  {id:'fst',   label:'frontend/src/store',       short:'store',      x:600, y:735, region:'fe', kind:'src',
+   files:['auth.tsx','orb.tsx']},
+  {id:'flib',  label:'frontend/src/lib',         short:'lib',        x:900, y:665, region:'fe', kind:'src',
+   files:['api.ts','fx.tsx','sound.ts','graphLayout.ts']},
+
+  {id:'vl',    label:'voice_listener',           short:'voice_listener', x:1130, y:790, region:'iso', kind:'entry',
+   files:['wake_word.py']}
+];
+
+const EDGES = [
+  ['bapp','bapi',16],['bapp','bcore',6],['bapp','bdb',4],
+  ['bapi','bcore',38],['bapi','bdb',52],['bapi','bsvc',24],['bapi','bcb',9],['bapi','bag',6],
+  ['bsvc','bcore',14],['bsvc','bdb',18],
+  ['bcb','bcore',11],['bcb','bdb',13],
+  ['bag','bcore',3],
+  ['btest','bapi',12],['btest','bsvc',9],['btest','bcb',31],['btest','bcore',8],['btest','bdb',16],
+  ['bscr','bcb',7],['bscr','bcore',3],['bscr','bdb',5],
+  ['balem','bdb',6],['balem','bcore',4],
+  ['fsrc','fpg',8],['fsrc','fst',3],
+  ['fpg','flib',14],['fpg','fst',9],['fpg','fcmp',11],
+  ['fcmp','flib',8],['fcmp','fst',4],
+  ['fst','flib',3]
+];
+
+const KIND = {
+  entry:{c:'var(--jade)', l:'Entry'},
+  src:  {c:'rgba(233,241,238,.55)', l:'Source'},
+  test: {c:'var(--cyan)', l:'Tests'},
+  script:{c:'var(--amber)', l:'Scripts'},
+  mig:  {c:'var(--rose)', l:'Migrations'}
+};
+const REGION = {
+  be:{label:'BACKEND — PYTHON', x:60, y:55, w:1090, h:435},
+  fe:{label:'FRONTEND — TYPESCRIPT', x:60, y:545, w:1090, h:255}
+};
+
+const D = Object.fromEntries(DIRS.map(d=>[d.id,d]));
+const ALL_FILES = [];
+DIRS.forEach(d=>d.files.forEach(f=>ALL_FILES.push({dir:d.id, name:f, path:d.label+'/'+f})));
+
+/* ── state ── */
+let view='map', expanded=new Set(), sel=null, selFile=null, hoverDir=null;
+let T={k:1,x:0,y:0}, drag=null;
+
+const cv=document.getElementById('cv'), stage=document.getElementById('stage');
+const NS='http://www.w3.org/2000/svg';
+const el=(t,a={})=>{const n=document.createElementNS(NS,t);for(const k in a)n.setAttribute(k,a[k]);return n};
+
+/* ── directory box geometry (stable: expansion does not reflow) ── */
+function boxOf(d){
+  const n=d.files.length;
+  if(!expanded.has(d.id)){
+    const w=Math.max(84, d.short.length*8+40), h=34;
+    return {x:d.x-w/2, y:d.y-h/2, w, h, cx:d.x, cy:d.y};
+  }
+  const cols=Math.min(5,n), rows=Math.ceil(n/cols);
+  const w=Math.max(cols*22+26, d.short.length*8+40), h=rows*22+40;
+  return {x:d.x-w/2, y:d.y-h/2, w, h, cx:d.x, cy:d.y};
+}
+function anchor(b,other){
+  const dx=other.cx-b.cx, dy=other.cy-b.cy;
+  const hw=b.w/2+4, hh=b.h/2+4;
+  const s=Math.min(Math.abs(dx)?hw/Math.abs(dx):1e9, Math.abs(dy)?hh/Math.abs(dy):1e9);
+  return {x:b.cx+dx*s, y:b.cy+dy*s};
+}
+
+/* ── render: architecture map ── */
+function renderMap(){
+  cv.innerHTML=''; cv.setAttribute('viewBox','0 0 1260 860');
+  const defs=el('defs');
+  defs.innerHTML=`<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M1 1L9 5L1 9" fill="none" stroke="rgba(233,241,238,.5)" stroke-width="1.6" stroke-linecap="round"/></marker>`;
+  cv.appendChild(defs);
+  const g=el('g',{transform:`translate(${T.x},${T.y}) scale(${T.k})`}); cv.appendChild(g);
+
+  for(const k in REGION){
+    const r=REGION[k];
+    g.appendChild(el('rect',{x:r.x,y:r.y,width:r.w,height:r.h,rx:18,fill:'none',stroke:'var(--edge)','stroke-width':.6,'stroke-dasharray':'5 5'}));
+    const t=el('text',{x:r.x+16,y:r.y+22,fill:'var(--fg-3)','font-family':'var(--mono)','font-size':10,'letter-spacing':1.6});
+    t.textContent=r.label; g.appendChild(t);
+  }
+
+  const boxes=Object.fromEntries(DIRS.map(d=>[d.id,boxOf(d)]));
+  const maxW=Math.max(...EDGES.map(e=>e[2]));
+
+  // edges — long ones fainter (Holten)
+  EDGES.forEach(([s,t,w])=>{
+    const a=anchor(boxes[s],boxes[t]), b=anchor(boxes[t],boxes[s]);
+    const len=Math.hypot(b.x-a.x,b.y-a.y);
+    const act = hoverDir===null || hoverDir===s || hoverDir===t;
+    const base = 0.5 - Math.min(.28, len/4200);
+    const mx=(a.x+b.x)/2, my=(a.y+b.y)/2 - Math.min(46, len*.11);
+    g.appendChild(el('path',{
+      d:`M${a.x} ${a.y} Q${mx} ${my} ${b.x} ${b.y}`, fill:'none',
+      stroke: act? (hoverDir? 'var(--jade)':'rgba(233,241,238,.55)') : 'rgba(233,241,238,.5)',
+      'stroke-width': 0.7+ (w/maxW)*3.2,
+      opacity: act? base+ (hoverDir?0.42:0) : 0.09,
+      'marker-end': act&&hoverDir? 'url(#ar)':''
+    }));
+    if(act&&hoverDir){
+      const lt=el('text',{x:mx,y:my-4,fill:'var(--jade)','font-family':'var(--mono)','font-size':9,'text-anchor':'middle'});
+      lt.textContent=w; g.appendChild(lt);
+    }
+  });
+
+  DIRS.forEach(d=>{
+    const b=boxes[d.id], open=expanded.has(d.id), K=KIND[d.kind];
+    const grp=el('g',{style:'cursor:pointer'});
+    const dim = hoverDir && hoverDir!==d.id && !EDGES.some(([s,t])=>(s===hoverDir&&t===d.id)||(t===hoverDir&&s===d.id));
+    grp.setAttribute('opacity', dim? .34 : 1);
+
+    grp.appendChild(el('rect',{x:b.x,y:b.y,width:b.w,height:b.h,rx:9,
+      fill: sel===d.id? 'rgba(61,220,151,.14)' : open? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.075)',
+      stroke: sel===d.id? 'var(--jade)' : 'var(--edge-2)', 'stroke-width': sel===d.id?1.6:1}));
+
+    grp.appendChild(el('rect',{x:b.x,y:b.y,width:3.5,height:b.h,rx:2,fill:K.c,opacity:.9}));
+
+    const lab=el('text',{x:b.x+14,y:open? b.y+20 : b.cy+4,fill:'var(--fg)','font-family':'var(--sans)','font-size':13,'font-weight':600});
+    lab.textContent=d.short; grp.appendChild(lab);
+
+    const cnt=el('text',{x:b.x+b.w-11,y:open? b.y+20 : b.cy+4,fill:'var(--fg-3)','font-family':'var(--mono)','font-size':10,'text-anchor':'end'});
+    cnt.textContent=open? '−' : d.files.length; grp.appendChild(cnt);
+
+    if(open){
+      const cols=Math.min(5,d.files.length);
+      d.files.forEach((f,i)=>{
+        const fx=b.x+18+(i%cols)*22, fy=b.y+38+Math.floor(i/cols)*22;
+        const isSel = selFile && selFile.dir===d.id && selFile.name===f;
+        const c=el('circle',{cx:fx,cy:fy,r:isSel?7:5,
+          fill:isSel?'var(--jade)':'rgba(233,241,238,.42)',
+          stroke:isSel?'var(--jade)':'none','stroke-width':2,'fill-opacity':isSel?1:.85,style:'cursor:pointer'});
+        c.addEventListener('click',ev=>{ev.stopPropagation();selFile={dir:d.id,name:f};sel=null;setView('focus')});
+        const ttl=el('title'); ttl.textContent=f; c.appendChild(ttl);
+        grp.appendChild(c);
+      });
+    }
+
+    grp.addEventListener('click',ev=>{ev.stopPropagation();
+      if(expanded.has(d.id))expanded.delete(d.id); else expanded.add(d.id);
+      sel=d.id; selFile=null; draw();});
+    grp.addEventListener('mouseenter',()=>{hoverDir=d.id;draw()});
+    grp.addEventListener('mouseleave',()=>{hoverDir=null;draw()});
+    g.appendChild(grp);
+  });
+}
+
+/* ── render: focus on one file ── */
+function neighborsOf(f){
+  const dir=f.dir;
+  const inD  = EDGES.filter(([s,t])=>t===dir).map(([s,,w])=>({dir:s,w}));
+  const outD = EDGES.filter(([s,t])=>s===dir).map(([,t,w])=>({dir:t,w}));
+  const pick=(id,n)=>D[id].files.slice(0,n);
+  const importers=inD.map(({dir:s,w})=>{
+    const n=Math.max(1,Math.round(w/ (D[dir].files.length||1)));
+    return {dir:s, files:pick(s,Math.min(n, D[s].files.length)), total:Math.min(w, D[s].files.length)};
+  });
+  const imports=outD.map(({dir:t,w})=>({dir:t, files:pick(t,Math.min(2,D[t].files.length)), total:Math.min(2,D[t].files.length)}));
+  return {importers, imports};
+}
+
+function renderFocus(){
+  cv.innerHTML=''; cv.setAttribute('viewBox','0 0 1000 620');
+  const g=el('g',{transform:`translate(${T.x},${T.y}) scale(${T.k})`}); cv.appendChild(g);
+  if(!selFile){
+    const t=el('text',{x:500,y:300,fill:'var(--fg-3)','font-family':'var(--mono)','font-size':12,'text-anchor':'middle'});
+    t.textContent='Pick a file from the architecture map or search above'; g.appendChild(t); return;
+  }
+  const {importers,imports}=neighborsOf(selFile);
+  const midY=310;
+
+  const cbox={x:400,y:midY-24,w:200,h:48};
+  const lay=(groups,x,side)=>{
+    const total=groups.length; const span=Math.min(480, total*74);
+    return groups.map((gp,i)=>{
+      const y = midY - span/2 + (span/(Math.max(1,total)))*(i+0.5);
+      return {...gp, x, y, w:200, h:44, side};
+    });
+  };
+  const L=lay(importers,70,'in'), R=lay(imports,730,'out');
+
+  [...L,...R].forEach(n=>{
+    const from = n.side==='in'? {x:n.x+n.w, y:n.y} : {x:cbox.x+cbox.w, y:midY};
+    const to   = n.side==='in'? {x:cbox.x, y:midY} : {x:n.x, y:n.y};
+    const mx=(from.x+to.x)/2;
+    g.appendChild(el('path',{d:`M${from.x} ${from.y} C${mx} ${from.y} ${mx} ${to.y} ${to.x} ${to.y}`,
+      fill:'none',stroke:n.side==='in'?'rgba(79,199,212,.5)':'rgba(61,220,151,.55)','stroke-width':1.2+Math.min(3,n.total/4)}));
+  });
+
+  const card=(n,accent)=>{
+    const grp=el('g',{style:'cursor:pointer'});
+    grp.appendChild(el('rect',{x:n.x,y:n.y-n.h/2,width:n.w,height:n.h,rx:8,fill:'rgba(255,255,255,.06)',stroke:'var(--edge-2)','stroke-width':1}));
+    grp.appendChild(el('rect',{x:n.x,y:n.y-n.h/2,width:3,height:n.h,rx:2,fill:accent}));
+    const a=el('text',{x:n.x+12,y:n.y-4,fill:'var(--fg)','font-family':'var(--mono)','font-size':11});
+    a.textContent=D[n.dir].short+'/'; grp.appendChild(a);
+    const b=el('text',{x:n.x+12,y:n.y+12,fill:'var(--fg-3)','font-family':'var(--mono)','font-size':9.5});
+    b.textContent=n.total>1? n.total+' files' : n.files[0]||''; grp.appendChild(b);
+    grp.addEventListener('click',()=>{selFile={dir:n.dir,name:n.files[0]||D[n.dir].files[0]};draw()});
+    return grp;
+  };
+  L.forEach(n=>g.appendChild(card(n,'var(--cyan)')));
+  R.forEach(n=>g.appendChild(card(n,'var(--jade)')));
+
+  g.appendChild(el('rect',{x:cbox.x,y:cbox.y,width:cbox.w,height:cbox.h,rx:10,fill:'rgba(61,220,151,.14)',stroke:'var(--jade)','stroke-width':1.6}));
+  const nm=el('text',{x:cbox.x+cbox.w/2,y:midY-2,fill:'var(--fg)','font-family':'var(--mono)','font-size':12,'text-anchor':'middle'});
+  nm.textContent=selFile.name; g.appendChild(nm);
+  const dr=el('text',{x:cbox.x+cbox.w/2,y:midY+14,fill:'var(--fg-3)','font-family':'var(--mono)','font-size':9.5,'text-anchor':'middle'});
+  dr.textContent=D[selFile.dir].label; g.appendChild(dr);
+
+  const h1=el('text',{x:70,y:56,fill:'var(--cyan)','font-family':'var(--mono)','font-size':10,'letter-spacing':1.4});
+  h1.textContent='IMPORTED BY'; g.appendChild(h1);
+  const h2=el('text',{x:930,y:56,fill:'var(--jade)','font-family':'var(--mono)','font-size':10,'letter-spacing':1.4,'text-anchor':'end'});
+  h2.textContent='IMPORTS'; g.appendChild(h2);
+}
+
+/* ── render: matrix ── */
+function renderMatrix(){
+  const mw=document.getElementById('mwrap');
+  const idx=Object.fromEntries(DIRS.map((d,i)=>[d.id,i]));
+  const M=DIRS.map(()=>DIRS.map(()=>0));
+  EDGES.forEach(([s,t,w])=>{M[idx[s]][idx[t]]=w});
+  const max=Math.max(...EDGES.map(e=>e[2]));
+  let h='<div class="mnote">Rows depend on columns &middot; outlined cells would indicate a cycle &middot; none present</div><table class="mx"><tr><th></th>';
+  DIRS.forEach(d=>{h+=`<th class="cl"><div>${d.short}</div></th>`});
+  h+='</tr>';
+  DIRS.forEach((r,i)=>{
+    h+=`<tr data-i="${i}"><th class="rw">${r.short}</th>`;
+    DIRS.forEach((c,j)=>{
+      const v=M[i][j], cyc=v&&M[j][i];
+      if(i===j){h+='<td class="self"></td>';return}
+      const a=v? .16+ (v/max)*.84 : 0;
+      h+=`<td class="${cyc?'cyc':''}" style="background:${v?`rgba(61,220,151,${a})`:'transparent'}" title="${r.short} → ${c.short}: ${v}">${v&&v>=8?v:''}</td>`;
+    });
+    h+='</tr>';
+  });
+  h+='</table>';
+  mw.innerHTML=h;
+  mw.querySelectorAll('tr[data-i]').forEach(tr=>{
+    tr.addEventListener('mouseenter',()=>tr.classList.add('hl'));
+    tr.addEventListener('mouseleave',()=>tr.classList.remove('hl'));
+  });
+}
+
+/* ── side panel ── */
+function renderSide(){
+  const s=document.getElementById('side');
+  if(selFile){
+    const {importers,imports}=neighborsOf(selFile);
+    const tIn=importers.reduce((a,b)=>a+b.total,0), tOut=imports.reduce((a,b)=>a+b.total,0);
+    let mm='graph LR\n';
+    mm+=`  T["${selFile.name}"]\n`;
+    importers.forEach((gp,i)=>{mm+=`  A${i}["${D[gp.dir].short}/ ×${gp.total}"] --> T\n`});
+    imports.forEach((gp,i)=>{mm+=`  T --> B${i}["${D[gp.dir].short}/ ×${gp.total}"]\n`});
+    s.innerHTML=`<h3>File</h3><div class="path">${D[selFile.dir].label}/<br><b>${selFile.name}</b></div>
+      <dl class="stats"><div><dt>Imported by</dt><dd>${tIn}</dd></div><div><dt>Imports</dt><dd>${tOut}</dd></div>
+      <div><dt>Directory</dt><dd style="font-size:12px">${D[selFile.dir].short}</dd></div><div><dt>Region</dt><dd style="font-size:12px">${selFile.dir.startsWith('f')?'frontend':'backend'}</dd></div></dl>
+      <div class="lst"><h4>Sibling files</h4>${D[selFile.dir].files.slice(0,8).map(f=>`<button data-f="${f}">${f}</button>`).join('')}</div>
+      <div class="mmh"><h3 style="margin:0">Mermaid — aggregated</h3><button>copy</button></div>
+      <div class="mm">${mm.replace(/</g,'&lt;')}</div>
+      <p style="font-size:11.5px;color:var(--fg-3);margin-top:10px;line-height:1.5">Same-directory neighbours collapse to a count. ${tIn} importers become ${importers.length} nodes.</p>`;
+    s.querySelectorAll('[data-f]').forEach(b=>b.addEventListener('click',()=>{selFile={dir:selFile.dir,name:b.dataset.f};draw()}));
+    return;
+  }
+  if(sel){
+    const d=D[sel];
+    const out=EDGES.filter(([a])=>a===sel), inn=EDGES.filter(([,b])=>b===sel);
+    s.innerHTML=`<h3>Directory</h3><div class="path">${d.label}</div>
+      <dl class="stats"><div><dt>Files</dt><dd>${d.files.length}</dd></div><div><dt>Kind</dt><dd style="font-size:12px">${KIND[d.kind].l}</dd></div>
+      <div><dt>Depends on</dt><dd>${out.length}</dd></div><div><dt>Depended on by</dt><dd>${inn.length}</dd></div></dl>
+      <div class="lst"><h4>Depends on</h4>${out.length?out.map(([,t,w])=>`<button>${D[t].short} <span style="color:var(--fg-3)">· ${w}</span></button>`).join(''):'<p class="empty">Nothing internal</p>'}</div>
+      <div class="lst"><h4>Files</h4>${d.files.map(f=>`<button data-f="${f}">${f}</button>`).join('')}</div>`;
+    s.querySelectorAll('[data-f]').forEach(b=>b.addEventListener('click',()=>{selFile={dir:sel,name:b.dataset.f};sel=null;setView('focus')}));
+    return;
+  }
+  s.innerHTML=`<h3>Nothing selected</h3>
+    <p style="font-size:12.5px;color:var(--fg-2);line-height:1.6;margin-bottom:14px">Sixteen directories instead of 159 files. Every box is labelled and the layout is by dependency layer, not force simulation.</p>
+    <p style="font-size:12.5px;color:var(--fg-2);line-height:1.6;margin-bottom:14px"><b>Hover</b> a box to isolate its dependencies with edge counts. <b>Click</b> to expand it in place — other boxes hold position. <b>Click a file dot</b> to focus on it.</p>
+    <p style="font-size:12.5px;color:var(--fg-2);line-height:1.6">The two dashed regions never touch. That is the real finding the old view was hiding.</p>`;
+}
+
+/* ── legend + crumb ── */
+function renderChrome(){
+  document.getElementById('legend').innerHTML = view==='map'
+    ? Object.values(KIND).map(k=>`<span><i style="background:${k.c}"></i>${k.l.toUpperCase()}</span>`).join('')
+      + '<span style="width:100%;text-align:right;color:var(--fg-3)">EDGE THICKNESS = IMPORT COUNT</span>'
+    : view==='focus' ? '<span><i style="background:var(--cyan)"></i>IMPORTED BY</span><span><i style="background:var(--jade)"></i>IMPORTS</span>' : '';
+  const c=document.getElementById('crumb');
+  if(view==='focus'&&selFile) c.innerHTML=`<button id="bk">← architecture</button> &nbsp;/&nbsp; <b>${D[selFile.dir].short}</b> / <b>${selFile.name}</b>`;
+  else if(view==='map'&&expanded.size) c.innerHTML=`<b>${expanded.size}</b> DIRECTORY EXPANDED &nbsp; <button id="cl">collapse all</button>`;
+  else c.innerHTML='';
+  const bk=document.getElementById('bk'); if(bk)bk.addEventListener('click',()=>setView('map'));
+  const cle=document.getElementById('cl'); if(cle)cle.addEventListener('click',()=>{expanded.clear();draw()});
+}
+
+/* ── draw dispatch ── */
+function draw(){
+  const isM = view==='matrix';
+  cv.style.display=isM?'none':'block';
+  document.getElementById('mwrap').style.display=isM?'block':'none';
+  if(view==='map')renderMap(); else if(view==='focus')renderFocus(); else renderMatrix();
+  renderSide(); renderChrome();
+  document.getElementById('zl').textContent=Math.round(T.k*100)+'%';
+}
+function setView(v){view=v;T={k:1,x:0,y:0};
+  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));draw()}
+
+/* ── zoom + pan ── */
+function zoom(f,cx,cy){
+  const k=Math.max(.35,Math.min(3.5,T.k*f));
+  const r=cv.getBoundingClientRect();
+  const px=(cx??r.width/2), py=(cy??r.height/2);
+  const vb=cv.getAttribute('viewBox').split(' ').map(Number);
+  const sx=vb[2]/r.width, sy=vb[3]/r.height;
+  const ux=(px*sx-T.x)/T.k, uy=(py*sy-T.y)/T.k;
+  T.x=px*sx-ux*k; T.y=py*sy-uy*k; T.k=k; draw();
+}
+cv.addEventListener('wheel',e=>{e.preventDefault();const r=cv.getBoundingClientRect();
+  zoom(e.deltaY<0?1.14:1/1.14, e.clientX-r.left, e.clientY-r.top)},{passive:false});
+cv.addEventListener('mousedown',e=>{drag={x:e.clientX,y:e.clientY,tx:T.x,ty:T.y};cv.classList.add('dragging')});
+window.addEventListener('mousemove',e=>{if(!drag)return;
+  const r=cv.getBoundingClientRect(), vb=cv.getAttribute('viewBox').split(' ').map(Number);
+  T.x=drag.tx+(e.clientX-drag.x)*(vb[2]/r.width); T.y=drag.ty+(e.clientY-drag.y)*(vb[3]/r.height); draw()});
+window.addEventListener('mouseup',()=>{drag=null;cv.classList.remove('dragging')});
+cv.addEventListener('click',()=>{if(view==='map'){sel=null;draw()}});
+document.getElementById('zi').addEventListener('click',()=>zoom(1.25));
+document.getElementById('zo').addEventListener('click',()=>zoom(1/1.25));
+document.getElementById('zr').addEventListener('click',()=>{T={k:1,x:0,y:0};draw()});
+
+/* ── tabs + search ── */
+document.querySelectorAll('#tabs button').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.v)));
+const q=document.getElementById('q'), hits=document.getElementById('hits');
+q.addEventListener('input',()=>{
+  const v=q.value.trim().toLowerCase();
+  if(v.length<2){hits.classList.remove('open');return}
+  const m=ALL_FILES.filter(f=>f.path.toLowerCase().includes(v)).slice(0,12);
+  hits.innerHTML=m.length?m.map(f=>`<button data-d="${f.dir}" data-n="${f.name}">${f.path}</button>`).join(''):'<button style="color:var(--fg-3)">No match</button>';
+  hits.classList.add('open');
+  hits.querySelectorAll('[data-d]').forEach(b=>b.addEventListener('click',()=>{
+    selFile={dir:b.dataset.d,name:b.dataset.n}; hits.classList.remove('open'); q.value=''; setView('focus');}));
+});
+document.addEventListener('click',e=>{if(!e.target.closest('.search'))hits.classList.remove('open')});
+document.addEventListener('keydown',e=>{
+  if(e.key==='/'&&document.activeElement!==q){e.preventDefault();q.focus()}
+  if(e.key==='Escape'){hits.classList.remove('open');q.blur()}
+});
+
+draw();
+</script>

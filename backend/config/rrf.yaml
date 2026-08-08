@@ -1,0 +1,27 @@
+# Phase F5: Reciprocal Rank Fusion -- a third scorer, alongside (never
+# replacing) the legacy weighted-sum scorer and Phase F3's weighted
+# personalised PageRank in ranking.py. RRF combines signals by RANK, not by
+# normalized magnitude: score(f) = sum_signal 1/(k + rank_signal(f)). No
+# per-signal weight to tune -- a file's contribution from each signal
+# depends only on where it stands in that signal's own order.
+#
+# k is RRF's standard constant from the rank-fusion literature (a larger k
+# flattens the curve, making top-ranked and mid-ranked items closer in
+# contribution; smaller k rewards being #1 on any single signal much more
+# steeply).
+k: 60
+
+# Every signal's sort direction, stated explicitly rather than left as an
+# implicit sign-flip somewhere in code -- a silently inverted signal would
+# be invisible in the output and would just look like RRF underperforming.
+# desc: larger raw value = more important = rank 1.
+# asc:  smaller raw value = more important = rank 1 (days_since_last_change
+#       only -- a file touched yesterday should rank ahead of one untouched
+#       for a year, so smaller must sort first).
+directions:
+  fan_in: desc
+  pagerank: desc
+  is_entry_point: desc
+  commit_count: desc
+  distinct_authors: desc
+  days_since_last_change: asc

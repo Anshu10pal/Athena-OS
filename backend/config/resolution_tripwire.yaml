@@ -1,0 +1,13 @@
+# Phase E2.3 incident: a rank read once observed a Python resolution rate
+# that had silently collapsed to ~0 -- fan_in, PageRank, everything
+# downstream was wrong, confident, and plausible-looking, with nothing to
+# catch it automatically. This is the general defense: every rank run
+# compares the current Python resolution rate against the last one
+# recorded for this repo and refuses if it has collapsed.
+#
+# Both conditions must hold to trip: the PREVIOUS rate must itself have
+# been meaningful (minimum_previous_rate_to_check) -- a repo that's always
+# had near-zero resolution shouldn't trip on its own noise -- and the
+# CURRENT rate must have dropped to less than this fraction of it.
+collapse_relative_threshold: 0.5
+minimum_previous_rate_to_check: 0.05

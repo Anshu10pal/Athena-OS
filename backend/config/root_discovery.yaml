@@ -1,0 +1,14 @@
+# Phase E2.1: Python root discovery. Marker filenames and the structural
+# nomination rules are code (app/services/codebase/root_discovery.py) --
+# structural facts about Python packaging conventions, not tunable numbers.
+# The two floors below are the only real knobs: markers/structure NOMINATE
+# a candidate root, but a candidate is only PROMOTED if verified resolution
+# evidence clears both.
+#
+# Both floors, not either: a root that resolves a decent percentage of a
+# tiny unresolved-specifier pool could be resolving 1-2 specifiers by
+# coincidence (absolute_floor guards this); a root that resolves a large
+# absolute count but on a huge repo could still be a small, non-primary
+# slice of the real problem (relative_floor guards this).
+relative_floor: 0.05
+absolute_floor: 3

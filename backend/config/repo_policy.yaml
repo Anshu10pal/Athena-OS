@@ -1,0 +1,11 @@
+# Codebase agent clone policy. A host or organisation listed here is refused at
+# clone time regardless of allow_external_llm or any other per-repo setting --
+# this is a hard stop, not something a flag can override.
+#
+# host: the git host, e.g. "github.com", "gitlab.com", an internal git server's
+#       hostname. Matched case-insensitively against the URL's netloc.
+# org:  the owner/organisation segment of the URL path, e.g. "some-company" in
+#       "github.com/some-company/some-repo". Matched case-insensitively.
+
+blocked_hosts: []
+blocked_orgs: []

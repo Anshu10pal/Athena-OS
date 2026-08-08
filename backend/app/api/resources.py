@@ -1,8 +1,10 @@
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.core.config import BACKEND_DIR
+from app.core.config import settings
 from app.core.security import get_current_user, require_write_access
 from app.db.database import get_db
 from app.db.models import Resource, ResourceHistory
@@ -101,7 +103,7 @@ def download_resource(resource_id: int, user=Depends(get_current_user), db: Sess
     resource = db.get(Resource, resource_id)
     if not resource or resource.kind != "file" or not resource.file_path:
         raise HTTPException(404, "File not found")
-    full_path = BACKEND_DIR / resource.file_path
+    full_path = Path(settings.RESOURCES_DIR) / resource.file_path
     if not full_path.is_file():
         raise HTTPException(404, "File not found on disk")
     return FileResponse(full_path, media_type=resource.mime_type or "application/octet-stream", filename=resource.title)

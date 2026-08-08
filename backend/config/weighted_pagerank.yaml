@@ -1,0 +1,13 @@
+# Phase F3: weighted, seeded, personalised PageRank -- a scorer that runs
+# alongside (never replaces) the legacy composite weighted-sum scorer in
+# ranking.py's rank_repo(). damping is the only tunable that belongs here;
+# the seed itself is NOT config-driven -- it's inherently repo-specific and
+# passed explicitly by the caller (rank_repo_weighted_pagerank's seed_paths).
+#
+# Damping controls how far rank travels from the seed before decaying to
+# near-zero: contribution falls off as damping^k at k hops out. At 0.85 (the
+# web-search convention -- diffuse global authority) a file 5 hops out still
+# gets ~0.44 of a hop's worth of mass; at 0.65, ~0.12. This codebase wants
+# mass concentrated near known entry points, not spread globally, hence the
+# lower default.
+damping: 0.65

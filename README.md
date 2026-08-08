@@ -101,10 +101,28 @@ curation (saving a real link over a search-intent one) can be committed. Schema 
 hand-written `ALTER TABLE` list.
 
 **Uploaded resource files are not durable on Render.** `POST /api/topics/{id}/resources/upload`
-stores files under `backend/data/resources/{module_slug}/` on the local filesystem. That's fine
+stores files under `RESOURCES_DIR` (default: a per-OS app-data directory outside the repo, via
+`platformdirs` — see `backend/app/core/config.py`), `{module_slug}/` beneath that. That's fine
 locally, but Render's default web service filesystem is ephemeral — uploads are lost on every
 redeploy unless a persistent disk is attached to that path. No workaround is implemented; attach a
 Render persistent disk before relying on uploads in production.
+
+## Codebase agent runtime data (clone cache, vector DB)
+
+The codebase agent's repo clone cache (`REPO_CLONE_ROOT`) and the local vector DB
+(`QDRANT_PATH`) also live under that same app-data root, outside the repo tree — deliberately:
+a clone cache nested inside a project you then register and ingest would otherwise get ingested
+as part of that project's own code (this happened once during development; see
+`docs/codebase-agent-handoff.md`). `app/main.py` refuses to start if the resolved clone root ever
+ends up inside a registered repo's path, regardless of where these settings point.
+
+On Render, this app-data root is just as ephemeral as the resources directory above:
+- The **clone cache** needs no persistent disk — it's rebuilt for free on next use by re-cloning
+  the registered URL. Nothing is lost that a re-clone can't reproduce.
+- The **vector DB** (Qdrant) losing its embeddings means re-computing them from the durable
+  source (Vault entries, chat history — all in the SQL database), not losing user data, but it
+  does cost the re-embedding compute/time. Attach a persistent disk to this path if that's
+  undesirable in production.
 
 ## Free-tier survival notes
 

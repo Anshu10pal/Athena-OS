@@ -1,0 +1,540 @@
+import json
+import time
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.core.security import get_current_user, require_write_access
+from app.db.database import SessionLocal, get_db
+from app.db.models import CodeFile, CodeFileRank, CodeImport, Repo, RepoJob, User
+from app.services.codebase import edge_weights, jobs, registry
+from app.services.codebase.dir_aggregation import DEFAULT_MAX_GROUPS, aggregate_to_directories
+from app.services.codebase.discovery import TooManyFilesError
+from app.services.codebase.git_ops import GitBinaryUnavailable
+from app.services.codebase.ingest import ingest_repo
+from app.services.codebase.ordering import compute_layers
+from app.services.codebase.policy import RepoBlocked
+from app.services.codebase.ranking import _build_graph, rank_repo
+
+router = APIRouter(prefix="/api/repos", tags=["repos"])
+
+
+class RepoAddIn(BaseModel):
+    url: Optional[str] = None
+    local_path: Optional[str] = None
+    source_root: Optional[str] = None
+
+
+class RepoSeedExcludeIn(BaseModel):
+    seed_exclude_paths: list[str]
+
+
+def serialize_repo(r: Repo) -> dict:
+    return {
+        "id": r.id,
+        "host": r.host,
+        "owner": r.owner,
+        "name": r.name,
+        "url": r.url,
+        "local_path": r.local_path,
+        "source_kind": r.source_kind,
+        "default_branch": r.default_branch,
+        "visibility": r.visibility,
+        "source_root": r.source_root,
+        "allow_external_llm": r.allow_external_llm,
+        "last_ingested_sha": r.last_ingested_sha,
+        "last_ingested_at": r.last_ingested_at.isoformat() if r.last_ingested_at else None,
+        "file_count": r.file_count,
+        "added_at": r.added_at.isoformat(),
+        "seed_exclude_paths": r.seed_exclude_paths,
+    }
+
+
+@router.get("")
+def list_repos(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return [serialize_repo(r) for r in db.query(Repo).order_by(Repo.added_at.desc()).all()]
+
+
+@router.get("/{repo_id}")
+def get_repo(repo_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    return serialize_repo(repo)
+
+
+@router.post("")
+def add_repo(payload: RepoAddIn, user: User = Depends(require_write_access), db: Session = Depends(get_db)):
+    if not payload.url and not payload.local_path:
+        raise HTTPException(400, "Provide either a url or a local_path")
+    if payload.url and payload.local_path:
+        raise HTTPException(400, "Provide only one of url or local_path, not both")
+    try:
+        if payload.url:
+            repo = registry.register_from_url(db, payload.url, source_root=payload.source_root)
+        else:
+            repo = registry.register_from_path(db, payload.local_path, source_root=payload.source_root)
+    except RepoBlocked as e:
+        raise HTTPException(403, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except GitBinaryUnavailable as e:
+        raise HTTPException(503, str(e))
+    except RuntimeError as e:
+        raise HTTPException(502, f"Could not acquire the repository: {e}")
+    return serialize_repo(repo)
+
+
+@router.put("/{repo_id}/seed-exclude-paths")
+def set_seed_exclude_paths(
+    repo_id: int, payload: RepoSeedExcludeIn,
+    user: User = Depends(require_write_access), db: Session = Depends(get_db),
+):
+    """Phase E4 refinement: per-repo override for which detected entry
+    points are eligible to seed weighted PageRank (prefix-matched against
+    CodeFile.path) -- see entry_detection.py. Every repo has some auxiliary
+    surface (a worker, a cron script, a dev harness) that no ecosystem-wide
+    marker catches; this is that escape hatch. Takes effect on the next
+    rank run, not retroactively."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    repo.seed_exclude_paths = payload.seed_exclude_paths
+    db.commit()
+    return serialize_repo(repo)
+
+
+@router.post("/{repo_id}/resync")
+def resync_repo(repo_id: int, user: User = Depends(require_write_access), db: Session = Depends(get_db)):
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    try:
+        registry.resync(db, repo)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(502, f"Resync failed: {e}")
+    return serialize_repo(repo)
+
+
+@router.post("/{repo_id}/ingest")
+def ingest_repo_endpoint(repo_id: int, user: User = Depends(require_write_access), db: Session = Depends(get_db)):
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    try:
+        report = ingest_repo(db, repo)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except TooManyFilesError as e:
+        raise HTTPException(413, str(e))
+    return {
+        "repo_id": report.repo_id,
+        "files_total": report.files_total,
+        "files_parsed": report.files_parsed,
+        "files_skipped_unchanged": report.files_skipped_unchanged,
+        "files_deleted": report.files_deleted,
+        "symbols_total": report.symbols_total,
+        "imports_total": report.imports_total,
+        "imports_resolved": report.imports_resolved,
+        "promoted_python_roots": report.promoted_python_roots,
+        "python_cross_root_edges": report.python_cross_root_edges,
+        "js_configs_found": report.js_configs_found,
+        "js_cross_root_edges": report.js_cross_root_edges,
+        "blind_spots": report.blind_spots,
+    }
+
+
+VALID_SCORERS = ("legacy", "weighted_pagerank", "rrf")
+
+
+def _serialize_rank(r: CodeFileRank, f: CodeFile) -> dict:
+    """Phase G1: file-level signals (fan_in/fan_out/is_entry_point/history)
+    read from the CodeFile row, not the CodeFileRank row -- they're
+    properties of the file, identical regardless of which scorer produced
+    this rank row. Only score/rank/pagerank are genuinely scorer-dependent."""
+    return {
+        "file_id": r.file_id,
+        "path": f.path,
+        "language": f.language,
+        "prior_category": f.prior_category,
+        "rank": r.rank,
+        "score": r.score,
+        "fan_in": f.fan_in,
+        "fan_out": f.fan_out,
+        "pagerank": r.pagerank,
+        "is_entry_point": f.is_entry_point,
+        "commit_count": f.commit_count,
+        "distinct_authors": f.distinct_authors,
+        "days_since_last_change": f.days_since_last_change,
+        "computed_at": r.computed_at.isoformat(),
+    }
+
+
+@router.post("/{repo_id}/rank")
+def rank_repo_endpoint(repo_id: int, user: User = Depends(require_write_access), db: Session = Depends(get_db)):
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    try:
+        result = rank_repo(db, repo)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return result
+
+
+@router.get("/{repo_id}/ranking")
+def get_ranking(
+    repo_id: int, scorer: str = "legacy",
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """One row per file: CodeFileRank filtered by BOTH repo_id and scorer,
+    not just repo_id -- the earlier version of this endpoint filtered on
+    repo_id alone and sorted by score across all three scorers' rows mixed
+    together, which is both duplicate rows per file AND a meaningless sort
+    order (three incompatible scales sorted as one). Ordered by the stored
+    `rank` (assigned once, at rank-run time, over the whole repo) rather
+    than re-sorting by score here -- a file's rank must never be
+    recomputed from whatever subset a caller happens to be looking at."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    if scorer not in VALID_SCORERS:
+        raise HTTPException(400, f"Unknown scorer {scorer!r} -- must be one of {VALID_SCORERS}")
+
+    rows = (
+        db.query(CodeFileRank, CodeFile)
+        .join(CodeFile, CodeFileRank.file_id == CodeFile.id)
+        .filter(CodeFileRank.repo_id == repo_id, CodeFile.repo_id == repo_id, CodeFileRank.scorer == scorer)
+        .order_by(CodeFileRank.rank.asc())
+        .all()
+    )
+    return {
+        "scorer": scorer,
+        "reduced_confidence": repo.reduced_confidence,
+        "files": [_serialize_rank(r, f) for r, f in rows],
+    }
+
+
+GRAPH_NODE_LIMIT_DEFAULT = 400
+NEIGHBORS_ENDPOINT_CAP = 100
+VALID_GRAPH_LEVELS = ("directory", "file")
+
+
+def _resolve_edges_by_neighbor(rows: list) -> dict:
+    """rows: [(neighbor_file_id, kind, cross_root_kind), ...] -- the caller
+    queries only the varying endpoint (from_file_id for importers,
+    to_file_id for imports), already reduced to just the neighbor id, so
+    this function never has to guess which side of an edge is "the other
+    file." Returns {neighbor_file_id: {weight, kind, cross_root}} -- max
+    weight wins per neighbor (same rule as ranking.py's
+    _build_weighted_graph, for the same reason: a refactor splitting one
+    import into several shouldn't change how coupled two files look),
+    first non-null cross_root_kind wins if any row has one."""
+    config = edge_weights.load_edge_weights()
+    agg: dict = {}
+    for neighbor_id, kind, cross_root_kind in rows:
+        w = edge_weights.resolve_weight(kind, config)
+        existing = agg.get(neighbor_id)
+        if existing is None or w > existing["weight"]:
+            agg[neighbor_id] = {"weight": w, "kind": kind, "cross_root": cross_root_kind}
+        elif cross_root_kind and not existing["cross_root"]:
+            existing["cross_root"] = cross_root_kind
+    return agg
+
+
+@router.get("/{repo_id}/graph")
+def get_graph(
+    repo_id: int, scorer: str = "legacy", level: str = "directory", limit: int = GRAPH_NODE_LIMIT_DEFAULT,
+    language: Optional[str] = None, path_prefix: Optional[str] = None, min_score: Optional[float] = None,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Nodes + edges for the graph, layer, and architecture-map views.
+    Read-only -- reads whatever the last actual rank run persisted, never
+    recomputes or re-persists entry detection itself. Phase H1.5: this
+    used to call entry_detection live, on every request, to get the
+    seed-eligible/prior-only split -- 15-20s on this project's own repo,
+    because entry detection walks the filesystem. Reads
+    CodeFile.seed_eligible now (set by rank_repo/_rank_repo_weighted_
+    pagerank/_rank_repo_rrf's own entry_info_by_id, the same call, just
+    made once at rank time instead of on every read) -- also closes a
+    staleness gap the live call had: a directory's `kind` could otherwise
+    reflect a fresher filesystem scan than the ranking itself.
+
+    `layer`/`reachable` are computed from the persisted seed-ELIGIBLE set
+    (not the narrower set weighted_pagerank actually seeds from after
+    excluding fan_out==0 entries). Deliberate: a structurally-inert entry
+    (e.g. run.py, fan_out==0) is still a real place a reader starts, even
+    though seeding PageRank from it would waste teleport mass on a dead
+    end -- "is this a legitimate starting point for reading order" and
+    "should this seed carry PageRank mass" are different questions, and
+    layers only need to answer the first one. This makes layer
+    scorer-independent, like fan_in/is_entry_point.
+
+    `level=file` (Phase G4's original shape) or `level=directory` (Phase
+    H1's default, see dir_aggregation.py). Directory aggregation runs as a
+    post-processing step over the file-level nodes/edges below, not a
+    parallel query path -- one pipeline, so the two levels can't silently
+    drift apart.
+
+    language/path_prefix/min_score filter the FILE set before either level
+    sees it -- user intent. `limit` means something different per level:
+    at file level it caps FILES (default 400) by stored rank, exactly as
+    before Phase H1. At directory level it is never applied to files --
+    aggregate_to_directories sees every filtered file, uncapped, and
+    `limit` only caps the resulting DIRECTORIES afterward. Capping files
+    first and aggregating second would compute a directory graph from
+    whatever fraction of the repo survived the file cap: invisible at 159
+    files, silently wrong at 5,000 (a plausible-looking architecture map
+    built from an eighth of the repo). `truncated`/`total_nodes_before_cap`
+    (file level) or `truncated`/`total_groups_before_limit` (directory
+    level) report what was cut either way."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    if scorer not in VALID_SCORERS:
+        raise HTTPException(400, f"Unknown scorer {scorer!r} -- must be one of {VALID_SCORERS}")
+    if level not in VALID_GRAPH_LEVELS:
+        raise HTTPException(400, f"Unknown level {level!r} -- must be one of {VALID_GRAPH_LEVELS}")
+
+    rows = (
+        db.query(CodeFileRank, CodeFile)
+        .join(CodeFile, CodeFileRank.file_id == CodeFile.id)
+        .filter(CodeFileRank.repo_id == repo_id, CodeFile.repo_id == repo_id, CodeFileRank.scorer == scorer)
+        .order_by(CodeFileRank.rank.asc())
+        .all()
+    )
+    if not rows:
+        raise HTTPException(404, f"No {scorer!r} ranking for this repo yet -- run rank first.")
+
+    def matches(f: CodeFile, r: CodeFileRank) -> bool:
+        if language and f.language != language:
+            return False
+        if path_prefix and not f.path.startswith(path_prefix):
+            return False
+        if min_score is not None and r.score < min_score:
+            return False
+        return True
+
+    filtered = [(r, f) for r, f in rows if matches(f, r)]
+    total_before_cap = len(filtered)
+    # File-level cap only applies at level=file -- see the docstring above
+    # for why directory level must see every filtered file uncapped.
+    capped = filtered if level == "directory" else filtered[:limit]
+    truncated = total_before_cap > len(capped)
+    kept_ids = {f.id for _, f in capped}
+
+    file_by_id = {f.id: f for _, f in rows}  # full set -- layers need the WHOLE graph, not just the capped view
+    graph = _build_graph(db, repo, file_by_id)
+    entry_ids = {fid for fid, f in file_by_id.items() if f.seed_eligible}
+    layers = compute_layers(graph, entry_ids)
+
+    nodes = [
+        {
+            "id": f.id, "path": f.path, "language": f.language, "score": r.score, "rank": r.rank,
+            "layer": layers.get(f.id), "prior_category": f.prior_category,
+            "fan_in": f.fan_in, "fan_out": f.fan_out, "pagerank": r.pagerank,
+            "is_entry_point": f.is_entry_point, "seed_eligible": f.seed_eligible,
+            "reachable": layers.get(f.id) is not None,
+        }
+        for r, f in capped
+    ]
+
+    edge_rows = (
+        db.query(CodeImport.from_file_id, CodeImport.to_file_id, CodeImport.kind, CodeImport.cross_root_kind)
+        .filter(CodeImport.repo_id == repo_id, CodeImport.to_file_id.isnot(None))
+        .all()
+    )
+    edge_config = edge_weights.load_edge_weights()
+    edge_agg: dict = {}
+    for from_id, to_id, kind, cross_root_kind in edge_rows:
+        if from_id not in kept_ids or to_id not in kept_ids:
+            continue
+        w = edge_weights.resolve_weight(kind, edge_config)
+        key = (from_id, to_id)
+        existing = edge_agg.get(key)
+        if existing is None or w > existing["weight"]:
+            edge_agg[key] = {"weight": w, "kind": kind, "cross_root": cross_root_kind}
+        elif cross_root_kind and not existing["cross_root"]:
+            existing["cross_root"] = cross_root_kind
+
+    edges = [
+        {"source": from_id, "target": to_id, **info}
+        for (from_id, to_id), info in edge_agg.items()
+    ]
+
+    if level == "directory":
+        agg = aggregate_to_directories(nodes, edges, max_groups=DEFAULT_MAX_GROUPS, limit=limit)
+        return {"scorer": scorer, "level": "directory", **agg}
+
+    return {
+        "scorer": scorer,
+        "level": "file",
+        "total_nodes_before_cap": total_before_cap,
+        "truncated": truncated,
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+def _serialize_neighbor_list(db: Session, agg: dict, rank_by_file_id: dict) -> list:
+    if not agg:
+        return []
+    neighbor_files = {f.id: f for f in db.query(CodeFile).filter(CodeFile.id.in_(agg.keys())).all()}
+    items = []
+    for nid, info in agg.items():
+        nf = neighbor_files.get(nid)
+        if nf is None:
+            continue
+        r = rank_by_file_id.get(nid)
+        items.append({
+            "file_id": nid, "path": nf.path,
+            "rank": r.rank if r else None, "score": r.score if r else None,
+            "weight": info["weight"], "kind": info["kind"], "cross_root": info["cross_root"],
+        })
+    items.sort(key=lambda it: (it["rank"] is None, it["rank"]))
+    return items
+
+
+@router.get("/{repo_id}/files/{file_id}/neighbors")
+def get_file_neighbors(
+    repo_id: int, file_id: int, scorer: str = "legacy",
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """One file's direct importers and imports, for the per-file Mermaid
+    export -- deliberately a SEPARATE query from GET /graph's capped
+    payload, not a lookup into it. If Mermaid read from the 400-node-capped
+    graph, a real importer excluded by that cap would silently vanish from
+    the diagram with no indication why -- the same failure shape as
+    letting one mechanism's limit corrupt a different mechanism's
+    correctness (see weighted_pagerank's seed-exclusion docstring for the
+    earlier instance of this argument).
+
+    Capped here at NEIGHBORS_ENDPOINT_CAP (100) -- generous, and only to
+    bound a pathological hub's response size, not to BE Mermaid's real
+    cap. Mermaid's own cap (top 15 per direction, applied client-side) is
+    a separate concern; `*_total_before_cap` always reports the TRUE
+    count (an unbounded COUNT, not `min(true_count, 100)`) so a caller can
+    honestly report e.g. "15 of 44" even when 44 is under 100 and the
+    endpoint cap never engaged, or "15 of 200" when it did."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    file = db.get(CodeFile, file_id)
+    if not file or file.repo_id != repo_id:
+        raise HTTPException(404, "File not found in this repo")
+    if scorer not in VALID_SCORERS:
+        raise HTTPException(400, f"Unknown scorer {scorer!r} -- must be one of {VALID_SCORERS}")
+
+    rank_by_file_id = {
+        r.file_id: r
+        for r in db.query(CodeFileRank).filter(CodeFileRank.repo_id == repo_id, CodeFileRank.scorer == scorer)
+    }
+
+    importer_rows = (
+        db.query(CodeImport.from_file_id, CodeImport.kind, CodeImport.cross_root_kind)
+        .filter(CodeImport.repo_id == repo_id, CodeImport.to_file_id == file_id)
+        .all()
+    )  # from_file_id here IS the neighbor -- the file doing the importing
+    import_rows = (
+        db.query(CodeImport.to_file_id, CodeImport.kind, CodeImport.cross_root_kind)
+        .filter(CodeImport.repo_id == repo_id, CodeImport.from_file_id == file_id, CodeImport.to_file_id.isnot(None))
+        .all()
+    )  # to_file_id here IS the neighbor -- the file being imported
+    importers_agg = _resolve_edges_by_neighbor(importer_rows)
+    imports_agg = _resolve_edges_by_neighbor(import_rows)
+
+    importers = _serialize_neighbor_list(db, importers_agg, rank_by_file_id)
+    imports = _serialize_neighbor_list(db, imports_agg, rank_by_file_id)
+
+    return {
+        "file_id": file_id,
+        "path": file.path,
+        "importers": importers[:NEIGHBORS_ENDPOINT_CAP],
+        "importers_total_before_cap": len(importers),
+        "imports": imports[:NEIGHBORS_ENDPOINT_CAP],
+        "imports_total_before_cap": len(imports),
+    }
+
+
+def _serialize_job(job: RepoJob) -> dict:
+    return {
+        "id": job.id,
+        "repo_id": job.repo_id,
+        "status": job.status,
+        "stage": job.stage,
+        "progress_current": job.progress_current,
+        "progress_total": job.progress_total,
+        "message": job.message,
+        "result": job.result,
+        "error": job.error,
+        "created_at": job.created_at.isoformat(),
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+    }
+
+
+@router.post("/{repo_id}/jobs")
+def start_job_endpoint(repo_id: int, user: User = Depends(require_write_access), db: Session = Depends(get_db)):
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    try:
+        job_id = jobs.start_job(repo_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"job_id": job_id}
+
+
+@router.get("/{repo_id}/jobs/latest")
+def latest_job(repo_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    job = (
+        db.query(RepoJob)
+        .filter(RepoJob.repo_id == repo_id)
+        .order_by(RepoJob.created_at.desc())
+        .first()
+    )
+    if not job:
+        raise HTTPException(404, "No jobs for this repo yet")
+    return _serialize_job(job)
+
+
+@router.get("/{repo_id}/jobs/{job_id}/stream")
+def stream_job(repo_id: int, job_id: int, user: User = Depends(get_current_user)):
+    """Polls the repo_jobs row (a fresh session per poll, not the request's --
+    a long-lived session would risk reading a stale snapshot instead of the
+    background thread's latest commit) and yields a `type`-discriminated SSE
+    frame on every change, same wire format as /api/chat/stream. Reconnect-safe:
+    a client that drops and reopens this just resumes reading current state."""
+
+    def event_stream():
+        last_signature = None
+        while True:
+            poll_db = SessionLocal()
+            try:
+                job = poll_db.get(RepoJob, job_id)
+            finally:
+                poll_db.close()
+
+            if job is None or job.repo_id != repo_id:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Job not found'})}\n\n"
+                return
+
+            signature = (job.status, job.stage, job.progress_current, job.progress_total, job.message)
+            if signature != last_signature:
+                yield f"data: {json.dumps({'type': 'progress', 'status': job.status, 'stage': job.stage, 'current': job.progress_current, 'total': job.progress_total, 'message': job.message})}\n\n"
+                last_signature = signature
+
+            if job.status == "done":
+                yield f"data: {json.dumps({'type': 'done', 'result': job.result})}\n\n"
+                return
+            if job.status == "failed":
+                yield f"data: {json.dumps({'type': 'error', 'message': job.error or 'Job failed'})}\n\n"
+                return
+            time.sleep(0.5)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

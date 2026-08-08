@@ -1,0 +1,12 @@
+# Phase C composite score = sum(weight * normalized_signal), each signal
+# min-max normalized to [0,1] across the repo's files before weighting.
+# Keep these summing to 1.0 -- when git history is unavailable, the three
+# history weights below are redistributed proportionally across the three
+# graph weights so the total stays 1.0 (see app/services/codebase/ranking.py).
+weights:
+  fan_in: 0.35
+  pagerank: 0.30
+  is_entry_point: 0.15
+  commit_count: 0.10
+  distinct_authors: 0.05
+  recency: 0.05

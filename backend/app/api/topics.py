@@ -1,12 +1,13 @@
 import json
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.resources import serialize_resource
-from app.core.config import BACKEND_DIR
+from app.core.config import settings
 from app.core.security import get_current_user, require_write_access
 from app.db.database import get_db
 from app.db.models import Module, Resource, ResourceHistory, Topic, TopicProgress, User
@@ -16,7 +17,7 @@ from app.services.uploads import MAX_UPLOAD_BYTES, MIME_BY_EXT, resolve_upload_e
 
 router = APIRouter(prefix="/api/topics", tags=["topics"])
 
-DATA_DIR = BACKEND_DIR / "data" / "resources"
+DATA_DIR = Path(settings.RESOURCES_DIR)
 
 
 @router.patch("/{topic_id}/progress")
@@ -101,7 +102,7 @@ async def upload_resource(
         kind="file",
         status="saved",
         title=file.filename or stored_name,
-        file_path=str((dest_dir / stored_name).relative_to(BACKEND_DIR)),
+        file_path=str((dest_dir / stored_name).relative_to(DATA_DIR)),
         mime_type=MIME_BY_EXT[ext],
         size_bytes=len(data),
         source_hint="manual",
