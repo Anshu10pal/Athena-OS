@@ -34,9 +34,13 @@ from typing import Optional
 # Half the files with a broad handler on repo 1 got a free pass, and eslint's
 # three such files scored a 0.0% fire rate. Only that threshold changed;
 # nothing was retuned for distribution shape.
+# v3 after the UI pass: cycle_participation had warn=2, exempting the
+# smallest possible real cycle (a 2-file mutual import) for the same reason
+# v2 fixed in broad_error_handling. Found by a disclosure test asserting a
+# firing marker appears in active_markers -- it never fired.
 # "Frozen" means reproducible, not final: any change ships as a version bump
 # with a written reason and a before/after report, never a silent edit.
-THRESHOLDS_VERSION = 2
+THRESHOLDS_VERSION = 3
 WEIGHTS_VERSION = 1
 
 MAINTAINABILITY = "maintainability"
@@ -61,6 +65,22 @@ REVIEW_COST_FLOOR_NLOC = 30
 # commit counts" gate asks whether churn varies AT ALL, which is a different
 # and weaker question than whether it varies enough to grade.
 CHURN_RESOLUTION_MIN_SPAN = 5.0
+
+# Why a marker did not contribute. These are NOT interchangeable and must not
+# be collapsed into one "inactive" bucket -- they license different
+# conclusions about coverage:
+#   no_input        -- the input was never computed. A pipeline gap: running
+#                      the missing stage would produce a real answer. This is
+#                      what withholds an axis score entirely.
+#   zero_severity   -- the input WAS measured and the marker genuinely found
+#                      nothing. Real evidence of absence, not absence of
+#                      evidence.
+#   not_applicable  -- the marker cannot apply here at all (no functions in
+#                      the file, no rule for the language). Permanent for this
+#                      file, and not a gap to be fixed by re-running.
+MARKER_NO_INPUT = "no_input"
+MARKER_ZERO_SEVERITY = "input_available_zero_severity"
+MARKER_NOT_APPLICABLE = "not_applicable"
 
 
 @dataclass(frozen=True)
@@ -97,7 +117,14 @@ MAINTAINABILITY_MARKERS = (
 )
 
 ARCHITECTURE_MARKERS = (
-    MarkerSpec("cycle_participation", "Import cycle", "cycles", 4.0, warn=2, saturate=12),
+    # warn=1, not 2. A file cannot cycle with itself (the graph builder drops
+    # self-edges), so the smallest possible real cycle is a 2-file mutual
+    # import -- and at warn=2 that deducted exactly 0.00, making the most
+    # common cycle free. Identical defect shape to broad_error_handling's
+    # warn=1: a linear ramp whose `warn` sits AT the minimum meaningful value
+    # silently exempts the first real occurrence. scc_size==1 means "measured,
+    # not in a cycle", which warn=1 still correctly scores as zero.
+    MarkerSpec("cycle_participation", "Import cycle", "cycles", 4.0, warn=1, saturate=12),
     MarkerSpec("bidirectional_coupling_hub", "Bidirectional coupling hub", "coupling", 3.0,
                percentile_derived=True),
 )
@@ -176,10 +203,20 @@ class MarkerResult:
     effective_warn: Optional[float] = None
     effective_saturate: Optional[float] = None
     na_reason: Optional[str] = None
+    # One of MARKER_NO_INPUT / MARKER_NOT_APPLICABLE when unavailable.
+    # Unavailable markers are not all alike -- see the constants above.
+    na_kind: Optional[str] = None
 
     @property
     def fired(self) -> bool:
         return self.available and self.deduction > 0
+
+    @property
+    def state(self) -> str:
+        """The single label a disclosure should show for this marker."""
+        if not self.available:
+            return self.na_kind or MARKER_NO_INPUT
+        return "fired" if self.deduction > 0 else MARKER_ZERO_SEVERITY
 
 
 @dataclass
@@ -290,10 +327,10 @@ def build_repo_context(files: list) -> RepoContext:
     return ctx
 
 
-def _na(spec: MarkerSpec, reason: str) -> MarkerResult:
+def _na(spec: MarkerSpec, reason: str, kind: str = MARKER_NO_INPUT) -> MarkerResult:
     return MarkerResult(
         key=spec.key, label=spec.label, category=spec.category, weight=spec.weight,
-        available=False, na_reason=reason,
+        available=False, na_reason=reason, na_kind=kind,
     )
 
 
@@ -384,11 +421,11 @@ def score_maintainability(f: FileInputs) -> AxisResult:
         }[spec.key]
 
         if spec.category == "complexity" and no_functions:
-            markers.append(_na(spec, complexity_na))
+            markers.append(_na(spec, complexity_na, MARKER_NOT_APPLICABLE))
         elif spec.key == "large_method" and no_functions:
-            markers.append(_na(spec, complexity_na))
+            markers.append(_na(spec, complexity_na, MARKER_NOT_APPLICABLE))
         elif value is None:
-            markers.append(_na(spec, "Not measured."))
+            markers.append(_na(spec, "Not measured.", MARKER_NO_INPUT))
         else:
             markers.append(_scored(spec, float(value), spec.warn, spec.saturate))
     return _assemble(MAINTAINABILITY, HIGHER_IS_BETTER, markers)
@@ -412,14 +449,15 @@ def score_architecture_health(f: FileInputs, ctx: RepoContext) -> AxisResult:
         # (weight 4.0), so scoring without it would report a near-perfect
         # Architecture Health carried by one marker that fires on ~1% of
         # files -- exactly the false 9.98 the gate exists to prevent.
-        markers.append(_na(cycle_spec, "Import cycles not yet computed for this repo."))
+        markers.append(_na(cycle_spec, "Import cycles not yet computed for this repo.",
+                           MARKER_NO_INPUT))
         missing_inputs.append("cycle_participation")
     else:
         markers.append(_scored(cycle_spec, float(f.cycle_size), cycle_spec.warn, cycle_spec.saturate))
 
     hub_spec = ALL_MARKERS["bidirectional_coupling_hub"]
     if f.fan_in is None or f.fan_out is None:
-        markers.append(_na(hub_spec, "Fan-in/fan-out not computed."))
+        markers.append(_na(hub_spec, "Fan-in/fan-out not computed.", MARKER_NO_INPUT))
     else:
         # Fires only when the file is heavily depended upon AND depends
         # heavily itself. A pure high-fan-in utility is deliberately not a
@@ -453,7 +491,8 @@ def score_change_hotspot(f: FileInputs, ctx: RepoContext) -> AxisResult:
 
     interaction_spec = ALL_MARKERS["complexity_under_churn"]
     if not f.ast_available or f.max_cyclomatic is None or f.function_count == 0:
-        interaction = _na(interaction_spec, "Complexity not measurable for this file.")
+        interaction = _na(interaction_spec, "Complexity not measurable for this file.",
+                          MARKER_NOT_APPLICABLE)
     else:
         cc_spec = ALL_MARKERS["complex_method"]
         cc_sev = severity_for(float(f.max_cyclomatic), cc_spec.warn, cc_spec.saturate)

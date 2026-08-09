@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from app.db.database import SessionLocal
 from app.db.models import Repo, RepoJob
 from app.services.codebase import registry
+from app.services.codebase.graph_structure import persist_graph_structure
+from app.services.codebase.health_snapshots import create_snapshot, should_create_snapshot
 from app.services.codebase.ingest import ingest_repo
 from app.services.codebase.ranking import rank_repo
 
@@ -51,6 +53,37 @@ def start_job(repo_id: int) -> int:
     return job_id
 
 
+def _run_health_stage(db, repo, progress) -> dict:
+    """The health stage's own error boundary.
+
+    Returns a stage record rather than raising, so a failure here can never
+    fail the job or undo the ingest/rank work that already committed. Marked
+    `retryable` because every failure mode this can hit (a file disappearing
+    mid-run, a parser crash, a transient DB error) is fixed by running again,
+    not by intervention.
+    """
+    try:
+        progress("health", 0, 0, "Computing code health")
+        persist_graph_structure(db, repo)
+        decision = should_create_snapshot(db, repo)
+        if not decision.should_create:
+            return {"status": "skipped", "reason": decision.reason, "retryable": False}
+        snapshot = create_snapshot(db, repo)
+        return {
+            "status": "created",
+            "snapshot_id": snapshot.id,
+            "reason": decision.reason,
+            "retryable": False,
+        }
+    except Exception as e:
+        # create_snapshot already rolled back its own transaction; this
+        # rollback covers persist_graph_structure and leaves the session
+        # usable for the job's own final commit.
+        db.rollback()
+        print(f"[health] repo {repo.id}: stage failed, ingest/rank unaffected: {e}")
+        return {"status": "failed", "error": str(e), "retryable": True}
+
+
 def _run_job(job_id: int) -> None:
     db = SessionLocal()
     try:
@@ -80,6 +113,24 @@ def _run_job(job_id: int) -> None:
         report = ingest_repo(db, repo, on_progress=progress)
         rank_result = rank_repo(db, repo, on_progress=progress)
 
+        # Health runs LAST and is deliberately isolated. ingest and rank have
+        # already committed by this point, so nothing here can roll them back
+        # -- a health failure is recorded as a retryable stage result and the
+        # job still reports done, because the ingest/rank work is real and
+        # useful on its own. It would be wrong to throw that away because a
+        # scoring pass failed.
+        #
+        # Conditional, not unconditional: without the source-content check an
+        # automatic pipeline manufactures a duplicate snapshot on every run
+        # and fills the trend line with identical points. Note the check
+        # compares a content fingerprint rather than HEAD -- two different
+        # sets of uncommitted edits share a SHA and dirty=True, so those
+        # cannot identify a working tree.
+        #
+        # Still zero outbound AI: this stage is AST parsing, git history and
+        # graph maths only, same as every other stage here.
+        health_stage = _run_health_stage(db, repo, progress)
+
         job.status = "done"
         job.stage = "done"
         job.progress_current = job.progress_total
@@ -93,6 +144,7 @@ def _run_job(job_id: int) -> None:
             "imports_resolved": report.imports_resolved,
             "blind_spots": report.blind_spots,
             "reduced_confidence": rank_result["reduced_confidence"],
+            "health": health_stage,
         }
         job.finished_at = datetime.now(timezone.utc)
         db.commit()

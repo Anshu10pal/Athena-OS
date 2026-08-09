@@ -459,6 +459,77 @@ here. Recorded as a property of the corpus, not a threshold fault.
 on repo 1. Maintainability: 4.5–7.1% trivial-file exclusions. Nothing silently
 scored as healthy.
 
+### 10.2b `cycle_participation` warn 2 → 1 (`thresholds_version = 3`)
+
+**The same defect class as §10.2, found a second time.** `cycle_participation`
+had `warn = 2`; a file cannot cycle with itself (the graph builder drops
+self-edges), so the smallest possible real cycle is a 2-file mutual import —
+and at `warn = 2` that deducted **exactly 0.00**:
+
+| SCC size | v2 deduction | v3 deduction |
+|---:|---:|---:|
+| 1 (not in a cycle) | 0.00 | 0.00 |
+| **2 (mutual import)** | **0.00** | **0.36** |
+| 3 | 0.40 | 0.73 |
+| 6 | 1.60 | 1.82 |
+| 12+ | 4.00 | 4.00 |
+
+`scc_size == 1` means "measured, not in a cycle" and still correctly scores
+zero at `warn = 1`.
+
+**The generalisable lesson, now observed twice: a linear ramp whose `warn`
+sits AT the minimum meaningful value silently exempts the first real
+occurrence.** Any future marker should be checked against its own minimum
+observable value before its threshold is frozen.
+
+**Found by a test, not by inspection** — the disclosure test asserting that a
+firing marker appears in `active_markers` failed, because on a fixture with a
+genuine mutual import the marker never fired.
+
+**Before/after on the three real repos is unchanged** (all still report 0
+file-level cycles, so nothing moved). That is precisely why this could not
+have been caught from the distribution report alone, and why the fix is
+verified against a purpose-built cycle fixture instead.
+
+### 10.2c Incident: a test migrated the live development database
+
+**What happened.** The first version of `test_migration_parity.py` set
+`sqlalchemy.url` on the Alembic `Config` and called `command.upgrade(cfg,
+"head")`. But `alembic/env.py` overwrites that option from
+`settings.DATABASE_URL` (lines 16–19), so the Config value was ignored and the
+migration chain ran against the **configured development database**.
+
+**Why it was discovered.** The scratch database came back empty, so the parity
+assertions failed. Had they passed, the run would have been invisible.
+
+**Verified impact: none.** Read-only inspection of the development database
+afterwards:
+
+| Check | Result |
+|---|---|
+| `alembic_version` | `263062fc7f7f` — the expected head |
+| `code_health_snapshots` columns | all expected, incl. `inputs_complete` and `source_fingerprint`; no `evidence_complete` |
+| `code_files` phase-1 columns | `scc_id`, `scc_size`, `reachable_from_entry` present |
+| Row counts | 5 repos / 608 files / 2,474 imports / 2,217 symbols — intact |
+| Stray temp tables | only `_alembic_tmp_interview_sessions`, documented as pre-existing drift since the Phase I1 migration |
+
+The run was a **no-op**: it happened after the rename migration had already
+been applied, so the database was already at head. Nothing was rolled back;
+state was established rather than altered.
+
+**It was a no-op by luck, not by design.** A chain with any unapplied
+revision would have mutated real data from a test run.
+
+**Hardening.** The guard is now an extracted, directly-tested function
+(`assert_isolated`) rather than an inline assertion, since an inline check can
+only be tested by copy-pasting it — which tests the copy. It refuses unless
+`settings.DATABASE_URL` (the value env.py actually reads) is the scratch path
+AND is not the configured development URL, and after the upgrade it asserts
+the scratch file exists and carries a stamped `alembic_version`, so a future
+env.py change fails loudly instead of quietly moving the real database. A
+further test asserts the development database's mtime is unchanged by a parity
+run.
+
 ### 10.3 File-level SCCs wired — and `cycle_participation` is empirically inert
 
 `graph_structure.py` now computes and persists file-level SCC membership/size
@@ -594,9 +665,26 @@ fields, computed at snapshot time and stored immutably with the result:
 | `inputs_complete` | every marker in this contract had its input — **not** "complete evidence" |
 | `file_level_cycle_count` | non-trivial file-level SCCs found (the scored fact) |
 | `directory_cycle_count` | directory-level cycles observed separately (**not** scored) |
-| `active_markers` | which markers actually had data and carried the score |
-| `inactive_markers` | markers with no data in this run |
+| `active_markers` | markers that **fired at least once** — i.e. actually carried the score. "Had input available" is a different fact and does not belong in a score explanation. |
+| `inactive_markers` | `[{key, state, detail}]` — **never a flat list of keys** (see below) |
 | `limitations` | plain-language scope statements, always non-empty |
+
+**`inactive_markers` preserves a per-marker reason.** The three states license
+different conclusions and are trivially conflated once flattened:
+
+| State | Meaning | Consequence |
+|---|---|---|
+| `no_input` | the input was never computed | A **coverage gap**. Nothing is known either way. This is what withholds an axis score entirely. |
+| `input_available_zero_severity` | measured, and genuinely found nothing | A **result**. Evidence of absence, not absence of evidence. |
+| `not_applicable` | the marker cannot apply here (no functions, no rule for the language) | **Permanent** for these files; re-running changes nothing. |
+
+Collapsing these would let a coverage gap read as a clean bill of health — the
+exact failure the Architecture gate exists to prevent, reintroduced one level
+down. The same `state` is stored per marker inside each snapshot's
+`explanation`, so a historical result can still distinguish them.
+
+The UI renders them distinctly: `not computed` (warning-coloured),
+`found nothing`, and `n/a here`.
 
 A documented rendering rule alone is insufficient: a future UI could receive a
 non-null score and simply omit the scope. `TestArchitectureDisclosureContract`

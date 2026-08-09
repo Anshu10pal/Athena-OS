@@ -329,6 +329,125 @@ export interface HotspotFileT {
   lines: number;
 }
 
+// Phase 1 code health. Three axes, never blended, each carrying its own
+// direction -- see backend/app/services/codebase/health_scoring.py and
+// docs/code-health-contract.md.
+//
+// `mean` is absent (not null) when an axis had nothing presentable to score:
+// either every file was N/A, or a required marker had no data and the backend
+// withheld the value structurally. Rendering code must branch on its absence
+// rather than defaulting it to 0.
+export interface HealthAxisT {
+  axis: string;
+  scored: number;
+  na: number;
+  na_reasons: Record<string, number>;
+  /** "every marker IN THIS CONTRACT had its input" -- never "complete
+   *  evidence about the architecture". */
+  inputs_complete: boolean;
+  resolution_limited: boolean;
+  mean?: number;
+  median?: number;
+  p10?: number;
+  p90?: number;
+  coverage?: HealthCoverageT;
+}
+
+/** The mandatory Architecture Health scope block. Ships as data so a UI
+ *  cannot receive a score while omitting what it applies to. */
+export interface HealthCoverageT {
+  inputs_complete: boolean;
+  file_level_cycle_count: number;
+  directory_cycle_count: number | null;
+  active_markers: string[];
+  /** Never a flat list: "never computed", "measured and found nothing" and
+   *  "cannot apply here" license different conclusions about coverage and are
+   *  easy to conflate once flattened. */
+  inactive_markers: InactiveMarkerT[];
+  limitations: string[];
+}
+
+export type MarkerStateT =
+  | "no_input"
+  | "input_available_zero_severity"
+  | "not_applicable";
+
+export interface InactiveMarkerT {
+  key: string;
+  state: MarkerStateT;
+  detail: string;
+}
+
+export interface HealthSnapshotT {
+  id: number;
+  branch: string;
+  head_sha: string | null;
+  /** For a local repo the live working directory is analysed, so HEAD may not
+   *  describe the analysed bytes. */
+  working_tree_dirty: boolean | null;
+  analyzer_version: number;
+  thresholds_version: number;
+  weights_version: number;
+  computed_at: string;
+  files_scored: number;
+  files_na: number;
+  inputs_complete: boolean;
+}
+
+export interface HealthTrendT {
+  comparable: boolean;
+  /** Present whenever comparable is false. Never a 0.0 delta meaning
+   *  "unknown". */
+  reason: string | null;
+  previous_snapshot_id?: number;
+  previous_head_sha?: string | null;
+  deltas: Record<string, number>;
+}
+
+export interface HealthResponseT {
+  snapshot: HealthSnapshotT;
+  axes: Record<string, HealthAxisT>;
+  trend: HealthTrendT;
+}
+
+export interface HealthMarkerT {
+  key: string;
+  label: string;
+  category: string;
+  available: boolean;
+  na_reason: string | null;
+  raw_value: number | null;
+  severity: number | null;
+  deduction: number;
+  effective_warn: number | null;
+  effective_saturate: number | null;
+}
+
+export interface HealthFileT {
+  file_id: number;
+  path: string;
+  nloc: number;
+  maintainability: number | null;
+  architecture_health: number | null;
+  exposure: number | null;
+  adjusted_exposure: number | null;
+  explanation: Record<string, {
+    available: boolean;
+    na_reason: string | null;
+    inputs_complete: boolean;
+    resolution_limited: boolean;
+    resolution_note: string | null;
+    markers: HealthMarkerT[];
+  }>;
+}
+
+export interface HealthFilesResponseT {
+  snapshot_id: number;
+  sort: string;
+  excluded_na: number;
+  files: HealthFileT[];
+}
+
 export interface OverviewT {
   repo: {
     id: number;

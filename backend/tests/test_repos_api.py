@@ -840,6 +840,33 @@ class TestArchitectureDisclosureContract:
         assert coverage["file_level_cycle_count"] == 0
         assert "directory_cycle_count" in coverage
 
+    def test_inactive_markers_distinguish_never_computed_from_found_nothing(
+            self, db_session, tmp_path):
+        from app.db.models import CodeFile
+
+        repo = self._analysed(db_session, tmp_path)
+        # Force the "never computed" state by clearing SCC data AFTER the
+        # endpoint's own graph pass would have run -- use the service directly.
+        from app.services.codebase.health_snapshots import (
+            architecture_coverage, build_repo_context, collect_inputs,
+        )
+        from app.services.codebase.health_scoring import score_file
+
+        for f in db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).all():
+            f.scc_size = None
+        db_session.commit()
+
+        inputs = collect_inputs(db_session, repo)
+        ctx = build_repo_context(inputs)
+        results = [score_file(f, ctx).architecture_health for f in inputs]
+        coverage = architecture_coverage(inputs, results, repo)
+
+        inactive = {m["key"]: m["state"] for m in coverage["inactive_markers"]}
+        assert inactive["cycle_participation"] == "no_input"
+        assert coverage["inputs_complete"] is False
+        joined = " ".join(coverage["limitations"]).lower()
+        assert "never computed" in joined
+
     def test_limitations_name_the_static_analysis_blind_spot(self, db_session, tmp_path):
         repo = self._analysed(db_session, tmp_path)
         payload = compute_health_endpoint(repo.id, user=None, db=db_session)
@@ -847,10 +874,51 @@ class TestArchitectureDisclosureContract:
         assert "dynamic import" in text or "static import" in text
 
     def test_active_markers_names_what_actually_carried_the_score(self, db_session, tmp_path):
+        # "Active" means FIRED, not merely "had data". cycle_participation has
+        # complete data on this fixture and finds nothing, so listing it as
+        # active would imply the score reflects a check that never engaged.
         repo = self._analysed(db_session, tmp_path)
         payload = compute_health_endpoint(repo.id, user=None, db=db_session)
         coverage = payload["axes"]["architecture_health"]["coverage"]
-        assert "bidirectional_coupling_hub" in coverage["active_markers"]
+        assert coverage["file_level_cycle_count"] == 0
+        assert "cycle_participation" not in coverage["active_markers"]
+        inactive = {m["key"]: m for m in coverage["inactive_markers"]}
+        assert "cycle_participation" in inactive
+        # And the REASON is preserved: measured-and-found-nothing is a
+        # different fact from never-computed, and collapsing them would let a
+        # coverage gap masquerade as a clean result.
+        assert inactive["cycle_participation"]["state"] == "input_available_zero_severity"
+
+    def test_a_marker_that_fires_is_listed_as_active(self, db_session, tmp_path):
+        # A REAL mutual import, not a patched scc_size: compute_health_endpoint
+        # recomputes graph structure first, so any hand-set value is
+        # overwritten before scoring -- which an earlier version of this test
+        # discovered the hard way.
+        root = tmp_path / "cyclerepo"
+        _init_repo(root)
+        _write(root / "pkg" / "alpha.py",
+               "from pkg.beta import beta_helper\n\n\n"
+               "def alpha_run(x):\n"
+               "    if x > 1:\n        return beta_helper(x)\n"
+               "    return 0\n\n\n"
+               "def alpha_extra(y):\n    return y + 1\n")
+        _write(root / "pkg" / "beta.py",
+               "from pkg.alpha import alpha_extra\n\n\n"
+               "def beta_helper(x):\n"
+               "    if x > 2:\n        return alpha_extra(x)\n"
+               "    return 1\n\n\n"
+               "def beta_extra(y):\n    return y * 2\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+
+        payload = compute_health_endpoint(repo.id, user=None, db=db_session)
+        coverage = payload["axes"]["architecture_health"]["coverage"]
+        assert coverage["file_level_cycle_count"] == 1
+        assert "cycle_participation" in coverage["active_markers"]
 
     def test_snapshot_carries_provenance_including_dirty_working_tree(self, db_session, tmp_path):
         repo = self._analysed(db_session, tmp_path)

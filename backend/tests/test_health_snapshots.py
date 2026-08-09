@@ -260,3 +260,85 @@ class TestTrendComparability:
         db_session.commit()
         new = create_snapshot(db_session, repo)
         assert previous_comparable_snapshot(db_session, new) is None
+
+
+class TestSourceFingerprint:
+    """HEAD SHA + dirty=True cannot identify a working tree: two different
+    sets of uncommitted edits share both values. These pin the content-based
+    identity that the idempotency check actually relies on."""
+
+    def test_unchanged_source_yields_a_stable_fingerprint(self, db_session, tmp_path):
+        repo = _analysed(db_session, tmp_path)
+        assert health_snapshots.source_fingerprint(db_session, repo) == \
+            health_snapshots.source_fingerprint(db_session, repo)
+
+    def test_two_different_uncommitted_edits_are_distinguished(self, db_session, tmp_path):
+        # The exact case head_sha + dirty cannot tell apart: same HEAD, same
+        # dirty=True, genuinely different analysed content.
+        repo = _analysed(db_session, tmp_path)
+        head_before = repo.last_ingested_sha
+
+        target = Path(repo.local_path) / "pkg" / "util.py"
+        target.write_text("from pkg.core import run\n\n\ndef helper(x):\n    return run(x, True)\n")
+        ingest_repo(db_session, repo)
+        first = health_snapshots.source_fingerprint(db_session, repo)
+
+        target.write_text("from pkg.core import run\n\n\ndef helper(x):\n    return run(x, False)\n")
+        ingest_repo(db_session, repo)
+        second = health_snapshots.source_fingerprint(db_session, repo)
+
+        assert repo.last_ingested_sha == head_before  # nothing committed
+        assert first != second
+
+    def test_a_rename_changes_the_fingerprint_even_with_identical_content(self, db_session, tmp_path):
+        # Same bytes at a new path changes the import graph, so it must change
+        # the fingerprint.
+        repo = _analysed(db_session, tmp_path)
+        before = health_snapshots.source_fingerprint(db_session, repo)
+        src = Path(repo.local_path) / "pkg" / "util.py"
+        content = src.read_text()
+        src.unlink()
+        (Path(repo.local_path) / "pkg" / "renamed.py").write_text(content)
+        ingest_repo(db_session, repo)
+        assert health_snapshots.source_fingerprint(db_session, repo) != before
+
+
+class TestSnapshotIdempotency:
+    def test_first_run_creates(self, db_session, tmp_path):
+        repo = _analysed(db_session, tmp_path)
+        decision = health_snapshots.should_create_snapshot(db_session, repo)
+        assert decision.should_create is True
+        assert "No previous snapshot" in decision.reason
+
+    def test_unchanged_source_does_not_create_a_duplicate(self, db_session, tmp_path):
+        # Without this an automatic pipeline manufactures a snapshot on every
+        # run and fills the trend with identical points.
+        repo = _analysed(db_session, tmp_path)
+        create_snapshot(db_session, repo)
+        decision = health_snapshots.should_create_snapshot(db_session, repo)
+        assert decision.should_create is False
+        assert "unchanged" in decision.reason
+
+    def test_changed_content_creates_even_without_a_commit(self, db_session, tmp_path):
+        repo = _analysed(db_session, tmp_path)
+        create_snapshot(db_session, repo)
+        (Path(repo.local_path) / "pkg" / "util.py").write_text(
+            "from pkg.core import run\n\n\ndef helper(x):\n    return run(x, True)\n")
+        ingest_repo(db_session, repo)
+        decision = health_snapshots.should_create_snapshot(db_session, repo)
+        assert decision.should_create is True
+        assert "source content changed" in decision.reason.lower()
+
+    def test_a_scoring_version_change_creates_a_new_snapshot(self, db_session, tmp_path):
+        repo = _analysed(db_session, tmp_path)
+        snap = create_snapshot(db_session, repo)
+        snap.thresholds_version = THRESHOLDS_VERSION - 1
+        db_session.commit()
+        decision = health_snapshots.should_create_snapshot(db_session, repo)
+        assert decision.should_create is True
+        assert "version changed" in decision.reason.lower()
+
+    def test_the_fingerprint_is_stored_on_the_snapshot(self, db_session, tmp_path):
+        repo = _analysed(db_session, tmp_path)
+        snap = create_snapshot(db_session, repo)
+        assert snap.source_fingerprint == health_snapshots.source_fingerprint(db_session, repo)

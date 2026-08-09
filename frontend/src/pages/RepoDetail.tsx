@@ -2,7 +2,7 @@ import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState } from "
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   api, DirGraphResponseT, GraphResponseT, RankedFileT, RankingResponseT, RepoJobT, RepoT, ScorerT,
-  SubsystemAlgorithmT, SubsystemsResponseT, OverviewT,
+  SubsystemAlgorithmT, SubsystemsResponseT, OverviewT, HealthResponseT,
   streamJobProgress, timeAgo,
 } from "../lib/api";
 import {
@@ -26,6 +26,7 @@ import { FileSearch } from "../components/FileSearch";
 import { MermaidPanel } from "../components/MermaidPanel";
 import { SubsystemsView } from "../components/SubsystemsView";
 import { OverviewView } from "../components/OverviewView";
+import { HealthView } from "../components/HealthView";
 import { dirnameOfPath } from "../lib/layeredLayout";
 
 // Phase J1: cytoscape + ELK are heavy and needed only by whoever actually
@@ -58,7 +59,7 @@ type SortKey = keyof Pick<
 // where the full graph exists only behind an explicit opt-in that warns
 // about exactly the failure H5 recorded. Different default, different
 // layout, different question answered -- see components/DependencyGraph.tsx.
-type ViewT = "overview" | "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph";
+type ViewT = "overview" | "health" | "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph";
 
 const COLUMNS: { key: SortKey; label: string; align?: "left" | "center" | "right" }[] = [
   { key: "score", label: "Score" },
@@ -78,6 +79,7 @@ const SCORERS: { value: ScorerT; label: string }[] = [
 
 const VIEWS: { value: ViewT; label: string }[] = [
   { value: "overview", label: "Overview" },
+  { value: "health", label: "Code Health" },
   { value: "reading", label: "Reading list" },
   { value: "architecture", label: "Architecture" },
   { value: "depgraph", label: "Dependency Graph" },
@@ -276,7 +278,9 @@ export default function RepoDetail() {
   });
   const [view, setView] = useState<ViewT>(() => {
     const fromUrl = searchParams.get("view");
-    return isValidView(fromUrl) ? fromUrl : "overview";
+    // The retired blended Structural scorecard lived on Overview. Make the
+    // evidence-based Code Health view the landing view instead.
+    return isValidView(fromUrl) ? fromUrl : "health";
   });
   const [filters, setFilters] = useState<FilterState>(() => filterStateFromSearchParams(searchParams));
   const [ranking, setRanking] = useState<RankingResponseT | null>(null);
@@ -331,6 +335,8 @@ export default function RepoDetail() {
   const [graphFocusFileId, setGraphFocusFileId] = useState<number | null>(null);
   const [graphFocusDir, setGraphFocusDir] = useState<string | null>(null);
   const [overview, setOverview] = useState<OverviewT | null>(null);
+  const [health, setHealth] = useState<HealthResponseT | null>(null);
+  const [computingHealth, setComputingHealth] = useState(false);
 
   // DetailPanel shows file details whenever selectedFileId is set,
   // regardless of how stale -- without clearing the other one on every
@@ -361,6 +367,25 @@ export default function RepoDetail() {
     api<OverviewT>(`/api/repos/${id}/overview`)
       .then(setOverview)
       .catch(() => setOverview(null));
+  };
+
+  // 404 before any snapshot is the expected state, not an error worth
+  // surfacing -- the view renders its own "no snapshot yet" prompt.
+  const loadHealth = () => {
+    api<HealthResponseT>(`/api/repos/${id}/health`)
+      .then(setHealth)
+      .catch(() => setHealth(null));
+  };
+
+  const computeHealth = async () => {
+    setComputingHealth(true);
+    try {
+      setHealth(await api<HealthResponseT>(`/api/repos/${id}/health`, { method: "POST" }));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setComputingHealth(false);
+    }
   };
 
   const loadRanking = (activeScorer: ScorerT) => {
@@ -445,6 +470,7 @@ export default function RepoDetail() {
     loadRepo();
     loadSubsystems();
     loadOverview();
+    loadHealth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -729,7 +755,7 @@ export default function RepoDetail() {
           it there would offer controls that visibly do nothing, which is the
           same class of confusion as the "Showing 0 of 173" counter bug an
           earlier browser pass caught. */}
-      {files.length > 0 && view !== "overview" && (
+      {files.length > 0 && view !== "overview" && view !== "health" && (
         <div className="card p-5 space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-[10px] uppercase tracking-widest text-fog w-24 shrink-0">Path</span>
@@ -825,6 +851,20 @@ export default function RepoDetail() {
       )}
       {view === "overview" && !overview && (
         <p className="text-fog text-sm font-mono">Loading overview…</p>
+      )}
+
+      {view === "health" && id && (
+        <HealthView
+          repoId={id}
+          data={health}
+          onCompute={computeHealth}
+          computing={computingHealth}
+          onSelectFile={(fileId) => {
+            selectFile(fileId);
+            setView("reading");
+          }}
+          onGoToClusters={() => setView("subsystems")}
+        />
       )}
 
       {files.length > 0 && view === "reading" && (
@@ -1047,7 +1087,7 @@ export default function RepoDetail() {
           ever show its "select something" placeholder, spending a 320px
           column to say nothing on the one page whose whole purpose is
           orientation rather than detail. */}
-      {files.length > 0 && id && view !== "overview" && (
+      {files.length > 0 && id && view !== "overview" && view !== "health" && (
         <div className="w-80 shrink-0">
           <DetailPanel
             repoId={id}

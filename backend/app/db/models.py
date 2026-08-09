@@ -779,6 +779,12 @@ class CodeHealthSnapshot(Base):
     branch: Mapped[str] = mapped_column(String(255), default="")
     head_sha: Mapped[str] = mapped_column(String(64), nullable=True, default=None)
     working_tree_dirty: Mapped[bool] = mapped_column(Boolean, nullable=True, default=None)
+    # Manifest digest over the analysed files' content hashes. head_sha +
+    # working_tree_dirty CANNOT identify a local working tree -- two different
+    # sets of uncommitted edits share both values -- so this is what the
+    # idempotency check actually compares. Indexed because every automatic
+    # pipeline run queries the latest snapshot by it.
+    source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=True, default=None, index=True)
     analyzer_version: Mapped[int] = mapped_column(Integer, default=0)
     thresholds_version: Mapped[int] = mapped_column(Integer, default=0)
     weights_version: Mapped[int] = mapped_column(Integer, default=0)

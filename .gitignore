@@ -10,3 +10,10 @@ node_modules/
 dist/
 .venv/
 venv/
+
+# Dev-server logs -- these have floated untracked across several sessions and
+# are one `git add .` away from being committed.
+server.out.log
+server.err.log
+# Chat-history export dropped into the tree while working; not repo content.
+athena-docs/

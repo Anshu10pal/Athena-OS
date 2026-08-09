@@ -17,6 +17,8 @@ come from **the same run** -- a snapshot never mixes a fresh AST pass with a
 stale graph or a different threshold version, because they are gathered once
 and written together.
 """
+import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +29,9 @@ from app.services.codebase import git_ops
 from app.services.codebase.ast_metrics import ANALYZER_VERSION, metrics_for
 from app.services.codebase.health_scoring import (
     ARCHITECTURE,
+    MARKER_NOT_APPLICABLE,
+    MARKER_NO_INPUT,
+    MARKER_ZERO_SEVERITY,
     CHANGE_HOTSPOT,
     MAINTAINABILITY,
     THRESHOLDS_VERSION,
@@ -59,6 +64,76 @@ def working_tree_dirty(local_path: str) -> Optional[bool]:
     if result.returncode != 0:
         return None
     return bool(result.stdout.strip())
+
+
+def source_fingerprint(db: Session, repo: Repo) -> str:
+    """A manifest digest over the CONTENT that was actually analysed.
+
+    `head_sha` + `working_tree_dirty` cannot identify a local working tree:
+    two different sets of uncommitted edits share the same HEAD and the same
+    `dirty = True`, so an idempotency check built on those alone would treat
+    genuinely different source states as identical and skip a snapshot that
+    should have been taken -- or worse, present an old snapshot as describing
+    new code.
+
+    Built from `CodeFile.content_sha256`, which ingest already computes per
+    file, so this costs one indexed query and no re-hashing. Path is included
+    alongside the hash so that a pure rename -- same content, different
+    location -- still changes the fingerprint, since it changes the import
+    graph and therefore the architecture axis.
+    """
+    rows = (
+        db.query(CodeFile.path, CodeFile.content_sha256)
+        .filter(CodeFile.repo_id == repo.id)
+        .order_by(CodeFile.path.asc())
+        .all()
+    )
+    digest = hashlib.sha256()
+    for path, sha in rows:
+        digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((sha or "").encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+@dataclass
+class SnapshotDecision:
+    should_create: bool
+    reason: str
+    fingerprint: str
+
+
+def should_create_snapshot(db: Session, repo: Repo) -> SnapshotDecision:
+    """Whether the analysed source state or the scoring definition has changed
+    since the last snapshot.
+
+    Deliberately compares the CONTENT fingerprint and all three version
+    stamps, not the SHA: re-running against an unchanged working tree should
+    produce no new snapshot (otherwise an automatic pipeline manufactures
+    duplicate rows and a trend line fills with meaningless identical points),
+    while any real edit -- committed or not -- must produce one.
+    """
+    fingerprint = source_fingerprint(db, repo)
+    latest = (
+        db.query(CodeHealthSnapshot)
+        .filter(CodeHealthSnapshot.repo_id == repo.id)
+        .order_by(CodeHealthSnapshot.computed_at.desc(), CodeHealthSnapshot.id.desc())
+        .first()
+    )
+    if latest is None:
+        return SnapshotDecision(True, "No previous snapshot for this repo.", fingerprint)
+    if latest.source_fingerprint != fingerprint:
+        return SnapshotDecision(True, "Analysed source content changed.", fingerprint)
+    if (latest.analyzer_version, latest.thresholds_version, latest.weights_version) != (
+        ANALYZER_VERSION, THRESHOLDS_VERSION, WEIGHTS_VERSION
+    ):
+        return SnapshotDecision(True, "Analyzer or scoring version changed.", fingerprint)
+    return SnapshotDecision(
+        False,
+        "Source content and scoring versions are unchanged since the last snapshot.",
+        fingerprint,
+    )
 
 
 def _repo_root(repo: Repo) -> Path:
@@ -115,6 +190,9 @@ def _explain_axis(axis: AxisResult) -> dict:
             {
                 "key": m.key, "label": m.label, "category": m.category,
                 "available": m.available, "na_reason": m.na_reason,
+                # Stored per marker so a historical explanation can still
+                # distinguish "found nothing" from "never computed".
+                "state": m.state,
                 "raw_value": m.raw_value, "severity": m.severity,
                 "deduction": round(m.deduction, 4),
                 "effective_warn": m.effective_warn,
@@ -150,15 +228,42 @@ def architecture_coverage(inputs: list, results: list, repo: Repo) -> dict:
     coherence = repo.subsystem_cycle_coherence
     directory_cycle_count = len(coherence) if isinstance(coherence, list) else None
 
-    active, inactive = [], []
+    # "Active" means a marker actually CARRIED the score -- it fired on at
+    # least one file -- not merely that it had data. A marker with complete
+    # data that found nothing (file-level cycles here) contributed exactly
+    # zero, and listing it as active would imply the score reflects a check
+    # that in practice never engaged.
+    # Per-marker state across the repo, resolved by precedence: a marker that
+    # fired anywhere is active; otherwise its state is the strongest reason
+    # it did not. Deliberately NOT one undifferentiated "inactive" list --
+    # "never computed", "computed and found nothing", and "cannot apply here"
+    # license completely different conclusions about coverage, and are easy to
+    # conflate once flattened.
+    fired, zero_severity, no_input, not_applicable = set(), set(), set(), set()
     for r in results:
         if not r.available:
             continue
         for m in r.markers:
-            bucket = active if m.available else inactive
-            if m.key not in bucket:
-                bucket.append(m.key)
-        break  # marker set is identical across files
+            state = m.state
+            if state == "fired":
+                fired.add(m.key)
+            elif state == MARKER_ZERO_SEVERITY:
+                zero_severity.add(m.key)
+            elif state == MARKER_NOT_APPLICABLE:
+                not_applicable.add(m.key)
+            else:
+                no_input.add(m.key)
+
+    active = sorted(fired)
+    inactive = []
+    for key in sorted((zero_severity | no_input | not_applicable) - fired):
+        if key in zero_severity:
+            state, detail = MARKER_ZERO_SEVERITY, "Measured across this repo and found nothing."
+        elif key in no_input:
+            state, detail = MARKER_NO_INPUT, "Its input was never computed for this repo."
+        else:
+            state, detail = MARKER_NOT_APPLICABLE, "Does not apply to the files in this repo."
+        inactive.append({"key": key, "state": state, "detail": detail})
 
     limitations = [
         "Static import analysis only. Dynamic imports, reflection, plugin "
@@ -174,9 +279,17 @@ def architecture_coverage(inputs: list, results: list, repo: Repo) -> dict:
             "No file-level cycles were found, so this score is carried by the remaining "
             "marker(s) alone."
         )
-    if inactive:
+    never_computed = [m["key"] for m in inactive if m["state"] == MARKER_NO_INPUT]
+    found_nothing = [m["key"] for m in inactive if m["state"] == MARKER_ZERO_SEVERITY]
+    if never_computed:
         limitations.append(
-            f"Marker(s) with no data in this run: {', '.join(inactive)}."
+            f"Marker(s) whose input was never computed, so nothing is known either way: "
+            f"{', '.join(never_computed)}."
+        )
+    if found_nothing:
+        limitations.append(
+            f"Marker(s) measured that found nothing: {', '.join(found_nothing)}. "
+            f"This is evidence of absence, not absence of evidence."
         )
 
     return {
@@ -228,6 +341,10 @@ def create_snapshot(db: Session, repo: Repo) -> CodeHealthSnapshot:
     """Score everything in memory, then write the snapshot and all per-file
     rows in a single transaction. Raises without writing anything if scoring
     fails -- there is no partial snapshot state."""
+    # Computed BEFORE scoring so the snapshot records the fingerprint of the
+    # content it actually measured, not of whatever the tree looks like by the
+    # time the write happens.
+    fingerprint = source_fingerprint(db, repo)
     inputs = collect_inputs(db, repo)
     ctx = build_repo_context(inputs)
 
@@ -269,6 +386,7 @@ def create_snapshot(db: Session, repo: Repo) -> CodeHealthSnapshot:
             repo_id=repo.id,
             branch=repo.default_branch or "",
             head_sha=repo.last_ingested_sha,
+            source_fingerprint=fingerprint,
             working_tree_dirty=working_tree_dirty(repo.local_path),
             analyzer_version=ANALYZER_VERSION,
             thresholds_version=THRESHOLDS_VERSION,

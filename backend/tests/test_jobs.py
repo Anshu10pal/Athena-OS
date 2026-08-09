@@ -11,6 +11,7 @@ genuinely exercised, not assumed.
 """
 import shutil
 import time
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -159,3 +160,112 @@ class TestJobRunner:
     def test_start_job_rejects_unknown_repo(self, job_db):
         with pytest.raises(ValueError):
             jobs.start_job(999999)
+
+
+class TestHealthStageInThePipeline:
+    """Health runs last and is isolated. Its failure must never fail the job
+    or undo ingest/rank, and it must not manufacture a duplicate snapshot on
+    an unchanged working tree."""
+
+    def _repo(self, job_db, tmp_path):
+        root = tmp_path / "repo"
+        _write(root / "pkg" / "core.py",
+               '"""Core."""\n\n\n'
+               "def run(a, b):\n"
+               "    if a:\n        return 1\n"
+               "    if b:\n        return 2\n"
+               "    return 0\n\n\n"
+               "def classify(v):\n"
+               "    if v > 10:\n        return 'high'\n"
+               "    return 'low'\n")
+        _write(root / "pkg" / "util.py",
+               "from pkg.core import run, classify\n\n\n"
+               "def helper(x):\n"
+               "    value = run(x, False)\n"
+               "    label = classify(value)\n"
+               "    if label == 'high':\n        return value * 2\n"
+               "    return value\n\n\n"
+               "def describe(x):\n"
+               "    return f'{x}: {helper(x)}'\n")
+        return register_from_path(job_db, str(root))
+
+    def test_a_snapshot_is_created_by_the_pipeline(self, job_db, tmp_path):
+        from app.db.models import CodeHealthSnapshot
+
+        repo = self._repo(job_db, tmp_path)
+        job = _wait_for(job_db, jobs.start_job(repo.id))
+        assert job.status == "done"
+        assert job.result["health"]["status"] == "created"
+        assert job_db.query(CodeHealthSnapshot).filter(
+            CodeHealthSnapshot.repo_id == repo.id).count() == 1
+
+    def test_a_second_run_on_unchanged_source_skips_rather_than_duplicating(self, job_db, tmp_path):
+        # Otherwise an automatic pipeline fills the trend line with identical
+        # points on every run.
+        from app.db.models import CodeHealthSnapshot
+
+        repo = self._repo(job_db, tmp_path)
+        _wait_for(job_db, jobs.start_job(repo.id))
+        job = _wait_for(job_db, jobs.start_job(repo.id))
+        assert job.result["health"]["status"] == "skipped"
+        assert "unchanged" in job.result["health"]["reason"]
+        assert job_db.query(CodeHealthSnapshot).filter(
+            CodeHealthSnapshot.repo_id == repo.id).count() == 1
+
+    def test_changed_source_produces_a_second_snapshot(self, job_db, tmp_path):
+        from app.db.models import CodeHealthSnapshot
+
+        repo = self._repo(job_db, tmp_path)
+        _wait_for(job_db, jobs.start_job(repo.id))
+        _write(Path(repo.local_path) / "pkg" / "util.py",
+               "from pkg.core import run\n\n\n"
+               "def helper(x):\n"
+               "    if x > 3:\n        return run(x, True)\n"
+               "    if x > 1:\n        return run(x, False)\n"
+               "    return 0\n\n\n"
+               "def extra(y):\n    return y + 1\n")
+        job = _wait_for(job_db, jobs.start_job(repo.id))
+        assert job.result["health"]["status"] == "created"
+        assert job_db.query(CodeHealthSnapshot).filter(
+            CodeHealthSnapshot.repo_id == repo.id).count() == 2
+
+    def test_a_failing_health_stage_does_not_fail_the_job_or_undo_ingest(
+            self, job_db, tmp_path, monkeypatch):
+        from app.db.models import CodeFile, CodeHealthSnapshot
+
+        repo = self._repo(job_db, tmp_path)
+
+        def _boom(*a, **kw):
+            raise RuntimeError("health exploded")
+
+        monkeypatch.setattr("app.services.codebase.jobs.create_snapshot", _boom)
+        job = _wait_for(job_db, jobs.start_job(repo.id))
+
+        # The job succeeds: ingest and rank produced real, useful work and it
+        # would be wrong to discard it because a scoring pass failed.
+        assert job.status == "done"
+        assert job.result["health"]["status"] == "failed"
+        assert job.result["health"]["retryable"] is True
+        assert "health exploded" in job.result["health"]["error"]
+
+        # ingest/rank survived intact, and no partial snapshot exists.
+        files = job_db.query(CodeFile).filter(CodeFile.repo_id == repo.id).all()
+        assert len(files) == 2
+        assert all(f.fan_in is not None for f in files)
+        assert job_db.query(CodeHealthSnapshot).filter(
+            CodeHealthSnapshot.repo_id == repo.id).count() == 0
+
+    def test_health_stage_makes_no_llm_calls(self, job_db, tmp_path, monkeypatch):
+        # The zero-outbound-AI guarantee must survive the new stage.
+        repo = self._repo(job_db, tmp_path)
+
+        def _boom(*a, **kw):
+            raise AssertionError("LLM was called during the health stage")
+
+        monkeypatch.setattr("app.core.llm.chat", _boom)
+        monkeypatch.setattr("app.core.llm.chat_json", _boom)
+        monkeypatch.setattr("app.core.llm.chat_stream", _boom)
+
+        job = _wait_for(job_db, jobs.start_job(repo.id))
+        assert job.status == "done"
+        assert job.result["health"]["status"] == "created"
