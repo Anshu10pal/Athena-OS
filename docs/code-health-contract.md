@@ -4,10 +4,18 @@
 changes from rev 1 are listed in §14. Every claim about existing data was
 verified against the repo, not assumed — results in §8.
 
+> **Amendment 2026-08-09 — a blended aggregate now ships on Overview.**
+> §0.1 below said no combined number would be added without §9's evidence.
+> One was added anyway, as an explicit product decision, before that evidence
+> exists. It is recorded here rather than left as an undocumented divergence
+> between this contract and the running product. See §16 for exactly what the
+> blend does and does not include, and the compensating constraints it
+> carries.
+
 ## 0. Design constraints (binding)
 
-1. **Three separate axes. No blended score.** No single combined number, and
-   none will be added without the evidence in §9.
+1. **Three separate axes. No blended score** *(amended — see §16)*. No single
+   combined number, and none will be added without the evidence in §9.
 2. **Axis 3 is "Change Hotspot — uncalibrated."** It names the signals it
    observes (change frequency × complexity), not a defect prediction. The
    terms "Defect Risk", "Defect Exposure", "bug risk" and "predicted defects"
@@ -747,3 +755,78 @@ the three axes.
 Each fixture asserts exact cyclomatic complexity, nesting depth, conditional
 operand count and handler count — these are precisely the values that drift
 silently when a grammar changes.
+
+## 16. Amendment: the Overview aggregate (2026-08-09)
+
+A **Code health** tile scored out of 100 now sits on the repo Overview,
+alongside a tile per axis. This is a deliberate product decision that departs
+from §0.1, taken **before** the §9 evidence that §0.1 said would be required.
+Recording it here rather than letting the contract and the product silently
+disagree.
+
+The separate Code Health tab was removed; the tiles live on Overview and each
+opens an insights panel.
+
+### What the aggregate is
+
+The **mean of the two health axes** — Maintainability and Architecture Health
+— each rescaled from 1–10 onto 10–100.
+
+### What it deliberately excludes, and why that is not a caveat
+
+**Change Hotspot is not in the number.** Not because it is uncalibrated —
+that alone would justify a footnote — but because it is a **different kind of
+quantity**: a review-priority ranking where *higher is worse*, against two
+quality scores where *higher is better*. Averaging them requires silently
+inverting one, and the result answers no question. A repo could raise its
+aggregate by becoming *more* urgent to review.
+
+It keeps its own tile on its native 0–9 scale, and its panel states why it is
+excluded.
+
+### Compensating constraints (these are what make the blend acceptable)
+
+1. **The blend can never hide its own composition.** The tile face always
+   reads `out of 100 · N of M axes`, and appends `· partial` when an axis
+   could not be measured. The panel lists what went in *before* anything else.
+2. **An unmeasurable axis is excluded from the mean** — never scored 0 (which
+   would drag a genuinely healthy repo down) and never full marks (which would
+   invent evidence). Same exclude-don't-zero rule the engine applies per
+   marker.
+3. **No aggregate at all when no health axis is measurable** — `N/A` with a
+   reason, not a zero.
+4. **Bands are coarse** (≥70 / ≥45 / below). The axes are not calibrated
+   against any outcome, so a finer gradient would imply precision the numbers
+   do not have.
+5. **The panel states it is "a convenience summary, not a validated measure"**
+   and carries the analyzer/thresholds/weights versions.
+
+### What would retire this amendment
+
+Either §9's calibration evidence arriving (making a defensible weighted
+combination possible), or observation that the aggregate is being read as a
+verdict despite the disclosures — in which case the tile should go back to
+being three separate numbers.
+
+### Axis panels show what was considered
+
+Each axis panel lists **every marker the axis evaluated**, grouped by
+category with that category's cap, showing weight, the `fires above` /
+`maxes at` thresholds actually applied, how many files it fired on, and its
+mean and worst deduction.
+
+Mean deduction is shown **beside** fire rate, not instead of it — fire rate
+alone cannot distinguish a marker that fires often and contributes nothing
+from one that dominates its category, which is precisely what §10.2's
+deduction report existed to resolve.
+
+These are **stored with the snapshot**, like the per-file explanations and for
+the same reason: thresholds are versioned, so explaining a historical score
+with today's numbers would explain it wrongly. Snapshots taken before this
+existed simply omit the field and render nothing, rather than being
+back-filled with current values.
+
+Percentile-derived markers report the **repo-relative** warn/saturate actually
+used (e.g. `churn_volume` reads "fires above 1 · maxes at 3" on repo 1), not an
+absolute pair they do not have — which also makes the low-resolution badge
+legible, since the ramp is visibly two commits wide.

@@ -1,8 +1,12 @@
-import { OverviewT, timeAgo } from "../lib/api";
+import { HealthResponseT, OverviewT, timeAgo } from "../lib/api";
+import { HealthTiles } from "./HealthTiles";
 
-// The repo overview is orientation only. Code Health has its own evidence
-// view because the previous blended Structural score mixed unrelated signals
-// and made its scope too easy to miss.
+// The repo overview is orientation, and now carries the code-health tiles
+// directly rather than sending the reader to a separate tab. The aggregate
+// out of 100 is a product decision that departs from the contract's
+// "three separate axes, no blended score" -- see lib/healthAggregate.ts for
+// what that blend does and does not include, and why the Change Hotspot axis
+// is shown beside it but never folded into it.
 
 function pct(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -24,12 +28,15 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   );
 }
 
-type OverviewViewT = "health" | "reading" | "depgraph" | "architecture" | "layers" | "subsystems";
+type OverviewViewT = "reading" | "depgraph" | "architecture" | "layers" | "subsystems";
 
 export function OverviewView({
-  data, onSelectFile, onGoToView,
+  data, health, onComputeHealth, computingHealth, onSelectFile, onGoToView,
 }: {
   data: OverviewT;
+  health: HealthResponseT | null;
+  onComputeHealth: () => void;
+  computingHealth: boolean;
   onSelectFile: (fileId: number) => void;
   onGoToView: (view: OverviewViewT) => void;
 }) {
@@ -37,7 +44,6 @@ export function OverviewView({
   const languages = Object.entries(counts.languages).sort((a, b) => b[1] - a[1]);
 
   const jumpTargets: { view: OverviewViewT; label: string; hint: string }[] = [
-    { view: "health", label: "Code Health", hint: "Measured evidence, scope, and review priorities" },
     { view: "reading", label: "Reading list", hint: "Ranked order to read this repo in" },
     { view: "architecture", label: "Architecture", hint: "Directory-level map" },
     { view: "depgraph", label: "Dependency Graph", hint: "Explore one file's neighbourhood" },
@@ -71,6 +77,12 @@ export function OverviewView({
           {repo.last_ingested_sha && <> - {repo.last_ingested_sha.slice(0, 8)}</>}
         </p>
       </section>
+
+      <HealthTiles
+        data={health}
+        onCompute={onComputeHealth}
+        computing={computingHealth}
+      />
 
       <section className="space-y-3">
         <h3 className="font-display text-xl text-snow/85">Contents</h3>

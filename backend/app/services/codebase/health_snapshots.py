@@ -29,6 +29,7 @@ from app.services.codebase import git_ops
 from app.services.codebase.ast_metrics import ANALYZER_VERSION, metrics_for
 from app.services.codebase.health_scoring import (
     ARCHITECTURE,
+    CATEGORY_CAPS,
     MARKER_NOT_APPLICABLE,
     MARKER_NO_INPUT,
     MARKER_ZERO_SEVERITY,
@@ -302,6 +303,74 @@ def architecture_coverage(inputs: list, results: list, repo: Repo) -> dict:
     }
 
 
+def _axis_markers(results: list) -> list:
+    """Every marker the axis CONSIDERED, with its threshold, weight and what
+    it actually contributed across the repo.
+
+    Stored with the snapshot rather than re-derived on read, for the same
+    reason the per-file explanations are: thresholds are versioned, so a
+    historical score explained with today's numbers would be explained
+    wrongly. Percentile-derived markers report the repo-relative warn/saturate
+    that were actually used, not the absolute pair they do not have.
+
+    Reports mean deduction alongside fire rate deliberately -- fire rate alone
+    cannot distinguish a marker that fires often and contributes nothing from
+    one that dominates its category, which is the exact confusion the §10.2
+    deduction report existed to resolve.
+    """
+    per_key: dict = {}
+    order: list = []
+    for r in results:
+        if not r.available:
+            continue
+        for m in r.markers:
+            if m.key not in per_key:
+                per_key[m.key] = {
+                    "key": m.key, "label": m.label, "category": m.category,
+                    "weight": m.weight, "warn": None, "saturate": None,
+                    "evaluated": 0, "fired": 0, "deductions": [],
+                    "states": set(),
+                }
+                order.append(m.key)
+            entry = per_key[m.key]
+            entry["states"].add(m.state)
+            if not m.available:
+                continue
+            entry["evaluated"] += 1
+            entry["deductions"].append(m.deduction)
+            if m.deduction > 0:
+                entry["fired"] += 1
+            if entry["warn"] is None:
+                entry["warn"] = m.effective_warn
+                entry["saturate"] = m.effective_saturate
+
+    out = []
+    for key in order:
+        e = per_key[key]
+        deductions = e["deductions"]
+        states = e["states"]
+        # Precedence mirrors the coverage disclosure: fired anywhere wins,
+        # otherwise the strongest reason it did not.
+        if "fired" in states:
+            state = "fired"
+        elif MARKER_ZERO_SEVERITY in states:
+            state = MARKER_ZERO_SEVERITY
+        elif MARKER_NOT_APPLICABLE in states:
+            state = MARKER_NOT_APPLICABLE
+        else:
+            state = MARKER_NO_INPUT
+        out.append({
+            "key": e["key"], "label": e["label"], "category": e["category"],
+            "weight": e["weight"], "warn": e["warn"], "saturate": e["saturate"],
+            "evaluated": e["evaluated"], "fired": e["fired"],
+            "fire_rate": round(e["fired"] / e["evaluated"], 4) if e["evaluated"] else None,
+            "mean_deduction": round(sum(deductions) / len(deductions), 4) if deductions else None,
+            "max_deduction": round(max(deductions), 4) if deductions else None,
+            "state": state,
+        })
+    return out
+
+
 def _axis_summary(results: list, axis_name: str) -> dict:
     """Repo aggregate for one axis. Reports the distribution, not just a mean:
     a lone average cannot distinguish five catastrophic files from uniform
@@ -325,6 +394,13 @@ def _axis_summary(results: list, axis_name: str) -> dict:
         # file-level checks", never "complete evidence".
         "inputs_complete": all(r.inputs_complete for r in results if r.available),
         "resolution_limited": any(r.resolution_limited for r in results if r.available),
+        # What the axis actually considered: every marker, its threshold and
+        # weight, and how much it contributed. Without this an axis panel can
+        # show a score but not what produced it.
+        "markers": _axis_markers(results),
+        # Caps are part of the calculation too -- a category cap that binds
+        # means the score understates what was measured.
+        "category_caps": CATEGORY_CAPS.get(axis_name, {}),
     }
     if values:
         s = sorted(values)

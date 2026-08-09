@@ -26,7 +26,7 @@ import { FileSearch } from "../components/FileSearch";
 import { MermaidPanel } from "../components/MermaidPanel";
 import { SubsystemsView } from "../components/SubsystemsView";
 import { OverviewView } from "../components/OverviewView";
-import { HealthView } from "../components/HealthView";
+
 import { dirnameOfPath } from "../lib/layeredLayout";
 
 // Phase J1: cytoscape + ELK are heavy and needed only by whoever actually
@@ -59,7 +59,7 @@ type SortKey = keyof Pick<
 // where the full graph exists only behind an explicit opt-in that warns
 // about exactly the failure H5 recorded. Different default, different
 // layout, different question answered -- see components/DependencyGraph.tsx.
-type ViewT = "overview" | "health" | "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph";
+type ViewT = "overview" | "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph";
 
 const COLUMNS: { key: SortKey; label: string; align?: "left" | "center" | "right" }[] = [
   { key: "score", label: "Score" },
@@ -79,14 +79,13 @@ const SCORERS: { value: ScorerT; label: string }[] = [
 
 const VIEWS: { value: ViewT; label: string }[] = [
   { value: "overview", label: "Overview" },
-  { value: "health", label: "Code Health" },
+  { value: "layers", label: "Layers" },
   { value: "reading", label: "Reading list" },
   { value: "architecture", label: "Architecture" },
   { value: "depgraph", label: "Dependency Graph" },
   { value: "matrix", label: "Matrix" },
-  { value: "focus", label: "Focus" },
-  { value: "layers", label: "Layers" },
   { value: "subsystems", label: "Dependency Clusters" },
+  { value: "focus", label: "Focus" },
 ];
 
 const VALIDATION_THRESHOLD_RANK = 20;
@@ -278,9 +277,10 @@ export default function RepoDetail() {
   });
   const [view, setView] = useState<ViewT>(() => {
     const fromUrl = searchParams.get("view");
-    // The retired blended Structural scorecard lived on Overview. Make the
-    // evidence-based Code Health view the landing view instead.
-    return isValidView(fromUrl) ? fromUrl : "health";
+    // Overview is the landing view again now that code health lives on it as
+    // tiles rather than behind its own tab. A stale `?view=health` link fails
+    // isValidView and falls back here rather than rendering nothing.
+    return isValidView(fromUrl) ? fromUrl : "overview";
   });
   const [filters, setFilters] = useState<FilterState>(() => filterStateFromSearchParams(searchParams));
   const [ranking, setRanking] = useState<RankingResponseT | null>(null);
@@ -755,7 +755,7 @@ export default function RepoDetail() {
           it there would offer controls that visibly do nothing, which is the
           same class of confusion as the "Showing 0 of 173" counter bug an
           earlier browser pass caught. */}
-      {files.length > 0 && view !== "overview" && view !== "health" && (
+      {files.length > 0 && view !== "overview" && (
         <div className="card p-5 space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-[10px] uppercase tracking-widest text-fog w-24 shrink-0">Path</span>
@@ -842,6 +842,9 @@ export default function RepoDetail() {
       {view === "overview" && overview && (
         <OverviewView
           data={overview}
+          health={health}
+          onComputeHealth={computeHealth}
+          computingHealth={computingHealth}
           onSelectFile={(fileId) => {
             selectFile(fileId);
             setView("reading");
@@ -851,20 +854,6 @@ export default function RepoDetail() {
       )}
       {view === "overview" && !overview && (
         <p className="text-fog text-sm font-mono">Loading overview…</p>
-      )}
-
-      {view === "health" && id && (
-        <HealthView
-          repoId={id}
-          data={health}
-          onCompute={computeHealth}
-          computing={computingHealth}
-          onSelectFile={(fileId) => {
-            selectFile(fileId);
-            setView("reading");
-          }}
-          onGoToClusters={() => setView("subsystems")}
-        />
       )}
 
       {files.length > 0 && view === "reading" && (
@@ -1087,7 +1076,7 @@ export default function RepoDetail() {
           ever show its "select something" placeholder, spending a 320px
           column to say nothing on the one page whose whole purpose is
           orientation rather than detail. */}
-      {files.length > 0 && id && view !== "overview" && view !== "health" && (
+      {files.length > 0 && id && view !== "overview" && (
         <div className="w-80 shrink-0">
           <DetailPanel
             repoId={id}

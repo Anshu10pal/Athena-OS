@@ -351,6 +351,32 @@ export interface HealthAxisT {
   p10?: number;
   p90?: number;
   coverage?: HealthCoverageT;
+  /** Every marker the axis considered, with the threshold and weight that
+   *  were actually applied and how much each contributed. Stored with the
+   *  snapshot, so a historical score is explained by the thresholds of its
+   *  own era rather than today's. Absent on snapshots taken before this
+   *  existed. */
+  markers?: HealthAxisMarkerT[];
+  category_caps?: Record<string, number>;
+}
+
+export interface HealthAxisMarkerT {
+  key: string;
+  label: string;
+  category: string;
+  weight: number;
+  /** For percentile-derived markers these are the repo-relative values that
+   *  were actually used, not an absolute pair the marker does not have. */
+  warn: number | null;
+  saturate: number | null;
+  evaluated: number;
+  fired: number;
+  fire_rate: number | null;
+  /** Reported alongside fire rate deliberately: fire rate alone cannot tell a
+   *  marker that fires often and contributes nothing from one that dominates. */
+  mean_deduction: number | null;
+  max_deduction: number | null;
+  state: "fired" | MarkerStateT;
 }
 
 /** The mandatory Architecture Health scope block. Ships as data so a UI
