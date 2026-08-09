@@ -86,38 +86,112 @@ if not GIT_AVAILABLE:
         ) from e
 
 
-# ---------------- credentials: keyring only, never a URL, never a config file ----------------
+# ---------------- credentials: env var or keyring, never a URL, never a config file ----------------
+
+_keyring_warned = False
+
+
+def token_env_var(host: str) -> str:
+    """`github.com` -> `ATHENA_GIT_TOKEN_GITHUB_COM`.
+
+    Deliberately per-host. A single generic ATHENA_GIT_TOKEN would be handed to
+    whatever host the submitted URL names, which turns one typo'd URL into a
+    credential disclosure to a third party.
+    """
+    safe = "".join(c if c.isalnum() else "_" for c in host).upper()
+    return f"ATHENA_GIT_TOKEN_{safe}"
+
+
+def _keyring_get(host: str) -> Optional[str]:
+    """keyring, but never fatal.
+
+    A managed host (Render, Docker, most CI) has no keyring backend, so
+    `get_password` raises NoKeyringError -- which subclasses RuntimeError and
+    therefore used to surface to the user as "Could not acquire the repository"
+    on a *public* clone that needed no credential at all. The lookup is
+    optional by nature: "no credential available" is a legitimate answer, so a
+    backend that cannot answer must be treated as absence, not as failure.
+    """
+    global _keyring_warned
+    try:
+        return keyring.get_password(KEYRING_SERVICE, host)
+    except Exception as e:
+        if not _keyring_warned:
+            logger.warning(
+                "No usable keyring backend (%s). Stored credentials are unavailable on this "
+                "host; public repositories still clone normally. To reach a private "
+                "repository, set the %s environment variable instead.",
+                e.__class__.__name__, token_env_var(host),
+            )
+            _keyring_warned = True
+        return None
 
 
 def set_credential(host: str, token: str) -> None:
-    keyring.set_password(KEYRING_SERVICE, host, token)
+    try:
+        keyring.set_password(KEYRING_SERVICE, host, token)
+    except Exception as e:
+        raise RuntimeError(
+            f"Cannot store a credential: no usable keyring backend on this host ({e}). "
+            f"Set the {token_env_var(host)} environment variable instead."
+        ) from e
 
 
 def get_credential(host: str) -> Optional[str]:
-    return keyring.get_password(KEYRING_SERVICE, host)
+    """Env var first, then keyring. The env var is the only mechanism that works
+    on a deployed server; keyring is the developer-machine path."""
+    if not host:
+        return None
+    from_env = os.environ.get(token_env_var(host))
+    if from_env:
+        return from_env
+    return _keyring_get(host)
+
+
+def _write_askpass_script() -> str:
+    """A throwaway GIT_ASKPASS helper that echoes $ATHENA_GIT_TOKEN.
+
+    The token is read from the environment at call time and is never written
+    into the script file, so the on-disk artifact is not itself a secret.
+    """
+    if os.name == "nt":
+        fd, path = tempfile.mkstemp(suffix=".cmd")
+        with os.fdopen(fd, "w", newline="") as f:
+            f.write("@echo off\r\necho %ATHENA_GIT_TOKEN%\r\n")
+        return path
+    fd, path = tempfile.mkstemp(suffix=".sh")
+    with os.fdopen(fd, "w", newline="\n") as f:
+        f.write('#!/bin/sh\nprintf \'%s\\n\' "$ATHENA_GIT_TOKEN"\n')
+    os.chmod(path, 0o700)  # mkstemp gives 0600; git must be able to execute it
+    return path
 
 
 def _askpass_env(host: str) -> dict:
     """Env for a git subprocess that supplies a stored credential without ever
     putting it in the URL, the command line, or a file that outlives this call."""
     env = os.environ.copy()
+    # Unconditional: without it, an unauthenticated clone of a private repo
+    # blocks on a terminal prompt that never arrives in a container and dies at
+    # the 600s timeout instead of failing in a second with git's own message.
+    env["GIT_TERMINAL_PROMPT"] = "0"
     token = get_credential(host)
     if not token:
         return env
-    fd, script_path = tempfile.mkstemp(suffix=".cmd")
-    try:
-        with os.fdopen(fd, "w") as f:
-            # %ATHENA_GIT_TOKEN% is read from the environment, never written into
-            # this script file itself.
-            f.write("@echo off\r\necho %ATHENA_GIT_TOKEN%\r\n")
-        env["ATHENA_GIT_TOKEN"] = token
-        env["GIT_ASKPASS"] = script_path
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        env["_ATHENA_ASKPASS_SCRIPT"] = script_path  # so the caller can clean it up
-    except Exception:
-        os.unlink(script_path)
-        raise
+    script_path = _write_askpass_script()
+    env["ATHENA_GIT_TOKEN"] = token
+    env["GIT_ASKPASS"] = script_path
+    env["_ATHENA_ASKPASS_SCRIPT"] = script_path  # so the caller can clean it up
     return env
+
+
+def _host_of_remote(local_path: str) -> str:
+    """Host of origin, or "" if it cannot be read. Only used to pick which
+    credential to offer, so an unknown host degrades to offering none."""
+    try:
+        url = get_remote_url(local_path)
+        return parse_git_url(url)[0] if url else ""
+    except Exception:
+        return ""
 
 
 def _cleanup_askpass(env: dict) -> None:
@@ -211,7 +285,14 @@ def clone_repo(url: str, dest: str) -> None:
 
 
 def _fetch_git_exe(local_path: str) -> None:
-    result = run_git(["fetch", "origin"], cwd=local_path)
+    # Fetch needs the same credential/no-prompt handling as clone: a private
+    # repo that cloned successfully must also resync, and a repo whose access
+    # was revoked must fail fast rather than hang on an invisible prompt.
+    env = _askpass_env(_host_of_remote(local_path))
+    try:
+        result = run_git(["fetch", "origin"], cwd=local_path, env=env)
+    finally:
+        _cleanup_askpass(env)
     if result.returncode != 0:
         raise RuntimeError(f"git fetch failed ({result.returncode}): {result.stderr.strip()}")
 

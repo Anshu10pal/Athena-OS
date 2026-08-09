@@ -18,6 +18,28 @@ ATHENA OS is designed local-first. These notes are for when you eventually want 
   - `DATABASE_URL` — for production, point to **Render Postgres** instead of SQLite
 - Persistent disk: **mount one at `/opt/render/project/src/qdrant_data`** so vector memory survives deploys
 
+#### Codebase agent on a managed host
+
+- **Private repositories need a per-host token env var.** A managed host has no
+  keyring backend, so the developer-machine credential store is unavailable
+  there. Set `ATHENA_GIT_TOKEN_<HOST>` — host uppercased with every
+  non-alphanumeric character replaced by `_`:
+
+  | Repo host | Variable |
+  |---|---|
+  | `github.com` | `ATHENA_GIT_TOKEN_GITHUB_COM` |
+  | `gitlab.com` | `ATHENA_GIT_TOKEN_GITLAB_COM` |
+  | `git.corp.example.co.uk` | `ATHENA_GIT_TOKEN_GIT_CORP_EXAMPLE_CO_UK` |
+
+  There is intentionally no generic `ATHENA_GIT_TOKEN`: a single variable would
+  be offered to whatever host the submitted URL names, so one mistyped or
+  hostile URL would disclose the token to a third party. Public repos need no
+  variable at all.
+
+- **Persistent disk for the clone cache.** `REPO_CLONE_ROOT` defaults under the
+  app data root, which on Render is ephemeral — without a mounted disk every
+  redeploy re-clones every registered repo.
+
 ### Frontend (Static Site)
 - Build command: `npm install && npm run build`
 - Publish directory: `frontend/dist`
