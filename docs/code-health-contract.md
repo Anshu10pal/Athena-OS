@@ -378,6 +378,87 @@ so the conventional 60-line "large method" line sits near the 55th percentile
 of real code rather than in the tail. Kept anyway, per the reasoning above, but
 recorded so the next revision starts from evidence rather than convention.
 
+### 10.2 Per-marker deduction report — run 2026-08-09 → `thresholds_version = 2`
+
+Produced by `backend/scripts/health_distribution_report.py`, which drives the
+**real scoring engine** rather than reimplementing the arithmetic — a report
+with its own copy of the formula can disagree with production and still be
+believed. §10.1 measured fire rate; this measures **deduction**, which is what
+fire rate could not answer.
+
+#### Change made: `broad_error_handling` warn 1 → 0
+
+A genuine semantic defect, not a distribution preference. At `warn = 1`:
+
+| broad handlers | severity | deduction |
+|---:|---:|---:|
+| 0 | 0.00 | 0.00 |
+| **1** | **0.00** | **0.00** |
+| 2 | 0.25 | 0.50 |
+
+**The first bare `except:` was free** — the marker silently required two before
+it said anything. Evidence: repo 1 had 14 files with ≥1 broad handler but only
+7 firing; eslint's 3 such files produced a 0.0% fire rate.
+
+Before / after:
+
+| Repo | v1 fire rate | v1 files firing | v2 fire rate | v2 files firing |
+|---|---:|---:|---:|---:|
+| 1 Athena-OS | 4.4% | 7 | **8.9%** | **14** |
+| 2 AFDE-LMS | 0.0% | 0 | 0.0% | 0 |
+| 3 eslint | 0.0% | 0 | **0.8%** | **3** |
+
+Both now match the raw handler counts exactly. No other threshold changed.
+
+#### Findings recorded but deliberately NOT acted on
+
+**1. `large_method` does dominate Size — but not by compounding with
+`large_file`.** It takes **92.9%** of the Size category on eslint (91.4% on
+repo 1) and fires on 53.9% of files; `large_file` contributes just 7.6%.
+Crucially, **89.3% of `large_file` firings co-occur with `large_method`**
+(25 of 28 on eslint), so Size is effectively a single marker. `large_file` is
+kept regardless, because its independent value is precisely where
+`large_method` is N/A — a long module of constants with **no functions at all**
+still deserves to register as large. Low contribution here is not the same as
+no purpose.
+
+**2. Complexity and Size measure strongly correlated properties.**
+`complex_method` ∩ `large_method` = **111 of 128** eslint firings (86.7%). A
+single big complicated function is therefore charged in two categories with
+two separate caps. This is the strongest candidate for a future revision, but
+fixing it means restructuring categories — not moving a threshold — so it needs
+its own version with a before/after, not a patch here.
+
+**3. Caps are near-inert.** Category caps bound on 0.5% (complexity) and 1.1%
+(size) of eslint files, and 0.0% on repo 1. The axis cap bound on nothing,
+consistent with §2's note that it cannot currently bind. No change: caps exist
+as guards, and a guard that rarely engages is working.
+
+**4. Architecture Health cannot be judged yet, and must not be.** It reports
+mean 9.98 with 98.7% ≥ 9.5 — but `cycle_participation`, its heaviest marker
+(weight 4.0), reads 0 for every file because file-level SCCs are not persisted
+yet. The axis is currently carried by one marker firing on ~1% of files. **No
+conclusion about this axis is valid until cycles are wired**, and the report
+prints that caveat rather than letting the numbers imply health.
+
+**5. `deep_nesting` is weak but language-varying**, not broken: 1.3% on the
+mostly-Python repo 1 versus 6.1% on all-JavaScript eslint, mean deduction 0.04.
+Below the bar for "never contributes meaningfully", and the variation is
+plausibly real (JS callback nesting) rather than a rule inconsistency. Watched,
+not changed.
+
+**6. Change Hotspot discriminates well where it applies but is near-binary.**
+On repo 1: 46.2% of eligible files carry >0 points, 19.4% carry >2, median 0,
+p90 2.50. However churn P50=1 and P95=3, so the ramp spans two commits — any
+file with 3+ commits takes the full 2.5. That is honest (it reflects a repo
+with thin history) but means the marker behaves closer to a flag than a scale
+here. Recorded as a property of the corpus, not a threshold fault.
+
+**7. N/A rates behave as designed.** Change Hotspot: 100% N/A on eslint
+(shallow clone), 38.2% "No history available in this clone" plus 7.1% trivial
+on repo 1. Maintainability: 4.5–7.1% trivial-file exclusions. Nothing silently
+scored as healthy.
+
 ## 11. Effort-aware ranking
 
 ```
