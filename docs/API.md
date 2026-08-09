@@ -258,6 +258,28 @@ Server-Sent Events, same wire shape as `/api/chat/stream`: `{"type":"progress",.
 ### `POST /api/repos/{id}/subsystems`
 Runs dependency-cluster detection (modularity + Louvain community detection over the resolved import graph) and persists both. Returns per-algorithm cluster counts, the modularity⇄Louvain agreement number, and cycle-cluster coherence findings. 409 if busy. These are measured coupling groups, not confirmed architectural subsystems — see `docs/external-validation-eslint.md`'s Round 3 for why that distinction is load-bearing.
 
+### `POST /api/repos/{id}/health`
+Runs the code-health analyzer and writes **one immutable snapshot, atomically** — everything is scored in memory first, then the snapshot and all per-file rows are written in a single transaction. Nothing is written unless the whole run succeeds, so a trend line can never mistake a partial run for a real change. Returns the snapshot, per-axis summaries and the trend delta.
+
+### `GET /api/repos/{id}/health`
+Latest snapshot, read-only. **404 when none exists** — deliberately not an empty scorecard, which would read as "measured, and fine".
+
+Three axes, never blended, each carrying its own direction:
+- `maintainability` — 1–10, **higher is better**
+- `architecture_health` — 1–10, **higher is better**
+- `change_hotspot` — 0–9 exposure points, **higher means review sooner** (uncalibrated)
+
+**The `architecture_health` axis always carries a `coverage` block** — `inputs_complete`, `file_level_cycle_count`, `directory_cycle_count`, `active_markers`, `inactive_markers`, `limitations`. This is a contract, not a convention: a non-null Architecture Health score is never served without it, because a high score on a narrow file-level contract otherwise reads as "the architecture is healthy" to a user who has just seen directory-level cycles elsewhere in this product. `inputs_complete` means "every marker in this contract had its input", never "complete evidence".
+
+When a required marker has no data, the axis **withholds `score` entirely** (the number is parked in `provisional_value` for diagnostics) rather than shipping a caveated figure a UI could still render prominently.
+
+`snapshot` carries full provenance: `branch`, `head_sha`, `working_tree_dirty`, `analyzer_version`, `thresholds_version`, `weights_version`. `working_tree_dirty` is load-bearing — for a `local` repo the live working directory is analysed, so HEAD may not describe the analysed bytes.
+
+`trend` compares only against a snapshot on the same branch with **matching analyzer/threshold/weights versions**; otherwise it returns `comparable: false` with a reason ("Not comparable — scoring changed since the previous snapshot" / "No previous snapshot on this branch"), never a `0.0` delta meaning "unknown".
+
+### `GET /api/repos/{id}/health/files?sort=adjusted_exposure&limit=50`
+Per-file results from the latest snapshot with their **stored** marker explanations (stored, not recomputed — a historical score explainable only by today's thresholds would not be auditable). Effort-aware ranking serves **both** `exposure` and `adjusted_exposure` (exposure per 100 LOC reviewed, with a 30-NLOC floor so tiny files can't dominate by being small). Files whose axis was N/A are excluded from ranking and reported in `excluded_na` rather than sorted as if they scored zero. `sort` accepts `adjusted_exposure` | `exposure` | `maintainability` | `architecture_health`.
+
 ### `GET /api/repos/{id}/overview`
 Everything the repo landing page shows: identity + extracted description, aggregate counts (files, lines, directories, symbols by kind, imports + resolution rate, language/category breakdowns), a structural health score with its per-factor breakdown, and change hotspots. Pure read over what ingest/rank/clustering already persisted — no filesystem walk, no re-parse.
 

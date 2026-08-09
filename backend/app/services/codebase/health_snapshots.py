@@ -1,0 +1,357 @@
+"""Phase 1 code health: snapshot writes.
+
+**Atomic by construction.** A snapshot is a claim that "at revision X, under
+scoring definition Y, these were the results" -- a half-written one is worse
+than none, because a trend line cannot tell an incomplete run from a real
+improvement. So:
+
+- Every axis for every file is scored **in memory first**. Nothing touches the
+  database until the whole run has succeeded.
+- The snapshot row and all its per-file rows are written in **one
+  transaction**, rolled back together on any failure.
+- The snapshot is created **only on success**. There is no "in progress" or
+  "partial" snapshot state to reason about, because none can exist.
+
+Source identity, scoring versions, all axis results and their explanations
+come from **the same run** -- a snapshot never mixes a fresh AST pass with a
+stale graph or a different threshold version, because they are gathered once
+and written together.
+"""
+from pathlib import Path
+from typing import Optional
+
+from sqlalchemy.orm import Session
+
+from app.db.models import CodeFile, CodeFileHealth, CodeHealthSnapshot, Repo
+from app.services.codebase import git_ops
+from app.services.codebase.ast_metrics import ANALYZER_VERSION, metrics_for
+from app.services.codebase.health_scoring import (
+    ARCHITECTURE,
+    CHANGE_HOTSPOT,
+    MAINTAINABILITY,
+    THRESHOLDS_VERSION,
+    WEIGHTS_VERSION,
+    AxisResult,
+    FileInputs,
+    adjusted_exposure,
+    build_repo_context,
+    percentile,
+    score_file,
+)
+
+AXES = (MAINTAINABILITY, ARCHITECTURE, CHANGE_HOTSPOT)
+
+
+def working_tree_dirty(local_path: str) -> Optional[bool]:
+    """Whether uncommitted changes exist in the analysed tree.
+
+    Load-bearing, not bookkeeping: for a `local` repo we analyse the user's
+    live working directory, so HEAD may not describe the bytes measured at
+    all. A snapshot recording a SHA while the tree was dirty would be a false
+    provenance claim, and a trend built on those is meaningless.
+
+    None means "could not determine" (no git binary, not a work tree) -- which
+    is deliberately distinct from False.
+    """
+    if not git_ops.GIT_AVAILABLE:
+        return None
+    result = git_ops.run_git(["status", "--porcelain"], cwd=local_path)
+    if result.returncode != 0:
+        return None
+    return bool(result.stdout.strip())
+
+
+def _repo_root(repo: Repo) -> Path:
+    root = Path(repo.local_path)
+    return root / repo.source_root if repo.source_root else root
+
+
+def collect_inputs(db: Session, repo: Repo) -> list:
+    """One AST pass over the repo's files, joined to already-persisted graph
+    and history facts. Read-only."""
+    root = _repo_root(repo)
+    inputs = []
+    for f in db.query(CodeFile).filter(CodeFile.repo_id == repo.id).all():
+        try:
+            data = (root / f.path).read_bytes()
+        except OSError:
+            continue
+        m = metrics_for(data, f.language)
+        inputs.append(FileInputs(
+            file_id=f.id, path=f.path, language=f.language,
+            nloc=m.nloc if m else f.line_count,
+            ast_available=m is not None,
+            function_count=m.function_count if m else 0,
+            max_cyclomatic=m.max_cyclomatic if m else None,
+            max_nesting=m.max_nesting if m else None,
+            max_conditional_operands=m.max_conditional_operands if m else None,
+            max_function_nloc=m.max_function_nloc if m else None,
+            broad_handler_count=m.broad_handler_count if m else None,
+            graph_available=f.fan_in is not None and f.fan_out is not None,
+            fan_in=f.fan_in, fan_out=f.fan_out, cycle_size=f.scc_size,
+            commit_count=f.commit_count,
+        ))
+    return inputs
+
+
+def _explain_axis(axis: AxisResult) -> dict:
+    """The per-marker record stored WITH the snapshot. Stored rather than
+    recomputed on read: a historical score that can only be explained by
+    today's thresholds is not auditable, and re-deriving it would silently
+    rewrite what the score meant at the time."""
+    return {
+        "available": axis.available,
+        "na_reason": axis.na_reason,
+        "direction": axis.direction,
+        "inputs_complete": axis.inputs_complete,
+        "missing_inputs": axis.missing_inputs,
+        "provisional_value": axis.provisional_value,
+        "resolution_limited": axis.resolution_limited,
+        "resolution_note": axis.resolution_note,
+        "total_deduction": round(axis.total_deduction, 4),
+        "categories_capped": axis.categories_capped,
+        "axis_capped": axis.axis_capped,
+        "markers": [
+            {
+                "key": m.key, "label": m.label, "category": m.category,
+                "available": m.available, "na_reason": m.na_reason,
+                "raw_value": m.raw_value, "severity": m.severity,
+                "deduction": round(m.deduction, 4),
+                "effective_warn": m.effective_warn,
+                "effective_saturate": m.effective_saturate,
+            }
+            for m in axis.markers
+        ],
+    }
+
+
+def architecture_coverage(inputs: list, results: list, repo: Repo) -> dict:
+    """The structured coverage disclosure for Architecture Health.
+
+    Emitted as DATA, not left to the UI to remember: a high score on a narrow
+    contract still reads as "the architecture is healthy", especially to a
+    user who has just seen directory-level cycles elsewhere in this same
+    product. Shipping the counts and limitations in the payload means a
+    future UI cannot receive a score without also receiving the scope it
+    applies to, and an API test can enforce that pairing.
+
+    `directory_cycle_count` deliberately sits next to `file_level_cycle_count`
+    even though only the latter is scored -- the two facts are not in
+    conflict (a directory cycle needs only a1->b1 and b2->a2, with no file in
+    a cycle), and showing them apart is what makes that legible instead of
+    looking like a contradiction.
+    """
+    scc_sizes = {}
+    for f in inputs:
+        if f.cycle_size is not None and f.cycle_size > 1:
+            scc_sizes[f.file_id] = f.cycle_size
+    file_level_cycles = len({s for s in scc_sizes.values()})
+
+    coherence = repo.subsystem_cycle_coherence
+    directory_cycle_count = len(coherence) if isinstance(coherence, list) else None
+
+    active, inactive = [], []
+    for r in results:
+        if not r.available:
+            continue
+        for m in r.markers:
+            bucket = active if m.available else inactive
+            if m.key not in bucket:
+                bucket.append(m.key)
+        break  # marker set is identical across files
+
+    limitations = [
+        "Static import analysis only. Dynamic imports, reflection, plugin "
+        "registries and generated code are not visible to it.",
+    ]
+    if directory_cycle_count:
+        limitations.append(
+            f"{directory_cycle_count} directory-level import cycle(s) are observed separately "
+            f"and are NOT part of this score, which measures file-level cycles only."
+        )
+    if file_level_cycles == 0:
+        limitations.append(
+            "No file-level cycles were found, so this score is carried by the remaining "
+            "marker(s) alone."
+        )
+    if inactive:
+        limitations.append(
+            f"Marker(s) with no data in this run: {', '.join(inactive)}."
+        )
+
+    return {
+        "inputs_complete": all(r.inputs_complete for r in results if r.available),
+        "file_level_cycle_count": file_level_cycles,
+        "directory_cycle_count": directory_cycle_count,
+        "active_markers": active,
+        "inactive_markers": inactive,
+        "limitations": limitations,
+    }
+
+
+def _axis_summary(results: list, axis_name: str) -> dict:
+    """Repo aggregate for one axis. Reports the distribution, not just a mean:
+    a lone average cannot distinguish five catastrophic files from uniform
+    mediocrity (contract §12)."""
+    presentable = [r for r in results if r.available and r.inputs_complete]
+    values = [r.score if r.score is not None else r.points for r in presentable]
+    values = [v for v in values if v is not None]
+
+    na_reasons = {}
+    for r in results:
+        if not r.available:
+            na_reasons[r.na_reason] = na_reasons.get(r.na_reason, 0) + 1
+
+    summary = {
+        "axis": axis_name,
+        "scored": len(values),
+        "na": len(results) - len(presentable),
+        "na_reasons": na_reasons,
+        # False when ANY file lacked a required marker input -- e.g. before
+        # file-level SCCs existed. Means "complete coverage of the current
+        # file-level checks", never "complete evidence".
+        "inputs_complete": all(r.inputs_complete for r in results if r.available),
+        "resolution_limited": any(r.resolution_limited for r in results if r.available),
+    }
+    if values:
+        s = sorted(values)
+        summary.update({
+            "mean": round(sum(s) / len(s), 3),
+            "median": round(percentile(s, 50), 3),
+            "p10": round(percentile(s, 10), 3),
+            "p90": round(percentile(s, 90), 3),
+        })
+    return summary
+
+
+def create_snapshot(db: Session, repo: Repo) -> CodeHealthSnapshot:
+    """Score everything in memory, then write the snapshot and all per-file
+    rows in a single transaction. Raises without writing anything if scoring
+    fails -- there is no partial snapshot state."""
+    inputs = collect_inputs(db, repo)
+    ctx = build_repo_context(inputs)
+
+    # --- everything below this line is pure computation; no DB writes yet ---
+    scored = [(f, score_file(f, ctx)) for f in inputs]
+
+    axis_summary = {}
+    for axis_name in AXES:
+        results = [getattr(s, axis_name) for _, s in scored]
+        axis_summary[axis_name] = _axis_summary(results, axis_name)
+    # Computed at snapshot time and stored, so the disclosure is immutable
+    # with the result it describes rather than re-derived later against a
+    # repo whose cycles may since have changed.
+    axis_summary[ARCHITECTURE]["coverage"] = architecture_coverage(
+        inputs, [getattr(s, ARCHITECTURE) for _, s in scored], repo)
+
+    files_scored = sum(
+        1 for _, s in scored
+        if any(getattr(s, a).available and getattr(s, a).inputs_complete for a in AXES))
+    files_na = len(scored) - files_scored
+    inputs_complete = all(axis_summary[a]["inputs_complete"] for a in AXES)
+
+    rows = []
+    for f, s in scored:
+        hotspot = s.change_hotspot
+        rows.append(dict(
+            file_id=f.file_id, path=f.path, nloc=f.nloc,
+            maintainability=s.maintainability.score,
+            architecture_health=s.architecture_health.score,
+            change_hotspot_points=hotspot.points,
+            adjusted_exposure=(adjusted_exposure(hotspot.points, f.nloc)
+                               if hotspot.points is not None else None),
+            explanation={a: _explain_axis(getattr(s, a)) for a in AXES},
+        ))
+
+    # --- single transaction from here ---
+    try:
+        snapshot = CodeHealthSnapshot(
+            repo_id=repo.id,
+            branch=repo.default_branch or "",
+            head_sha=repo.last_ingested_sha,
+            working_tree_dirty=working_tree_dirty(repo.local_path),
+            analyzer_version=ANALYZER_VERSION,
+            thresholds_version=THRESHOLDS_VERSION,
+            weights_version=WEIGHTS_VERSION,
+            axis_summary=axis_summary,
+            files_scored=files_scored,
+            files_na=files_na,
+            inputs_complete=inputs_complete,
+        )
+        db.add(snapshot)
+        db.flush()  # need the id, still inside the transaction
+
+        for row in rows:
+            db.add(CodeFileHealth(snapshot_id=snapshot.id, **row))
+        db.commit()
+    except Exception:
+        # A half-written snapshot is worse than none: a trend line cannot
+        # distinguish an incomplete run from a real improvement.
+        db.rollback()
+        raise
+    return snapshot
+
+
+def previous_comparable_snapshot(
+    db: Session, snapshot: CodeHealthSnapshot) -> Optional[CodeHealthSnapshot]:
+    """The most recent EARLIER snapshot on the same branch whose scoring
+    definition matches.
+
+    Version equality is required, not preferred: comparing across a threshold
+    change measures the change in the measuring stick, not in the code. A
+    caller with no match must say "not comparable", never fall back to the
+    nearest snapshot.
+    """
+    return (
+        db.query(CodeHealthSnapshot)
+        .filter(
+            CodeHealthSnapshot.repo_id == snapshot.repo_id,
+            CodeHealthSnapshot.branch == snapshot.branch,
+            CodeHealthSnapshot.id != snapshot.id,
+            CodeHealthSnapshot.computed_at <= snapshot.computed_at,
+            CodeHealthSnapshot.analyzer_version == snapshot.analyzer_version,
+            CodeHealthSnapshot.thresholds_version == snapshot.thresholds_version,
+            CodeHealthSnapshot.weights_version == snapshot.weights_version,
+        )
+        .order_by(CodeHealthSnapshot.computed_at.desc(), CodeHealthSnapshot.id.desc())
+        .first()
+    )
+
+
+def trend_delta(db: Session, snapshot: CodeHealthSnapshot) -> dict:
+    """Per-axis change since the previous comparable snapshot, or an explicit
+    reason why no comparison is available. Never returns 0.0 to mean
+    "unknown"."""
+    previous = previous_comparable_snapshot(db, snapshot)
+    if previous is None:
+        any_earlier = (
+            db.query(CodeHealthSnapshot)
+            .filter(
+                CodeHealthSnapshot.repo_id == snapshot.repo_id,
+                CodeHealthSnapshot.branch == snapshot.branch,
+                CodeHealthSnapshot.id != snapshot.id,
+                CodeHealthSnapshot.computed_at <= snapshot.computed_at,
+            )
+            .count()
+        )
+        return {
+            "comparable": False,
+            "reason": ("Not comparable — scoring changed since the previous snapshot."
+                       if any_earlier else
+                       "No previous snapshot on this branch."),
+            "deltas": {},
+        }
+
+    deltas = {}
+    for axis_name in AXES:
+        now = (snapshot.axis_summary or {}).get(axis_name, {})
+        before = (previous.axis_summary or {}).get(axis_name, {})
+        if "mean" in now and "mean" in before:
+            deltas[axis_name] = round(now["mean"] - before["mean"], 3)
+    return {
+        "comparable": True,
+        "reason": None,
+        "previous_snapshot_id": previous.id,
+        "previous_head_sha": previous.head_sha,
+        "deltas": deltas,
+    }

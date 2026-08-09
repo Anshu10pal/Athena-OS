@@ -459,6 +459,80 @@ here. Recorded as a property of the corpus, not a threshold fault.
 on repo 1. Maintainability: 4.5–7.1% trivial-file exclusions. Nothing silently
 scored as healthy.
 
+### 10.3 File-level SCCs wired — and `cycle_participation` is empirically inert
+
+`graph_structure.py` now computes and persists file-level SCC membership/size
+and reachability, so the Architecture Health evidence gate can open. Result
+across all three repos:
+
+| Repo | Files | Edges | File-level cycles | Files in cycles |
+|---|---:|---:|---:|---:|
+| 1 Athena-OS | 173 | 422 | **0** | 0 |
+| 2 AFDE-LMS | 28 | — | **0** | 0 |
+| 3 eslint | 398 | 663 | **0** | 0 |
+
+**Zero file-level import cycles in 599 files.** Verified as a real finding, not
+a broken detector, in two independent ways: `compute_file_sccs` correctly
+identifies a synthetic 3-cycle, and networkx's own `find_cycle` agrees both
+real graphs are acyclic.
+
+**This is consistent with — not contradicted by — the directory-level cycles
+that do exist.** Repo 1 has 3 directory-level cycles (`core⇄db` and others).
+A directory cycle needs only `a1.py → b1.py` and `b2.py → a2.py`; no single
+file is in a cycle. That is exactly what the Round-3 cycle-coherence numbers
+already measured — `core⇄db` scored 38% coherence, meaning the cycle is
+carried by a few specific edges rather than by pervasive file-level coupling.
+The two measurements agree; they answer different questions.
+
+**Consequence, stated plainly: `cycle_participation` fires on 0 of 599 files.**
+Architecture Health now has **complete coverage of the current static
+file-level contract** — which is a much narrower claim than "complete
+evidence about the architecture", and must never be worded as the latter. It
+reports mean 9.98–10.00 with 98.7–100% of files at ≥9.5, carried entirely by
+`bidirectional_coupling_hub` firing on 0.6–1.3%. The axis is honest about what
+it measured and does not discriminate on this corpus.
+
+The engine field is therefore named `inputs_complete`, not
+`evidence_complete`: it asserts that every marker **in this contract** had its
+input, and nothing more. A 10.00 here means "no file-level cycles and no
+bidirectional coupling hub were found", not "the architecture is healthy" —
+particularly not when the same product shows the user three directory-level
+cycles elsewhere.
+
+**Not fixed here, deliberately.** The obvious candidate is a
+`directory_cycle_participation` marker — directory cycles are the ones that
+actually exist, and `subsystems.py` already computes them. But adding a marker
+is a contract change with its own before/after obligation, and the file-level
+marker is not *wrong*: a file genuinely inside an import cycle is a real
+finding, it simply does not occur here. Three repos is also too small a corpus
+to conclude that file-level cycles are rare in general. Recorded as the leading
+Architecture-axis candidate for the next revision.
+
+**Reachability persisted as evidence only**, never scored: 66/173 unreachable
+on repo 1, 19/398 on eslint, 3/28 on repo 2. With no entry points at all the
+value is `None` ("could not be determined"), not `False` — asserting that every
+file is possibly-dead would be an artifact of having nothing to search from.
+
+### 10.4 Two gates added to the engine
+
+**Architecture Health evidence gate — structural, not advisory.** When
+`cycle_participation` has no data, the axis sets `evidence_complete = False`,
+`missing_evidence = ["cycle_participation"]`, and **withholds `score` entirely**
+(the provisional number is parked in `provisional_value` for diagnostics). An
+inline caveat would still leave a prominent 9.98 on screen anchoring the reader
+on a conclusion the evidence does not support; a UI cannot render a value it
+was never given.
+
+**Change Hotspot resolution badge.** `CHURN_RESOLUTION_MIN_SPAN = 5`: when
+P95 − P50 is narrower than that, the axis sets `resolution_limited = True` with
+a note. On repo 1 the span is P50=1 → P95=3, so a file hits **maximum exposure
+at three commits**. Ranking within the repo stays usable, so this is a badge
+rather than a gate — unlike the architecture case, where the missing marker was
+the dominant one. Deliberately a **span** check, not a distinct-value check:
+§5.2 asks whether churn varies at all, which is a weaker question than whether
+it varies enough to grade. A future revision should consider promoting spread
+to a first-class eligibility rule.
+
 ## 11. Effort-aware ranking
 
 ```
@@ -498,6 +572,46 @@ files from uniform mediocrity.
 | Trend, version change | "Not comparable — scoring changed since the previous snapshot." |
 | Effort columns | `Exposure` and `Exposure / 100 LOC reviewed` |
 | Weights disclosure | Always visible on the Axis 3 panel, never behind a tooltip |
+
+**Architecture Health coverage disclosure — mandatory, always visible.** A
+high score on a narrow contract still reads as "the architecture is healthy",
+especially to a user who has just seen directory-level cycles elsewhere in this
+same product. The panel must therefore state its own scope, not just its
+number:
+
+```
+Static file-graph evidence:            0 file-level cycles
+Separate directory-cycle observations: 3   (see Dependency Clusters)
+Active Architecture Health markers:    bidirectional coupling only
+```
+
+**It ships as structured API data, not only as a rendering rule.** The
+`architecture_health` axis object carries a `coverage` block with these
+fields, computed at snapshot time and stored immutably with the result:
+
+| Field | Meaning |
+|---|---|
+| `inputs_complete` | every marker in this contract had its input — **not** "complete evidence" |
+| `file_level_cycle_count` | non-trivial file-level SCCs found (the scored fact) |
+| `directory_cycle_count` | directory-level cycles observed separately (**not** scored) |
+| `active_markers` | which markers actually had data and carried the score |
+| `inactive_markers` | markers with no data in this run |
+| `limitations` | plain-language scope statements, always non-empty |
+
+A documented rendering rule alone is insufficient: a future UI could receive a
+non-null score and simply omit the scope. `TestArchitectureDisclosureContract`
+in `test_repos_api.py` asserts that a non-null Architecture Health score is
+never servable without every field above, on both the compute and the read
+endpoint.
+
+Rules:
+- Rendered **next to the score, not behind a tooltip or expander.**
+- The directory-cycle count links to where those cycles are already shown, so
+  the two facts are visibly reconciled rather than appearing to contradict.
+- When `inputs_complete` is False the score is absent entirely (§2), and this
+  block states which marker had no data.
+- The wording "complete evidence" is forbidden here. Permitted phrasing is
+  "complete coverage of the current file-level checks".
 
 **Forbidden strings:** "Defect Risk", "Defect Exposure", "bug risk",
 "predicted defects", "code health score", or any single combined number across

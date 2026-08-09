@@ -48,10 +48,10 @@ def stat(values):
 
 
 def load_inputs(db, repo) -> list:
-    """Builds FileInputs from the DB rows plus a live AST pass. Reachability
-    and file-level SCCs are not persisted yet, so `cycle_size` is left None
-    here -- the Architecture axis therefore reports only its coupling marker
-    in this dry run, which is stated in the output rather than hidden."""
+    """Builds FileInputs from the DB rows plus a live AST pass. `cycle_size`
+    reads the persisted file-level SCC size; None there means no
+    graph-structure pass has run, which correctly withholds the Architecture
+    score rather than scoring it on partial evidence."""
     root = Path(repo.local_path)
     if repo.source_root:
         root = root / repo.source_root
@@ -77,7 +77,7 @@ def load_inputs(db, repo) -> list:
             max_function_nloc=m.max_function_nloc if m else None,
             broad_handler_count=m.broad_handler_count if m else None,
             graph_available=f.fan_in is not None and f.fan_out is not None,
-            fan_in=f.fan_in, fan_out=f.fan_out, cycle_size=None,
+            fan_in=f.fan_in, fan_out=f.fan_out, cycle_size=f.scc_size,
             commit_count=f.commit_count,
         ))
     return inputs, na_language, unreadable
@@ -183,8 +183,6 @@ def report_repo(db, repo):
 def main():
     ids = [int(a) for a in sys.argv[1:]] or [1, 2, 3]
     print(f"thresholds_version={THRESHOLDS_VERSION} weights_version={WEIGHTS_VERSION}")
-    print("NOTE: cycle_size is not persisted yet, so cycle_participation reads 0 "
-          "for every file in this dry run.")
     db = SessionLocal()
     for rid in ids:
         repo = db.get(Repo, rid)

@@ -50,6 +50,18 @@ AXIS_CAP = 9.0
 SUBSTANCE_FLOOR_NLOC = 10
 REVIEW_COST_FLOOR_NLOC = 30
 
+# Below this span between a percentile marker's warn (P50) and saturate (P95),
+# the ramp is too short to express magnitude -- on repo 1, P50=1 and P95=3
+# means a file reaches MAXIMUM exposure at three commits. The ordering may
+# still be reasonable within that repo, but the number cannot claim "how
+# much", so the axis carries a visible resolution badge rather than implying
+# a precision it does not have.
+#
+# Deliberately a span check, not a distinct-value check: §5.2's "3 distinct
+# commit counts" gate asks whether churn varies AT ALL, which is a different
+# and weaker question than whether it varies enough to grade.
+CHURN_RESOLUTION_MIN_SPAN = 5.0
+
 
 @dataclass(frozen=True)
 class MarkerSpec:
@@ -137,6 +149,10 @@ class RepoContext:
     churn_usable: bool = False
     churn_p50: float = 0.0
     churn_p95: float = 0.0
+    # True when P95-P50 is too narrow to express magnitude, even though the
+    # §5.2 distinct-value gate passed. Ranking stays valid; "how much" does not.
+    churn_resolution_limited: bool = False
+    churn_resolution_note: Optional[str] = None
     fan_in_p90: float = 0.0
     fan_in_p99: float = 0.0
     fan_out_p90: float = 0.0
@@ -174,8 +190,25 @@ class AxisResult:
     na_reason: Optional[str] = None
     # Exactly one of these is non-None, by direction. A health axis has no
     # `points`; the hotspot axis has no `score`.
+    #
+    # BOTH are also None when `inputs_complete` is False. That is the
+    # Architecture Health gate, made structural rather than advisory: an
+    # inline caveat still leaves a prominent 9.98 on screen anchoring the
+    # reader on a conclusion the evidence does not support, so when a
+    # required input is missing the presentable value is withheld entirely
+    # and the provisional number is parked in `provisional_value` for
+    # diagnostics only. A UI literally cannot render a green score it was
+    # never given.
     score: Optional[float] = None
     points: Optional[float] = None
+    inputs_complete: bool = True
+    missing_inputs: list = field(default_factory=list)
+    provisional_value: Optional[float] = None
+    # Set when a percentile-derived marker's warn→saturate span is so narrow
+    # that the axis ranks but cannot claim magnitude (see CHURN_RESOLUTION_
+    # MIN_SPAN). The UI must show this as a badge, not bury it.
+    resolution_limited: bool = False
+    resolution_note: Optional[str] = None
     total_deduction: float = 0.0
     markers: list = field(default_factory=list)
     category_deductions: dict = field(default_factory=dict)
@@ -229,6 +262,15 @@ def build_repo_context(files: list) -> RepoContext:
         s = sorted(churn)
         ctx.churn_p50 = percentile(s, 50)
         ctx.churn_p95 = percentile(s, 95)
+        span = ctx.churn_p95 - ctx.churn_p50
+        if span < CHURN_RESOLUTION_MIN_SPAN:
+            ctx.churn_resolution_limited = True
+            ctx.churn_resolution_note = (
+                f"Limited history resolution: change frequency spans only "
+                f"P50={ctx.churn_p50:.0f} to P95={ctx.churn_p95:.0f} commits in this repo, so a file "
+                f"reaches maximum exposure at {ctx.churn_p95:.0f} commits. Use this to order files for "
+                f"review, not to judge how much more exposed one is than another."
+            )
     else:
         ctx.churn_usable = False
         ctx.churn_na_reason = (
@@ -265,7 +307,8 @@ def _scored(spec: MarkerSpec, value: float, warn: float, saturate: float,
     )
 
 
-def _assemble(axis: str, direction: str, markers: list) -> AxisResult:
+def _assemble(axis: str, direction: str, markers: list,
+              missing_inputs: Optional[list] = None) -> AxisResult:
     """Applies category caps then the axis cap, recording which bound. The
     binding flags exist so a distribution report can tell "this marker
     contributes 2.4" from "this marker would contribute 2.4 but the category
@@ -288,17 +331,26 @@ def _assemble(axis: str, direction: str, markers: list) -> AxisResult:
     axis_capped = total > AXIS_CAP
     total = min(AXIS_CAP, total)
 
+    missing = list(missing_inputs or [])
+    value = (10.0 - total) if direction == HIGHER_IS_BETTER else total
+
     result = AxisResult(
         axis=axis, direction=direction, available=True,
         total_deduction=total, markers=markers,
         category_deductions=capped_by_cat,
         categories_capped=categories_capped,
         axis_capped=axis_capped,
+        inputs_complete=not missing,
+        missing_inputs=missing,
     )
+    if missing:
+        # Withheld, not merely annotated -- see AxisResult.score's comment.
+        result.provisional_value = value
+        return result
     if direction == HIGHER_IS_BETTER:
-        result.score = 10.0 - total
+        result.score = value
     else:
-        result.points = total
+        result.points = value
     return result
 
 
@@ -352,10 +404,16 @@ def score_architecture_health(f: FileInputs, ctx: RepoContext) -> AxisResult:
                             "No ranking run has produced an import graph for this repo yet.")
 
     markers = []
+    missing_inputs = []
 
     cycle_spec = ALL_MARKERS["cycle_participation"]
     if f.cycle_size is None:
-        markers.append(_scored(cycle_spec, 0.0, cycle_spec.warn, cycle_spec.saturate))
+        # No graph-structure pass has run. This is the axis's heaviest marker
+        # (weight 4.0), so scoring without it would report a near-perfect
+        # Architecture Health carried by one marker that fires on ~1% of
+        # files -- exactly the false 9.98 the gate exists to prevent.
+        markers.append(_na(cycle_spec, "Import cycles not yet computed for this repo."))
+        missing_inputs.append("cycle_participation")
     else:
         markers.append(_scored(cycle_spec, float(f.cycle_size), cycle_spec.warn, cycle_spec.saturate))
 
@@ -376,7 +434,7 @@ def score_architecture_health(f: FileInputs, ctx: RepoContext) -> AxisResult:
             r = _scored(hub_spec, value, warn, saturate)
         markers.append(r)
 
-    return _assemble(ARCHITECTURE, HIGHER_IS_BETTER, markers)
+    return _assemble(ARCHITECTURE, HIGHER_IS_BETTER, markers, missing_inputs)
 
 
 def score_change_hotspot(f: FileInputs, ctx: RepoContext) -> AxisResult:
@@ -403,7 +461,13 @@ def score_change_hotspot(f: FileInputs, ctx: RepoContext) -> AxisResult:
         interaction = _scored(interaction_spec, product,
                               interaction_spec.warn, interaction_spec.saturate)
 
-    return _assemble(CHANGE_HOTSPOT, HIGHER_NEEDS_ATTENTION, [churn, interaction])
+    result = _assemble(CHANGE_HOTSPOT, HIGHER_NEEDS_ATTENTION, [churn, interaction])
+    # A narrow percentile span does NOT make the axis unavailable -- the
+    # ranking is still usable, and withholding it would lose real signal.
+    # It makes the magnitude unclaimable, which is a badge, not a gate.
+    result.resolution_limited = ctx.churn_resolution_limited
+    result.resolution_note = ctx.churn_resolution_note
+    return result
 
 
 def score_file(f: FileInputs, ctx: RepoContext) -> FileScores:

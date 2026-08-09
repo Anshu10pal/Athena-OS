@@ -15,11 +15,14 @@ from app.api.repos import (
     NEIGHBORS_ENDPOINT_CAP,
     VALID_SCORERS,
     SubsystemRenameIn,
+    compute_health_endpoint,
     compute_subsystems_endpoint,
     compute_subsystems_hdbscan_endpoint,
     get_file_neighbors,
     get_graph,
     get_ranking,
+    get_health,
+    get_health_files,
     get_subsystem_members,
     get_subsystems,
     ingest_repo_endpoint,
@@ -761,3 +764,130 @@ class TestGetGraphClusterFields:
         for n in result["nodes"]:
             assert n["cluster_id"] is None
             assert n["cluster_purity"] is None
+
+
+class TestArchitectureDisclosureContract:
+    """The disclosure must travel WITH the score, as structured data.
+
+    A documented rendering rule is not enough: a future UI could receive a
+    non-null Architecture Health score and simply omit the scope it applies
+    to, leaving 10.00 reading as "the architecture is healthy" while the same
+    product shows the user directory-level cycles elsewhere. These tests make
+    that combination impossible to serve.
+    """
+
+    def _make_repo(self, tmp_path) -> Path:
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "pkg" / "core.py",
+               '"""Core."""\n\n\n'
+               "def run(a, b):\n"
+               "    if a:\n        return 1\n"
+               "    if b:\n        return 2\n"
+               "    return 0\n\n\n"
+               "def classify(v):\n"
+               "    if v > 10:\n        return 'high'\n"
+               "    return 'low'\n")
+        _write(root / "pkg" / "util.py",
+               "from pkg.core import run, classify\n\n\n"
+               "def helper(x):\n"
+               "    value = run(x, False)\n"
+               "    label = classify(value)\n"
+               "    if label == 'high':\n        return value * 2\n"
+               "    return value\n\n\n"
+               "def describe(x):\n"
+               "    return f'{x}: {helper(x)}'\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+        return root
+
+    def _analysed(self, db_session, tmp_path):
+        repo = register_from_path(db_session, str(self._make_repo(tmp_path)))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        return repo
+
+    REQUIRED_FIELDS = (
+        "inputs_complete", "file_level_cycle_count",
+        "directory_cycle_count", "active_markers", "limitations",
+    )
+
+    def test_a_non_null_architecture_score_always_ships_its_disclosure(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        payload = compute_health_endpoint(repo.id, user=None, db=db_session)
+        arch = payload["axes"]["architecture_health"]
+
+        assert arch.get("mean") is not None, "expected a presentable score for this fixture"
+        coverage = arch["coverage"]
+        for field in self.REQUIRED_FIELDS:
+            assert field in coverage, f"score served without disclosure field {field!r}"
+
+    def test_the_same_holds_on_the_read_endpoint_not_just_the_compute_one(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+        payload = get_health(repo.id, user=None, db=db_session)
+        coverage = payload["axes"]["architecture_health"]["coverage"]
+        for field in self.REQUIRED_FIELDS:
+            assert field in coverage
+
+    def test_disclosure_reports_both_cycle_kinds_separately(self, db_session, tmp_path):
+        # The two facts are not in conflict -- a directory cycle needs only
+        # a1->b1 and b2->a2, with no file in a cycle -- and reporting them
+        # apart is what makes that legible rather than contradictory.
+        repo = self._analysed(db_session, tmp_path)
+        payload = compute_health_endpoint(repo.id, user=None, db=db_session)
+        coverage = payload["axes"]["architecture_health"]["coverage"]
+        assert coverage["file_level_cycle_count"] == 0
+        assert "directory_cycle_count" in coverage
+
+    def test_limitations_name_the_static_analysis_blind_spot(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        payload = compute_health_endpoint(repo.id, user=None, db=db_session)
+        text = " ".join(payload["axes"]["architecture_health"]["coverage"]["limitations"]).lower()
+        assert "dynamic import" in text or "static import" in text
+
+    def test_active_markers_names_what_actually_carried_the_score(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        payload = compute_health_endpoint(repo.id, user=None, db=db_session)
+        coverage = payload["axes"]["architecture_health"]["coverage"]
+        assert "bidirectional_coupling_hub" in coverage["active_markers"]
+
+    def test_snapshot_carries_provenance_including_dirty_working_tree(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        snap = compute_health_endpoint(repo.id, user=None, db=db_session)["snapshot"]
+        for field in ("head_sha", "branch", "working_tree_dirty",
+                      "analyzer_version", "thresholds_version", "weights_version"):
+            assert field in snap
+
+    def test_first_snapshot_reports_no_baseline_rather_than_a_zero_delta(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        trend = compute_health_endpoint(repo.id, user=None, db=db_session)["trend"]
+        assert trend["comparable"] is False
+        assert trend["deltas"] == {}
+
+    def test_health_endpoints_404_before_any_snapshot_exists(self, db_session, tmp_path):
+        # Deliberately not an empty scorecard, which would read as
+        # "measured, and fine".
+        repo = self._analysed(db_session, tmp_path)
+        for fn in (get_health, get_health_files):
+            with pytest.raises(HTTPException) as exc:
+                fn(repo.id, user=None, db=db_session)
+            assert exc.value.status_code == 404
+
+    def test_file_ranking_excludes_na_files_instead_of_sorting_them_as_zero(self, db_session, tmp_path):
+        # This fixture is a single-commit repo, so Change Hotspot is N/A for
+        # every file; they must be excluded and counted, not ranked as 0.
+        repo = self._analysed(db_session, tmp_path)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+        result = get_health_files(repo.id, sort="adjusted_exposure", user=None, db=db_session)
+        assert result["files"] == []
+        assert result["excluded_na"] > 0
+
+    def test_file_ranking_serves_both_exposure_columns(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+        result = get_health_files(repo.id, sort="maintainability", user=None, db=db_session)
+        assert result["files"], "expected maintainability-ranked files"
+        for row in result["files"]:
+            assert "exposure" in row and "adjusted_exposure" in row
+            assert "explanation" in row

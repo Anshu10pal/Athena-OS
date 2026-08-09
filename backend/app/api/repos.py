@@ -9,13 +9,18 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user, require_write_access
 from app.db.database import SessionLocal, get_db
-from app.db.models import CodeFile, CodeFileRank, CodeImport, CodeSubsystem, Repo, RepoJob, User
+from app.db.models import (
+    CodeFile, CodeFileHealth, CodeFileRank, CodeHealthSnapshot, CodeImport,
+    CodeSubsystem, Repo, RepoJob, User,
+)
 from app.services.codebase import edge_weights, jobs, registry
 from app.services.codebase.dir_aggregation import DEFAULT_MAX_GROUPS, aggregate_to_directories
 from app.services.codebase.discovery import TooManyFilesError
 from app.services.codebase.git_ops import GitBinaryUnavailable
 from app.services.codebase.ingest import ingest_repo
 from app.services.codebase.ordering import compute_layers
+from app.services.codebase.graph_structure import persist_graph_structure
+from app.services.codebase.health_snapshots import create_snapshot, trend_delta
 from app.services.codebase.overview import build_overview
 from app.services.codebase.policy import RepoBlocked
 from app.services.codebase.ranking import _build_graph, rank_repo
@@ -602,6 +607,125 @@ def compute_subsystems_endpoint(
         return compute_subsystems(db, repo)
     except RepoBusyError as e:
         raise HTTPException(409, str(e))
+
+
+def _serialize_snapshot(db: Session, snapshot: CodeHealthSnapshot) -> dict:
+    """Snapshot + trend, with the coverage disclosure carried as structured
+    data on the Architecture axis.
+
+    The disclosure is part of the payload, not a rendering convention: a UI
+    that receives a score must also receive the scope that score applies to,
+    so it cannot show 10.00 as "healthy architecture" while the same product
+    shows the user directory-level cycles elsewhere. Enforced by
+    TestArchitectureDisclosureContract in test_repos_api.py."""
+    return {
+        "snapshot": {
+            "id": snapshot.id,
+            "branch": snapshot.branch,
+            "head_sha": snapshot.head_sha,
+            # Load-bearing provenance: for a local repo we analyse the live
+            # working directory, so HEAD may not describe the analysed bytes.
+            "working_tree_dirty": snapshot.working_tree_dirty,
+            "analyzer_version": snapshot.analyzer_version,
+            "thresholds_version": snapshot.thresholds_version,
+            "weights_version": snapshot.weights_version,
+            "computed_at": snapshot.computed_at.isoformat(),
+            "files_scored": snapshot.files_scored,
+            "files_na": snapshot.files_na,
+            "inputs_complete": snapshot.inputs_complete,
+        },
+        "axes": snapshot.axis_summary,
+        "trend": trend_delta(db, snapshot),
+    }
+
+
+@router.post("/{repo_id}/health")
+def compute_health_endpoint(
+    repo_id: int, user: User = Depends(require_write_access), db: Session = Depends(get_db),
+):
+    """Runs the analyzer and writes ONE immutable snapshot, atomically -- see
+    health_snapshots.create_snapshot. Nothing is written unless the whole run
+    succeeds, so a trend line can never mistake a partial run for a real
+    change."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    persist_graph_structure(db, repo)
+    snapshot = create_snapshot(db, repo)
+    return _serialize_snapshot(db, snapshot)
+
+
+@router.get("/{repo_id}/health")
+def get_health(repo_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Latest snapshot, read-only. 404 when none exists -- deliberately not an
+    empty scorecard, which would read as "measured and fine"."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    snapshot = (
+        db.query(CodeHealthSnapshot)
+        .filter(CodeHealthSnapshot.repo_id == repo_id)
+        .order_by(CodeHealthSnapshot.computed_at.desc(), CodeHealthSnapshot.id.desc())
+        .first()
+    )
+    if not snapshot:
+        raise HTTPException(404, "No code-health snapshot for this repo yet.")
+    return _serialize_snapshot(db, snapshot)
+
+
+@router.get("/{repo_id}/health/files")
+def get_health_files(
+    repo_id: int, sort: str = "adjusted_exposure", limit: int = 50,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Per-file results from the latest snapshot, with stored explanations.
+
+    Effort-aware ranking shows BOTH columns (contract §11): `exposure` and
+    `adjusted_exposure`. Files whose axis was N/A are excluded from ranking
+    and counted separately rather than sorted as if they scored zero."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    snapshot = (
+        db.query(CodeHealthSnapshot)
+        .filter(CodeHealthSnapshot.repo_id == repo_id)
+        .order_by(CodeHealthSnapshot.computed_at.desc(), CodeHealthSnapshot.id.desc())
+        .first()
+    )
+    if not snapshot:
+        raise HTTPException(404, "No code-health snapshot for this repo yet.")
+    if sort not in ("adjusted_exposure", "exposure", "maintainability", "architecture_health"):
+        raise HTTPException(400, f"Unknown sort {sort!r}")
+
+    rows = db.query(CodeFileHealth).filter(CodeFileHealth.snapshot_id == snapshot.id).all()
+    column = {
+        "adjusted_exposure": lambda r: r.adjusted_exposure,
+        "exposure": lambda r: r.change_hotspot_points,
+        "maintainability": lambda r: r.maintainability,
+        "architecture_health": lambda r: r.architecture_health,
+    }[sort]
+
+    rankable = [r for r in rows if column(r) is not None]
+    excluded = len(rows) - len(rankable)
+    descending = sort in ("adjusted_exposure", "exposure")
+    rankable.sort(key=lambda r: column(r), reverse=descending)
+
+    return {
+        "snapshot_id": snapshot.id,
+        "sort": sort,
+        "excluded_na": excluded,
+        "files": [
+            {
+                "file_id": r.file_id, "path": r.path, "nloc": r.nloc,
+                "maintainability": r.maintainability,
+                "architecture_health": r.architecture_health,
+                "exposure": r.change_hotspot_points,
+                "adjusted_exposure": r.adjusted_exposure,
+                "explanation": r.explanation,
+            }
+            for r in rankable[:limit]
+        ],
+    }
 
 
 @router.get("/{repo_id}/overview")

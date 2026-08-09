@@ -36,7 +36,12 @@ def clean_file(**over) -> FileInputs:
         ast_available=True, function_count=3,
         max_cyclomatic=1, max_nesting=0, max_conditional_operands=0,
         max_function_nloc=5, broad_handler_count=0,
-        graph_available=True, fan_in=0, fan_out=0, cycle_size=None,
+        graph_available=True, fan_in=0, fan_out=0,
+        # 1 = a measured trivial component, i.e. analysed and NOT in a cycle.
+        # Deliberately not None: None means "no graph-structure pass has run",
+        # which now correctly withholds the Architecture score, and a baseline
+        # "clean file" must represent fully-analysed clean, not unanalysed.
+        cycle_size=1,
         commit_count=1,
     )
     base.update(over)
@@ -293,6 +298,86 @@ class TestEffortAwareRanking:
         small_raw, small_nloc = 3.0, 60
         assert big_raw > small_raw
         assert adjusted_exposure(small_raw, small_nloc) > adjusted_exposure(big_raw, big_nloc)
+
+
+class TestArchitectureEvidenceGate:
+    """Until file-level SCCs are persisted, Architecture Health is carried by
+    one marker firing on ~1% of files and reports ~9.98. An inline caveat
+    still leaves that number on screen anchoring the reader, so the value is
+    withheld structurally instead."""
+
+    def test_missing_cycle_data_withholds_the_score_entirely(self):
+        f = clean_file(cycle_size=None)
+        r = score_architecture_health(f, ctx())
+        assert r.available is True            # the axis ran
+        assert r.inputs_complete is False   # but on partial evidence
+        assert r.score is None                # so there is nothing to render
+        assert "cycle_participation" in r.missing_inputs
+
+    def test_provisional_value_is_kept_for_diagnostics_only(self):
+        r = score_architecture_health(clean_file(cycle_size=None), ctx())
+        assert r.provisional_value is not None
+        assert r.score is None  # and must not be swapped in by a caller
+
+    def test_present_cycle_data_restores_a_real_score(self):
+        r = score_architecture_health(clean_file(cycle_size=1), ctx())
+        assert r.inputs_complete is True
+        assert r.score == pytest.approx(10.0)
+        assert r.missing_inputs == []
+
+    def test_a_file_in_a_real_cycle_scores_below_ten(self):
+        r = score_architecture_health(clean_file(cycle_size=8), ctx())
+        assert r.inputs_complete is True
+        assert r.score < 10.0
+
+    def test_trivial_component_of_one_is_not_a_cycle(self):
+        # scc_size == 1 is a measured "not in a cycle", distinct from None
+        # meaning "never analysed" -- only the persisted difference lets the
+        # scorer tell an absent measurement from a clean one.
+        r = score_architecture_health(clean_file(cycle_size=1), ctx())
+        assert marker(r, "cycle_participation").deduction == 0.0
+
+    def test_other_axes_are_unaffected_by_the_architecture_gate(self):
+        s = score_file(clean_file(cycle_size=None, commit_count=5), ctx())
+        assert s.architecture_health.score is None
+        assert s.maintainability.score is not None
+
+
+class TestChurnResolutionBadge:
+    def test_narrow_percentile_span_flags_limited_resolution(self):
+        # repo 1's real shape: P50=1, P95=3 -- maximum exposure at three
+        # commits. Ranking is fine; magnitude is not claimable.
+        files = [clean_file(commit_count=c) for c in (0, 1, 1, 1, 2, 2, 3, 3)]
+        c = build_repo_context(files)
+        assert c.churn_usable is True
+        assert c.churn_resolution_limited is True
+        assert "Limited history resolution" in c.churn_resolution_note
+
+    def test_wide_span_is_not_flagged(self):
+        files = [clean_file(commit_count=c) for c in range(0, 100)]
+        c = build_repo_context(files)
+        assert c.churn_usable is True
+        assert c.churn_resolution_limited is False
+        assert c.churn_resolution_note is None
+
+    def test_limited_resolution_does_not_make_the_axis_unavailable(self):
+        # Deliberately a badge, not a gate -- withholding the ranking would
+        # lose real signal, unlike the architecture case where the missing
+        # marker was the dominant one.
+        files = [clean_file(commit_count=c) for c in (0, 1, 1, 2, 3, 3)]
+        c = build_repo_context(files)
+        r = score_change_hotspot(clean_file(commit_count=3), c)
+        assert r.available is True
+        assert r.points is not None
+        assert r.resolution_limited is True
+
+    def test_the_badge_is_span_based_not_distinct_value_based(self):
+        # Three distinct values pass the §5.2 gate, but 1..3 is too short a
+        # ramp to grade with -- these are different questions.
+        files = [clean_file(commit_count=c) for c in (1, 2, 3)]
+        c = build_repo_context(files)
+        assert c.churn_usable is True          # distinct-value gate passes
+        assert c.churn_resolution_limited is True  # span gate does not
 
 
 class TestScoreFile:

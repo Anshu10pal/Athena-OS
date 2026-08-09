@@ -569,6 +569,23 @@ class CodeFile(Base):
     # the two columns above despite the identical NULL-means-unclustered
     # convention.
     subsystem_hdbscan_id: Mapped[int] = mapped_column(ForeignKey("code_subsystems.id"), nullable=True, default=None, index=True)
+    # Phase 1 code health: FILE-level strongly-connected component in the
+    # resolved import graph. Distinct from the directory-level SCCs
+    # subsystems.py computes -- those answer "which directories cycle", this
+    # answers "is this specific file inside an import cycle, and how big".
+    # scc_size == 1 means a trivial component, i.e. NOT in a cycle; the
+    # `cycle_participation` marker reads size, not membership, for that
+    # reason. Both null until a graph-structure pass has run.
+    scc_id: Mapped[int] = mapped_column(Integer, nullable=True, default=None, index=True)
+    scc_size: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+    # Phase 1 code health: reachability from the seed-eligible entry set,
+    # persisted rather than recomputed live in get_graph (the H1.5 rule).
+    # EVIDENCE ONLY -- this feeds the neutral "possibly unreachable by static
+    # imports" advisory and must never become a scored deduction without a
+    # separate validation study. Our own ESLint run already showed it firing
+    # wrongly on dynamically-imported plugin files. Null means no analysis
+    # pass has run; False does NOT mean "dead code".
+    reachable_from_entry: Mapped[bool] = mapped_column(Boolean, nullable=True, default=None)
 
 
 class CodeSymbol(Base):
@@ -723,6 +740,90 @@ class CodeSubsystem(Base):
     # tooltips. One of "dominant_prefix" | "top_fan_in" | "numeric" | "custom".
     active_label_rule: Mapped[str] = mapped_column(String(20), default="dominant_prefix")
     computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------- Codebase agent: code health snapshots (Phase 1) ----------------
+
+
+class CodeHealthSnapshot(Base):
+    """One immutable code-health run. Append-only: a re-run at the same SHA
+    writes a NEW row rather than mutating the old one, so a trend line can
+    never be rewritten retroactively.
+
+    Every field in the identity block exists because without it two results
+    could be silently compared across different inputs:
+
+    - `head_sha` + `branch` -- which revision was analysed.
+    - `working_tree_dirty` -- **correctness, not bookkeeping.** For a `local`
+      repo we analyse the user's live working directory, so HEAD may not
+      describe the bytes that were actually measured at all. A snapshot
+      claiming a SHA while the tree was dirty would be a false provenance
+      claim.
+    - `analyzer_version` -- the AST rules that produced the raw metrics.
+    - `thresholds_version` / `weights_version` -- the scoring definition.
+      A trend delta is only meaningful between snapshots whose scoring
+      matches; comparing across a threshold change silently mixes two
+      different measuring sticks.
+
+    `inputs_complete` records whether every input the axes need was
+    actually available (see CodeFileHealth.explanation and the Architecture
+    Health gate) -- a snapshot taken before file-level SCCs existed is not
+    the same kind of artifact as one taken after, and must not be presented
+    as if it were.
+    """
+
+    __tablename__ = "code_health_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id"), index=True)
+    branch: Mapped[str] = mapped_column(String(255), default="")
+    head_sha: Mapped[str] = mapped_column(String(64), nullable=True, default=None)
+    working_tree_dirty: Mapped[bool] = mapped_column(Boolean, nullable=True, default=None)
+    analyzer_version: Mapped[int] = mapped_column(Integer, default=0)
+    thresholds_version: Mapped[int] = mapped_column(Integer, default=0)
+    weights_version: Mapped[int] = mapped_column(Integer, default=0)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Per-axis repo aggregates (mean/median/p10/counts) plus, per axis,
+    # whether its evidence was complete. Stored as JSON rather than columns
+    # because the axis set is a product decision that will change, and a
+    # migration per axis tweak would be friction with no benefit.
+    axis_summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    files_scored: Mapped[int] = mapped_column(Integer, default=0)
+    files_na: Mapped[int] = mapped_column(Integer, default=0)
+    inputs_complete: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class CodeFileHealth(Base):
+    """One file's scores within one snapshot, with the marker-level
+    explanation that produced them.
+
+    The explanation is stored, not recomputed on read: a historical score
+    that cannot be explained by the markers of its own era is not auditable,
+    and re-deriving it with today's thresholds would silently rewrite what
+    the score meant.
+
+    Null score/points means the axis was N/A for this file -- the reason is
+    in `explanation`. Null is never coerced to a number on read.
+    """
+
+    __tablename__ = "code_file_health"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "file_id", name="uq_file_health_snapshot_file"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("code_health_snapshots.id"), index=True)
+    file_id: Mapped[int] = mapped_column(ForeignKey("code_files.id"), index=True)
+    path: Mapped[str] = mapped_column(String(1000))
+    nloc: Mapped[int] = mapped_column(Integer, default=0)
+
+    maintainability: Mapped[float] = mapped_column(Float, nullable=True, default=None)
+    architecture_health: Mapped[float] = mapped_column(Float, nullable=True, default=None)
+    # Points, not a score -- higher means review sooner. Named to match the
+    # direction so it cannot be read as a quality grade.
+    change_hotspot_points: Mapped[float] = mapped_column(Float, nullable=True, default=None)
+    adjusted_exposure: Mapped[float] = mapped_column(Float, nullable=True, default=None)
+    explanation: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 # ---------------- Codebase agent: background jobs (Phase D) ----------------
