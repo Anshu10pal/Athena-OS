@@ -896,3 +896,54 @@ class TestIngestNodePriorClassification:
                 files["backend/alembic/versions/abc_add_thing.py"].prior_source) == ("migration", "pattern")
         assert (files["gen/thing_pb2.py"].prior_category, files["gen/thing_pb2.py"].prior_source) == ("generated", "pattern")
         assert (files["pkg/__init__.py"].prior_category, files["pkg/__init__.py"].prior_source) == ("barrel", "structural")
+
+
+class TestEmptyDiscoveryDoesNotWipeAPreviousIngest:
+    """The cleanup pass deletes every file it did not see this run. When
+    discovery returns nothing because the checkout is missing or empty --
+    a lost ephemeral disk, a bad source_root -- that pass silently empties
+    the repo, and stale derived artifacts (health snapshots, ranks) survive
+    to keep rendering numbers for source that is no longer there."""
+
+    def test_a_repo_that_becomes_empty_is_refused_not_wiped(self, db_session, tmp_path):
+        root = tmp_path / "repo"
+        _write(root / "a.py", "def a():\n    return 1\n")
+        _write(root / "b.py", "from a import a\n\n\ndef b():\n    return a() + 1\n")
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        assert db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).count() == 2
+
+        (root / "a.py").unlink()
+        (root / "b.py").unlink()
+
+        with pytest.raises(ValueError, match="Refusing to delete"):
+            ingest_repo(db_session, repo)
+
+        assert db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).count() == 2, \
+            "the previous ingest must survive a discovery that found nothing"
+
+    def test_a_genuinely_empty_first_ingest_is_still_allowed(self, db_session, tmp_path):
+        """Nothing to protect, so nothing to refuse -- the guard must not turn
+        a legitimately empty repo into an error."""
+        root = tmp_path / "repo"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "README.md").write_text("no source here\n")
+        repo = register_from_path(db_session, str(root))
+        report = ingest_repo(db_session, repo)
+        assert report.files_total == 0
+
+    def test_deleting_some_files_still_removes_them(self, db_session, tmp_path):
+        """The guard is scoped to discovering NOTHING. Ordinary deletions must
+        still be cleaned up, or it would trade one stale-data bug for another."""
+        root = tmp_path / "repo"
+        _write(root / "a.py", "def a():\n    return 1\n")
+        _write(root / "b.py", "def b():\n    return 2\n")
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+
+        (root / "b.py").unlink()
+        report = ingest_repo(db_session, repo)
+
+        assert report.files_deleted == 1
+        paths = {p for (p,) in db_session.query(CodeFile.path).filter(CodeFile.repo_id == repo.id).all()}
+        assert paths == {"a.py"}

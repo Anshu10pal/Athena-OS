@@ -338,6 +338,10 @@ export function HealthTiles({
   }
 
   const openTile = tiles.find((t) => t.key === openKey);
+  // Tolerated as optional: a snapshot served by an older backend has no
+  // staleness field, and absent evidence of staleness is not evidence of
+  // freshness -- but nor is it grounds for marking a good snapshot stale.
+  const stale = data.staleness?.stale === true;
 
   return (
     <section className="space-y-3" ref={triggerRef}>
@@ -352,16 +356,31 @@ export function HealthTiles({
         </button>
       </div>
 
+      {stale && (
+        <div className="card p-3.5 border-warning/40 bg-warning/[0.06]">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-warning/90">
+            Out of date — describes an earlier state of this repo
+          </p>
+          <p className="font-mono text-[11px] text-fog leading-relaxed mt-1.5">
+            {data.staleness.detail}
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <Tile
           label="Code health"
           value={agg.score === null ? "N/A" : `${agg.score}`}
-          tone={agg.score === null ? undefined : BAND_CLASS[aggregateBand(agg.score)]}
-          muted={agg.score === null}
+          // A stale score keeps its number but loses its colour. The band is a
+          // verdict on the repo as it is now, and a green 97 beside a Contents
+          // panel reading 0 files is the exact misread this whole surface is
+          // built to avoid.
+          tone={agg.score === null || stale ? undefined : BAND_CLASS[aggregateBand(agg.score)]}
+          muted={agg.score === null || stale}
           sub={
             agg.score === null
               ? "nothing measurable to aggregate"
-              : `out of 100 · ${agg.axesUsed} of ${agg.axesPossible} axes${agg.partial ? " · partial" : ""}`
+              : `out of 100 · ${agg.axesUsed} of ${agg.axesPossible} axes${agg.partial ? " · partial" : ""}${stale ? " · out of date" : ""}`
           }
           onClick={() => setOpenKey("__aggregate__")}
         />
@@ -376,13 +395,13 @@ export function HealthTiles({
                 ? t.value!.toFixed(2)
                 : `${t.outOf100}`
             }
-            muted={!t.available}
+            muted={!t.available || stale}
             sub={
               !t.available
                 ? "not measurable"
                 : t.key === HOTSPOT_AXIS
-                ? `0–9 exposure${t.resolutionLimited ? " · low resolution" : ""}`
-                : "out of 100"
+                ? `0–9 exposure${t.resolutionLimited ? " · low resolution" : ""}${stale ? " · out of date" : ""}`
+                : `out of 100${stale ? " · out of date" : ""}`
             }
             onClick={() => setOpenKey(t.key)}
           />

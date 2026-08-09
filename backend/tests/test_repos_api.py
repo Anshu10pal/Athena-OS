@@ -959,3 +959,66 @@ class TestArchitectureDisclosureContract:
         for row in result["files"]:
             assert "exposure" in row and "adjusted_exposure" in row
             assert "explanation" in row
+
+
+class TestStalenessTravelsWithTheScore:
+    """A score is a claim about a repo at a moment. The read endpoint returned
+    the newest snapshot and checked nothing, so a repo whose files had gone
+    still rendered a green 97 beside a Contents panel reading 0 files. The
+    staleness verdict now ships in the same payload as the number, for the
+    same reason the architecture disclosure does.
+    """
+
+    def _analysed(self, db_session, tmp_path):
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "pkg" / "core.py",
+               '"""Core."""\n\n\n'
+               "def run(a, b):\n"
+               "    if a:\n        return 1\n"
+               "    if b:\n        return 2\n"
+               "    return 0\n\n\n"
+               "def classify(v):\n"
+               "    if v > 10:\n        return 'high'\n"
+               "    return 'low'\n")
+        _write(root / "pkg" / "util.py",
+               "from pkg.core import run, classify\n\n\n"
+               "def helper(x):\n"
+               "    value = run(x, False)\n"
+               "    label = classify(value)\n"
+               "    if label == 'high':\n        return value * 2\n"
+               "    return value\n\n\n"
+               "def describe(x):\n"
+               "    return f'{x}: {helper(x)}'\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        return repo
+
+    def test_a_fresh_snapshot_reports_not_stale(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+        payload = get_health(repo.id, user=None, db=db_session)
+        assert payload["staleness"]["stale"] is False
+
+    def test_an_emptied_repo_never_serves_a_score_without_the_warning(self, db_session, tmp_path):
+        from app.db.models import CodeFile
+
+        repo = self._analysed(db_session, tmp_path)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+        db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).delete()
+        db_session.commit()
+
+        payload = get_health(repo.id, user=None, db=db_session)
+        assert payload["axes"]["maintainability"]["mean"] is not None, \
+            "the stored score is still served -- it is the framing that must change"
+        assert payload["staleness"]["stale"] is True
+        assert payload["staleness"]["reason"] == "no_files_ingested"
+        assert payload["staleness"]["detail"]
+
+    def test_the_compute_endpoint_carries_it_too(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        payload = compute_health_endpoint(repo.id, user=None, db=db_session)
+        assert "staleness" in payload

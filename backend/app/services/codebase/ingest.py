@@ -122,6 +122,24 @@ def _ingest_repo_locked(
     all_paths = {p.as_posix() for p in rel_paths}
     total_files = len(rel_paths)
 
+    # Discovering nothing where there was previously something is a broken
+    # checkout far more often than it is a repo whose every source file was
+    # deleted -- an empty clone directory, a lost ephemeral disk, a bad
+    # source_root. The cleanup pass below deletes every file it did not see
+    # this run, so without this guard that situation silently empties the
+    # repo: every count drops to zero while stale derived artifacts (health
+    # snapshots, ranks) survive and keep rendering. Refuse instead, leaving
+    # the previous ingest intact for the reader.
+    if total_files == 0:
+        previously = db.query(CodeFile).filter(CodeFile.repo_id == repo.id).count()
+        if previously > 0:
+            raise ValueError(
+                f"Discovered 0 files under {root}, but this repo has {previously} from a "
+                "previous ingest. Refusing to delete them -- this is almost always a missing "
+                "or empty checkout rather than a repo whose source was removed. Re-clone or "
+                "check source_root, then run ingest again."
+            )
+
     files_by_path: dict[str, CodeFile] = {
         f.path: f for f in db.query(CodeFile).filter(CodeFile.repo_id == repo.id).all()
     }

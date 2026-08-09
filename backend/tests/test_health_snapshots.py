@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.db.models import CodeFileHealth, CodeHealthSnapshot, Repo
+from app.db.models import CodeFile, CodeFileHealth, CodeHealthSnapshot, Repo
 from app.services.codebase import health_snapshots
 from app.services.codebase.ast_metrics import ANALYZER_VERSION
 from app.services.codebase.git_ops import run_git
@@ -342,3 +342,60 @@ class TestSnapshotIdempotency:
         repo = _analysed(db_session, tmp_path)
         snap = create_snapshot(db_session, repo)
         assert snap.source_fingerprint == health_snapshots.source_fingerprint(db_session, repo)
+
+
+class TestSnapshotStaleness:
+    """A stored snapshot describes the state it was taken from. Serving it as
+    current is what produced a green 97 beside a Contents panel reading 0
+    files in production -- the read endpoint returned the newest row and
+    checked nothing."""
+
+    def test_a_fresh_snapshot_is_not_stale(self, db_session, tmp_path):
+        repo = _analysed(db_session, tmp_path)
+        snap = create_snapshot(db_session, repo)
+        result = health_snapshots.snapshot_staleness(db_session, repo, snap)
+        assert result["stale"] is False
+        assert result["reason"] is None
+
+    def test_an_emptied_repo_makes_its_snapshot_stale(self, db_session, tmp_path):
+        """The exact production case: files gone, snapshot still there."""
+        repo = _analysed(db_session, tmp_path)
+        snap = create_snapshot(db_session, repo)
+        db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).delete()
+        db_session.commit()
+
+        result = health_snapshots.snapshot_staleness(db_session, repo, snap)
+        assert result["stale"] is True
+        assert result["reason"] == "no_files_ingested"
+        assert "no longer present" in result["detail"]
+
+    def test_changed_source_makes_its_snapshot_stale(self, db_session, tmp_path):
+        repo = _analysed(db_session, tmp_path)
+        snap = create_snapshot(db_session, repo)
+        target = db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).first()
+        target.content_sha256 = "0" * 64
+        db_session.commit()
+
+        result = health_snapshots.snapshot_staleness(db_session, repo, snap)
+        assert result["stale"] is True
+        assert result["reason"] == "source_changed"
+
+    def test_a_rescored_definition_makes_its_snapshot_stale(self, db_session, tmp_path):
+        repo = _analysed(db_session, tmp_path)
+        snap = create_snapshot(db_session, repo)
+        snap.thresholds_version = THRESHOLDS_VERSION - 1
+        db_session.commit()
+
+        result = health_snapshots.snapshot_staleness(db_session, repo, snap)
+        assert result["stale"] is True
+        assert result["reason"] == "scoring_changed"
+
+    def test_an_empty_repo_is_reported_before_a_fingerprint_comparison(self, db_session, tmp_path):
+        """Order matters: with no files the fingerprint is the digest of an
+        empty manifest, which would also differ -- but 'the source changed' is
+        the wrong thing to tell someone whose repo has nothing in it."""
+        repo = _analysed(db_session, tmp_path)
+        snap = create_snapshot(db_session, repo)
+        db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).delete()
+        db_session.commit()
+        assert health_snapshots.snapshot_staleness(db_session, repo, snap)["reason"] == "no_files_ingested"

@@ -20,7 +20,7 @@ from app.services.codebase.git_ops import GitBinaryUnavailable
 from app.services.codebase.ingest import ingest_repo
 from app.services.codebase.ordering import compute_layers
 from app.services.codebase.graph_structure import persist_graph_structure
-from app.services.codebase.health_snapshots import create_snapshot, trend_delta
+from app.services.codebase.health_snapshots import create_snapshot, snapshot_staleness, trend_delta
 from app.services.codebase.overview import build_overview
 from app.services.codebase.policy import RepoBlocked
 from app.services.codebase.ranking import _build_graph, rank_repo
@@ -609,7 +609,7 @@ def compute_subsystems_endpoint(
         raise HTTPException(409, str(e))
 
 
-def _serialize_snapshot(db: Session, snapshot: CodeHealthSnapshot) -> dict:
+def _serialize_snapshot(db: Session, snapshot: CodeHealthSnapshot, repo: Repo) -> dict:
     """Snapshot + trend, with the coverage disclosure carried as structured
     data on the Architecture axis.
 
@@ -636,6 +636,11 @@ def _serialize_snapshot(db: Session, snapshot: CodeHealthSnapshot) -> dict:
         },
         "axes": snapshot.axis_summary,
         "trend": trend_delta(db, snapshot),
+        # Whether this stored snapshot still describes the repo as it is now.
+        # Served with the scores rather than left for the caller to work out,
+        # for the same reason the architecture disclosure is: a client that
+        # receives a number must receive the conditions under which it holds.
+        "staleness": snapshot_staleness(db, repo, snapshot),
     }
 
 
@@ -652,7 +657,7 @@ def compute_health_endpoint(
         raise HTTPException(404, "Repo not found")
     persist_graph_structure(db, repo)
     snapshot = create_snapshot(db, repo)
-    return _serialize_snapshot(db, snapshot)
+    return _serialize_snapshot(db, snapshot, repo)
 
 
 @router.get("/{repo_id}/health")
@@ -670,7 +675,7 @@ def get_health(repo_id: int, user: User = Depends(get_current_user), db: Session
     )
     if not snapshot:
         raise HTTPException(404, "No code-health snapshot for this repo yet.")
-    return _serialize_snapshot(db, snapshot)
+    return _serialize_snapshot(db, snapshot, repo)
 
 
 @router.get("/{repo_id}/health/files")

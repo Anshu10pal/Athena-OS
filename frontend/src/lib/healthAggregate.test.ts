@@ -16,6 +16,7 @@ function response(axes: Record<string, any>): HealthResponseT {
     },
     axes: axes as any,
     trend: { comparable: false, reason: null, deltas: {} },
+    staleness: { stale: false, reason: null, detail: null },
   };
 }
 

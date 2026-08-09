@@ -430,10 +430,17 @@ export interface HealthTrendT {
   deltas: Record<string, number>;
 }
 
+export interface HealthStalenessT {
+  stale: boolean;
+  reason: "no_files_ingested" | "scoring_changed" | "source_changed" | null;
+  detail: string | null;
+}
+
 export interface HealthResponseT {
   snapshot: HealthSnapshotT;
   axes: Record<string, HealthAxisT>;
   trend: HealthTrendT;
+  staleness: HealthStalenessT;
 }
 
 export interface HealthMarkerT {

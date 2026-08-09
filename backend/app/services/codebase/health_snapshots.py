@@ -98,6 +98,56 @@ def source_fingerprint(db: Session, repo: Repo) -> str:
     return digest.hexdigest()
 
 
+def snapshot_staleness(db: Session, repo: Repo, snapshot: CodeHealthSnapshot) -> dict:
+    """Does this stored snapshot still describe the repo as it is now?
+
+    A read endpoint that returns the newest snapshot unconditionally will
+    happily show a green 97 beside a repo whose files have since been removed
+    -- observed in production, where the Contents panel read 0 files while the
+    health tiles still showed the scores from a previous ingest. The snapshot
+    was not wrong when it was taken; presenting it as current is what is
+    wrong, and a caveat the reader has to go looking for is not enough when
+    the number itself is the thing on screen.
+
+    Uses the same content fingerprint the write path uses (one indexed query,
+    no re-hashing), so "unchanged" here means exactly what it means there.
+    """
+    current_files = db.query(CodeFile).filter(CodeFile.repo_id == repo.id).count()
+    if current_files == 0:
+        return {
+            "stale": True,
+            "reason": "no_files_ingested",
+            "detail": (
+                "This repo currently has no ingested files, so this snapshot describes "
+                "source that is no longer present. Re-run analysis to score what is there now."
+            ),
+        }
+    if (snapshot.analyzer_version, snapshot.thresholds_version, snapshot.weights_version) != (
+        ANALYZER_VERSION, THRESHOLDS_VERSION, WEIGHTS_VERSION
+    ):
+        return {
+            "stale": True,
+            "reason": "scoring_changed",
+            "detail": (
+                "The scoring definition has changed since this snapshot was taken "
+                f"(analyzer {snapshot.analyzer_version}->{ANALYZER_VERSION}, "
+                f"thresholds {snapshot.thresholds_version}->{THRESHOLDS_VERSION}, "
+                f"weights {snapshot.weights_version}->{WEIGHTS_VERSION}). "
+                "The numbers are not comparable to a fresh run."
+            ),
+        }
+    if snapshot.source_fingerprint and snapshot.source_fingerprint != source_fingerprint(db, repo):
+        return {
+            "stale": True,
+            "reason": "source_changed",
+            "detail": (
+                "The analysed files have changed since this snapshot was taken. "
+                "Re-run analysis to score the current source."
+            ),
+        }
+    return {"stale": False, "reason": None, "detail": None}
+
+
 @dataclass
 class SnapshotDecision:
     should_create: bool
