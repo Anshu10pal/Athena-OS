@@ -4,6 +4,11 @@
 changes from rev 1 are listed in §14. Every claim about existing data was
 verified against the repo, not assumed — results in §8.
 
+> This document specifies **what the metric is**. `decisions.md` records **why
+> each choice was made and what it cost**, across the whole codebase agent
+> rather than just this contract. Where the two overlap, this file is
+> normative and the log is the reasoning behind it.
+
 > **Amendment 2026-08-09 — a blended aggregate now ships on Overview.**
 > §0.1 below said no combined number would be added without §9's evidence.
 > One was added anyway, as an explicit product decision, before that evidence
