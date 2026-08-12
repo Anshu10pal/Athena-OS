@@ -174,6 +174,25 @@ def _askpass_env(host: str) -> dict:
     # blocks on a terminal prompt that never arrives in a container and dies at
     # the 600s timeout instead of failing in a second with git's own message.
     env["GIT_TERMINAL_PROMPT"] = "0"
+
+    # Drop any askpass helper we inherited from the parent process. VS Code,
+    # GitHub Desktop and most IDE terminals export GIT_ASKPASS pointing at
+    # their own credential UI, and copying os.environ carried it straight into
+    # our git subprocess. Two problems with that, and neither is hypothetical:
+    #
+    #   * GIT_TERMINAL_PROMPT=0 suppresses only TERMINAL prompts. An inherited
+    #     askpass helper still runs and can block on a GUI dialog nobody is
+    #     watching, so the call hangs to the 600s timeout instead of failing.
+    #   * This app clones URLs submitted through its API. Handing the
+    #     developer's ambient credential UI to an arbitrary submitted host is
+    #     the same disclosure vector that per-host tokens exist to prevent
+    #     (see token_env_var) -- it would just be someone else's prompt doing
+    #     the leaking.
+    #
+    # Credentials come from this module or not at all.
+    env.pop("GIT_ASKPASS", None)
+    env.pop("SSH_ASKPASS", None)
+
     token = get_credential(host)
     if not token:
         return env
@@ -232,11 +251,27 @@ def parse_git_url(url: str) -> tuple[str, str, str]:
 
 
 def run_git(args: list[str], cwd: Optional[str] = None, env: Optional[dict] = None, timeout: int = 600) -> subprocess.CompletedProcess:
-    """Every git.exe invocation goes through here: always --no-pager, never shell=True."""
+    """Every git.exe invocation goes through here: always --no-pager, never shell=True.
+
+    Decoding is pinned to UTF-8 with replacement, not left to the locale.
+    `text=True` alone decodes with the system codepage -- cp1252 on this
+    machine -- and git emits UTF-8: author names and paths from any
+    international contributor. Reading apache/superset's history raised
+    `UnicodeDecodeError` inside subprocess's reader thread, which surfaced not
+    as an error but as `stdout=None`, so the caller then failed on
+    `None.strip()`. Any repo with a non-Latin-1 author name would have hit it.
+
+    `errors="replace"` rather than strict: one unmappable byte must not cost us
+    an entire repository's history, and unlike "ignore" it leaves a visible
+    marker that something was substituted.
+    """
     if not GIT_BINARY:
         raise GitBinaryUnavailable("git binary not resolved; this call should have used the pygit2 backend")
     cmd = [GIT_BINARY, "--no-pager", *args]
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env, shell=False)
+    return subprocess.run(
+        cmd, cwd=cwd, capture_output=True, timeout=timeout, env=env, shell=False,
+        encoding="utf-8", errors="replace",
+    )
 
 
 def _clone_git_exe(url: str, dest: str) -> None:

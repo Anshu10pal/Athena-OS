@@ -308,6 +308,35 @@ Tier A may only be claimed if **all** hold:
 **Note against optimism:** our repo has **0 conventional `fix:` commits**
 (verified), so Tier A would not engage here today.
 
+> **Corrected 2026-08-12 (decisions.md K11/K12).** That sentence measured the
+> wrong thing. Absence of a *conventional prefix* is not absence of defect
+> history: hand-classifying all 25 commits found **4 genuine defect fixes**,
+> touching 32 of 281 files. Three detectors were measured rather than assumed —
+> conventional prefix 100% precision / 50% recall, subject keyword 100% / 75%,
+> full-message keyword **40% precision** (6 of its 10 matches are feature
+> commits whose prose mentions a fix).
+>
+> Tier A still does not engage, but for the accurate reason: **4 defect-labelled
+> commits against a required 50, and no history to hold out from.** Unblocked,
+> not calibratable — see K12.
+>
+> **Do not respond to this by widening the keyword list.** Message-based defect
+> labelling has a ceiling on this corpus that no keyword reaches. The evidence
+> is `003e2e6` — *"Stop serving a stale health score as current; stop ingest
+> wiping a repo"* — the most substantive defect fix in the history, containing
+> no fix-like word at all. That is not an omission from the pattern; it is a
+> consequence of commit messages here describing **the behaviour change rather
+> than the category of work**, which is better practice generally and
+> specifically defeats keyword classification. The two failures are mirror
+> images: the original detector under-counted by requiring a format nobody
+> uses, the widened one over-counts at 40% precision by matching narrative
+> prose. Tuning between them does not produce a usable labeller.
+>
+> **If defect labelling is ever needed here it requires a different source:**
+> issue links, PR labels, a `Fixes #N` convention adopted going forward, or
+> hand-labelling. The extractor is not the constraint and improving it will not
+> move §9's precondition.
+
 **Evidence that would change direction:** a validated calibration dataset
 showing a combined score improves review prioritisation beyond the three
 separate signals, without concealing unsupported or degenerate inputs.
@@ -761,6 +790,37 @@ Each fixture asserts exact cyclomatic complexity, nesting depth, conditional
 operand count and handler count — these are precisely the values that drift
 silently when a grammar changes.
 
+### 15.1 A test that cannot fail must say so in its name
+
+Adopted 2026-08-12, after the encoding fix (§17.4) produced one test of each
+kind and the difference nearly went unlabelled.
+
+| Prefix | Meaning |
+|---|---|
+| `test_LOADBEARING_…` | Pins the behaviour. **Fails on every platform if the fix is reverted.** This is the coverage |
+| `test_DOCUMENTS_INTENT_…` | Demonstrates the intended behaviour but **cannot fail** in some environments. Legitimate, but not coverage |
+
+Every `DOCUMENTS_INTENT` test carries a docstring naming the condition under
+which it cannot fail.
+
+**Why this is a contract-level rule and not a style preference.** This project
+has repeatedly shipped tests that passed for the wrong reason — a golden
+fixture that was invalid source and only parsed via error recovery; two stubs
+that asserted nothing; a marker test that patched a field the endpoint
+overwrites; a credential test that passed alone and failed in the suite. The
+encoding case is the sharpest instance: `test_DOCUMENTS_INTENT_a_non_latin1_
+author_name_survives_the_round_trip` passes on Linux **with the defect fully
+present**, because there the platform default already *is* UTF-8. Read as
+coverage, it would certify a bug as fixed on the very platform we deploy to.
+
+The intent-documenting class is worth keeping — it proves the round trip works
+and explains what the code is for. It just must never be mistaken for a guard.
+
+**Verification requirement:** a `LOADBEARING` test is only load-bearing once it
+has been *observed* failing. Reintroduce the defect, watch it fail, restore.
+An assertion whose failure mode has never been exercised is an assumption in
+test clothing.
+
 ## 16. Amendment: the Overview aggregate (2026-08-09)
 
 A **Code health** tile scored out of 100 now sits on the repo Overview,
@@ -835,3 +895,314 @@ Percentile-derived markers report the **repo-relative** warn/saturate actually
 used (e.g. `churn_volume` reads "fires above 1 · maxes at 3" on repo 1), not an
 absolute pair they do not have — which also makes the low-resolution badge
 legible, since the ramp is visibly two commits wide.
+
+## 17. Corrections from the first large-repo test — apache/superset, 2026-08-12
+
+Every threshold and every conclusion in §10 was derived from **599 files across
+three small, young repositories**. The first mature large codebase to go
+through the analyser — apache/superset, **6,516 files, 22,119 commits** —
+reversed two of them. This section records the reversals, and the general rule
+that should have prevented the overreach.
+
+### What in this section is measured, and what is inferred
+
+Written in a single session, which is exactly when a record is most likely to
+be mistaken later for settled context. It is not uniformly settled.
+
+| | Kind | Re-verifiable how |
+|---|---|---|
+| §17.1 cycle reversal | **measurement** | `scc_size` on repo 6; re-run the analyser |
+| §17.2 coupling fire rate | **measurement** | marker `fired` counts on snapshot 7 |
+| §17.3 rename cost (18,000 paths) | **measurement** | `_collect_git_history` path count vs `code_files` |
+| §17.4 timing table | **measurement** | re-run the four git commands |
+| §17.6 superset 95 < Athena 97 | **measurement** | axis summaries on both snapshots |
+| §17.0 the sampling rule | **inference** | an argument from two instances. Could be wrong |
+| §17.5 encoding lesson | **inference** | generalised from two incidents in one session |
+| §17.5b non-ASCII path loss | **inference** | latent; not observed on superset (zero non-ASCII paths) |
+| §17.7 prediction derivation | **inference** | the method; the number it produced is a measurement |
+
+A later session should treat the measurements as settled and the inferences as
+claims to re-test. Two of the inferences are one-corpus generalisations, which
+is precisely the error §17.0 exists to warn about.
+
+### 17.0 The general rule (this is the important part)
+
+> **Thresholds and inertness claims calibrated on small young repositories are
+> PROVISIONAL until a mature large repository has been through them.**
+
+Not "may need adjustment" — provisional. Two independent axes reversed on first
+contact with a real corpus, and both reversals ran the same way: a signal that
+looked absent was merely absent *at that scale*.
+
+The failure was never in the measurements. §10.1 and §10.3 correctly described
+their sample. The failure was in the inference — reading "did not occur in this
+corpus" as "does not occur", and then acting on it by calling an axis
+decorative and deferring the work to fix it.
+
+Small repos are biased in ways that specifically suppress structural signals:
+fewer modules (fewer chances to form a cycle), shorter history (churn is
+degenerate), fewer contributors (ownership carries no information). Every one
+of those is a **sampling** property, not a property of software.
+
+**Two different bars, and conflating them would repeat the mistake in a new
+costume:**
+
+| Claim | Evidence required |
+|---|---|
+| *"This marker does not discriminate"* | **one** repository above roughly 2,000 files with several years of history. One counter-example refutes an inertness claim outright |
+| *"This marker fires at rate X"* / any threshold set from that rate | **several** repositories, across **different language ecosystems and architectural styles** |
+
+Superset establishes that `cycle_participation` fires. It does **not** establish
+that 12.7% is typical. Superset is a Python monolith with Django-style import
+patterns — circular imports between models, views and registries are idiomatic
+there. A Go or Rust corpus could legitimately show near-zero, and a JS monorepo
+something else again.
+
+Refuting inertness needs one counter-example. Calibrating a threshold needs a
+sample. Treating this single large repo as calibration would replace
+"calibrated on three small repos" with "calibrated on one large one" — a
+different error of the same kind, and a more confident-sounding one.
+
+### 17.1 `cycle_participation` — reversed
+
+§10.3 concluded the marker was **empirically inert**: zero file-level cycles
+across 599 files, verified two independent ways.
+
+| Corpus | Files | Files in cycles |
+|---|---:|---:|
+| §10.3 | 599 (3 repos) | **0** (0.0%) |
+| superset | 6,516 | **828** (12.7%) |
+
+Largest strongly connected component: **604 files**. Size distribution: 604,
+100, 30, 12, 9, 7, 6, 5, then a tail of 2–4.
+
+**The honest phrasing, and the one adopted:** the §10.3 finding held for the
+corpus tested and does not generalise. It was correct about its sample and
+wrong about the world. Not a refinement — a reversal.
+
+Consequences, now measured rather than projected:
+
+- Architecture Health on superset: **9.499**, with **p10 = 6.00** — the
+  tenth-percentile file sits exactly at the saturated cycles-category cap. The
+  axis produced a distribution for the first time in its existence.
+- `cycle_participation` mean deduction **0.4732**, against **0.0000** across all
+  three small repos.
+
+### 17.2 `bidirectional_coupling_hub` — same shape, smaller magnitude
+
+Described in analysis as "looking for a shape that does not exist in practice",
+on the evidence that eslint's most-imported file (fan-in 192) had
+`min(fan_in, fan_out) = 4`.
+
+| Corpus | Fire rate |
+|---|---|
+| small repos | 0.6 – 1.3% |
+| superset | **2.3%** (152 of 6,516), warn 4 → saturate 16 |
+
+**Correct phrasing: rare, not absent.** The marker works and identifies an
+uncommon configuration. "Does not exist in practice" was too strong and is
+withdrawn.
+
+### 17.3 The rename limitation, with a number
+
+`_collect_git_history` now runs `--name-only --no-renames` (§17.4). With rename
+detection off, A renamed to B appears as A deleted and B created: churn on A
+stops at the rename, B starts fresh.
+
+Measured on superset: history covers **24,835 paths against 6,516 files
+currently in the tree** — roughly **18,000 paths that no longer exist**,
+comprising deletions and pre-rename names.
+
+Cost, stated plainly: a renamed file carries only the commits made under its
+current name. On a repo mid-way through a rename-heavy refactor this
+underweights exactly the files most recently reorganised. Accepted because the
+alternative is that large repositories cannot be ranked at all — but it is a
+real cost, and any reading of churn numbers should carry it.
+
+**Verified not to lose data here:** all 6,516 current files matched a history
+entry; none was orphaned.
+
+### 17.4 Why the history pass was rewritten
+
+Four defects, nested, each masking the one beneath it:
+
+```
+180-second timeout
+  masking a UnicodeDecodeError
+    masking a None stdout
+      masking an AttributeError
+```
+
+**The ordering is the lesson.** The obvious response to a timeout is to raise
+the budget. Doing so would have produced a *fast* run returning **no history,
+silently, via None** rather than loudly via timeout — supporting the conclusion
+that superset has no usable git history. The bug would have become permanent
+and invisible. Fixing the symptom would have destroyed the evidence.
+
+| Command, on a `--filter=blob:none` clone | Time |
+|---|---|
+| `git log` (no diff) | 2.3 s |
+| `git log --numstat` | ~427 s (extrapolated; timed out at 180 s, twice) |
+| `git log --name-only`, rename detection on | > 600 s, killed |
+| `git log --name-only --no-renames` | **8.45 s** |
+| full history pass, after both fixes | **4.2 s** |
+
+Rename detection compares file **contents**. On a blob-filtered clone the blobs
+are not local, so every rename check became a lazy fetch from the remote —
+thousands of network round trips disguised as CPU cost. Our own clone
+optimisation was breaking our own history pass; the two decisions were made in
+different modules and never met.
+
+The decode failure was separate and **Windows-specific**: `text=True` decodes
+with the system codepage (cp1252 here) and git emits UTF-8 author names. It
+would **not** reproduce on Linux, where the default is UTF-8 — so any test
+pinning it must force a non-UTF-8 decode or feed bytes directly, or it passes
+on CI for the wrong reason.
+
+### 17.5 Every text I/O boundary needs an explicit encoding — including the ones that don't look like boundaries
+
+Two incidents, one lesson, and the second one is the evidence.
+
+**Incident A — the one we were documenting.** `subprocess.run(text=True)`
+decoded git's UTF-8 output with the system codepage (cp1252). Recorded as §17.4.
+
+**Incident B — committed while writing that record.** Appending §17 and the
+decision-log entries was done with PowerShell:
+
+```powershell
+$s = Get-Content scratch.md -Raw          # BOM-less file -> read as cp1252
+Add-Content docs/contract.md -Value $s -Encoding utf8   # re-encoded
+```
+
+`Get-Content` in PowerShell 5.1 defaults to the ANSI codepage for a file with
+no BOM. It read UTF-8 bytes as cp1252, and `Add-Content` faithfully re-encoded
+the mojibake, so every em-dash in the new sections became `â€"`. Both documents
+were truncated at the section marker and re-appended through Python with an
+explicit encoding; verified afterwards as zero mojibake markers, 102 and 132
+em-dashes intact, no stray BOM.
+
+**Why this belongs in the record rather than in a process note.** The second
+incident happened roughly twenty minutes after documenting the first, in the
+same session, by the same author, through a different tool with the same wrong
+default. That is not irony — it is the actual evidence about this failure mode:
+
+> **Knowing about a defect class does not protect you from it when the default
+> is wrong and the failure is silent.** Only an explicit encoding at the
+> boundary does. And the boundaries you will miss are the incidental ones —
+> reading a scratch file to append to a doc does not feel like a text I/O
+> boundary, which is exactly why it bit.
+
+Both incidents share the mechanism with §17.5b below: a Windows default that is
+correct for local text and wrong for anything that has travelled.
+
+#### The audit, and why its result is a coverage finding rather than a clean bill
+
+A grep for text I/O without an explicit encoding returned **48 hits across
+`app/`, `tests/`, `scripts/` and `alembic/`**. Both hits in production code
+were **false positives** — the `encoding=` sat on the continuation line of a
+multi-line call, which a line-based regex cannot see:
+
+```python
+(MODULES_DIR / f"{module.slug}.yaml").write_text(
+    yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+)
+```
+
+The read side is explicit too. The remaining 46 are test fixtures writing pure
+ASCII. **Production Python was already clean.**
+
+That is not a clean bill of health. It is a **coverage finding**, and the gap
+is the point:
+
+> This project does text I/O in **two** languages. Python, which is explicit
+> and clean. And PowerShell, which defaults to the ANSI codepage for BOM-less
+> files and has now caused **both** encoding incidents. The audit only speaks
+> Python. It checked the place the bug was not, found nothing, and returned a
+> 100% false-positive rate on the two hits it did surface.
+
+So the fix is not a better grep — a line-based regex against multi-line calls
+will always produce that error shape, and knowing the audit's blind spot
+matters more than its output. The fix is a rule about the *tool*:
+
+> **Standing rule.** PowerShell that touches project text passes
+> `-Encoding UTF8` explicitly on every read *and* write, or the operation goes
+> through Python instead. Prefer the second. Recovering from incident B meant
+> re-appending through Python — that should have been the default, not the
+> recovery.
+
+`Get-Content` needs `-Encoding UTF8` just as much as `Add-Content` does. The
+general form is worth stating on its own, because it explains why the failure
+was silent:
+
+> **A correct operation faithfully preserves whatever an earlier one got
+> wrong.** The write in incident B specified `-Encoding utf8` and did exactly
+> what it was told — it encoded the mojibake perfectly. Inspecting the write
+> side showed nothing amiss, because nothing *was* amiss there. Correctness at
+> one layer disguises failure at another, and the layer that looks healthy is
+> the one you check first.
+
+**Is this cascade suppression?** No — and the distinction is worth keeping
+sharp, because a pattern that absorbs every nearby defect stops being a useful
+check. Cascade suppression's defining property is a **discard**: signal exists,
+is correct, and is thrown away by a coarser guard. Its diagnostic question —
+*is this discard necessary, or merely convenient?* — has something to bite on.
+
+Here nothing is discarded. Every byte is preserved, faithfully, including the
+corruption. Call it **faithful propagation**: a correct operation carrying an
+upstream error forward without signalling. The shared symptom is that a healthy
+layer masks a sick one; the mechanisms are opposites — one loses data that
+exists, the other keeps data that is already wrong. They need different
+diagnostics, so they are recorded as siblings rather than merged.
+
+### 17.5b Known, unfixed: non-ASCII paths lose their history silently
+
+`core.quotepath` defaults to true, so git emits a non-ASCII path escaped and
+quoted (`"src/\303\251t\303\251.py"`). That string matches no `CodeFile.path`,
+so the file's history is dropped with no error and no marker.
+
+**Not observed on superset** — it has zero non-ASCII paths, which is why all
+6,516 files matched. Latent, not theoretical: one accented filename in a future
+repo and that file silently reports no churn.
+
+Recorded as unfixed. The likely fix is `-c core.quotepath=false`, which trades
+escaping for raw UTF-8 and moves the burden to the decoder — where
+`errors="replace"` could then put U+FFFD in a path, failing the same way. Needs
+its own pass, not a one-liner.
+
+### 17.6 What superset validates about the model
+
+Aggregate: **superset ~95, Athena-OS 97.**
+
+This is the first time the large mature codebase has scored **below** the small
+young one, and the architecture axis is what does it. Every prior comparison had
+the model rewarding youth — a repo with too little history for churn to resolve
+and too few modules to form a cycle scored well by having nothing measurable
+held against it.
+
+No amount of further small-repo testing could have produced this result. It is
+the strongest evidence the scoring approach has, and it arrived only because a
+real corpus was put through it.
+
+### 17.7 How the Architecture prediction was derived
+
+Recorded because the reasoning is reusable and the number is not.
+
+Before the run, the SCC size distribution was already known from the persisted
+`scc_size` column. `cycle_participation` ramps `severity = (size − 1) / (12 − 1)`
+and carries weight 4.0, capped by the cycles category at 4.0. So:
+
+- sizes ≥ 12 saturate → full 4.0 deduction → score 6.0. That is 604 + 100 + 30 +
+  12 = **746 files**.
+- sizes 5–9 → roughly 1.45–2.91 deduction → ~7.9 average, **27 files**.
+- sizes 2–4 → 0.36–1.09 deduction → ~9.3 average, **55 files**.
+- the remaining **5,688 files** score 10.0.
+
+Weighted mean: `(746×6.0 + 27×7.9 + 55×9.3 + 5688×10.0) / 6516 = 9.53`.
+
+Predicted **95** with a 94–96 band; actual **9.499 → 95**. The band existed
+because `bidirectional_coupling_hub`'s contribution was unknown — it turned out
+to add 0.0276 mean deduction, pulling the result to the lower half of the band.
+
+The generalisable part: when a marker's inputs are already persisted, its
+distribution is computable in advance and a prediction becomes arithmetic
+rather than intuition. That is the difference between calibration and a guess.

@@ -1,4 +1,4 @@
-"""Phase 1 code health: scoring engine unit tests.
+﻿"""Phase 1 code health: scoring engine unit tests.
 
 Covers the four things the contract makes load-bearing and which are easy to
 erode silently: severity ramps, category/axis caps, N/A propagation, and the
@@ -7,6 +7,7 @@ direction of each axis. Pure -- no DB, no filesystem, no parser.
 import pytest
 
 from app.services.codebase.health_scoring import (
+    MARKER_NO_INPUT,
     AXIS_CAP,
     CATEGORY_CAPS,
     CHANGE_HOTSPOT,
@@ -99,7 +100,7 @@ class TestCategoryAndAxisCaps:
         assert r.categories_capped == []
 
     def test_axis_cap_is_currently_inert_because_categories_already_bound_it(self):
-        # Contract §2 documents AXIS_CAP as a forward guard that cannot bind
+        # Contract Â§2 documents AXIS_CAP as a forward guard that cannot bind
         # today. This pins that claim so it cannot become quietly false.
         assert sum(CATEGORY_CAPS[MAINTAINABILITY].values()) == pytest.approx(AXIS_CAP)
         f = clean_file(max_cyclomatic=99, max_nesting=99, max_conditional_operands=99,
@@ -152,7 +153,7 @@ class TestNaPropagation:
         assert score_change_hotspot(f, ctx()).available is False
 
     def test_trivial_file_still_gets_architecture_health(self):
-        # Contract §5.1: a 5-line barrel can still sit in a cycle. Excluding it
+        # Contract Â§5.1: a 5-line barrel can still sit in a cycle. Excluding it
         # would blind the axis to files that exist to matter structurally.
         f = clean_file(nloc=4, cycle_size=6)
         a = score_architecture_health(f, ctx())
@@ -183,8 +184,13 @@ class TestNaPropagation:
         assert marker(r, "broad_error_handling").available is True
         assert r.score < 10.0
 
-    def test_no_graph_means_architecture_is_na(self):
-        f = clean_file(graph_available=False)
+    def test_no_graph_data_at_all_means_architecture_is_na(self):
+        """Narrowed deliberately. This previously asserted that a missing
+        fan-in/fan-out alone made the axis N/A; that gate discarded complete
+        cycle data whenever the ranking pass had not run. It now takes BOTH
+        inputs missing -- see TestArchitectureGateRequiresTheDominantMarkerOnly
+        for the case that changed."""
+        f = clean_file(graph_available=False, fan_in=None, fan_out=None, cycle_size=None)
         assert score_architecture_health(f, ctx()).available is False
 
     def test_degenerate_churn_makes_the_whole_hotspot_axis_na(self):
@@ -372,7 +378,7 @@ class TestChurnResolutionBadge:
         assert r.resolution_limited is True
 
     def test_the_badge_is_span_based_not_distinct_value_based(self):
-        # Three distinct values pass the §5.2 gate, but 1..3 is too short a
+        # Three distinct values pass the Â§5.2 gate, but 1..3 is too short a
         # ramp to grade with -- these are different questions.
         files = [clean_file(commit_count=c) for c in (1, 2, 3)]
         c = build_repo_context(files)
@@ -387,7 +393,11 @@ class TestScoreFile:
             "maintainability", "architecture_health", "change_hotspot"}
 
     def test_axes_are_independent_one_being_na_does_not_affect_the_others(self):
-        f = clean_file(graph_available=False, commit_count=8, max_cyclomatic=20)
+        # cycle_size=None as well as graph_available=False: since the gate
+        # narrowed to the dominant marker, cycle data alone is enough to score
+        # the axis, so making it genuinely N/A now takes both inputs missing.
+        f = clean_file(graph_available=False, fan_in=None, fan_out=None, cycle_size=None,
+                       commit_count=8, max_cyclomatic=20)
         s = score_file(f, ctx())
         assert s.architecture_health.available is False
         assert s.maintainability.available is True
@@ -398,3 +408,73 @@ class TestScoreFile:
         s = score_file(clean_file(), ctx())
         for banned in ("overall", "combined", "health_score", "total"):
             assert not hasattr(s, banned)
+
+
+class TestArchitectureGateRequiresTheDominantMarkerOnly:
+    """Cascade suppression, instance 5. The axis gated on fan-in/fan-out, which
+    come from the ranking pass -- so when ranking failed on apache/superset,
+    all 6,516 files reported Architecture Health N/A despite complete cycle
+    data, 828 of them inside real import cycles with the largest spanning 604
+    files. A 4.0-weight marker suppressed by a missing 3.0-weight one."""
+
+    def _inputs(self, **over):
+        base = dict(
+            file_id=1, path="pkg/a.py", language="python", nloc=100,
+            ast_available=True, function_count=2, max_cyclomatic=3,
+            max_nesting=1, max_conditional_operands=1, max_function_nloc=20,
+            broad_handler_count=0,
+            graph_available=False, fan_in=None, fan_out=None, cycle_size=None,
+            commit_count=None,
+        )
+        base.update(over)
+        return FileInputs(**base)
+
+    def test_cycle_data_alone_produces_a_score(self):
+        f = self._inputs(cycle_size=604)
+        result = score_architecture_health(f, RepoContext())
+        assert result.available is True, (
+            "a file known to sit in a 604-file import cycle must not report N/A "
+            "because a different pass has not run"
+        )
+        assert result.score is not None
+
+    def test_a_big_cycle_actually_deducts(self):
+        clean = score_architecture_health(self._inputs(cycle_size=1), RepoContext())
+        cyclic = score_architecture_health(self._inputs(cycle_size=604), RepoContext())
+        assert cyclic.score < clean.score
+        assert cyclic.score <= 6.01, "saturated cycle participation should hit the category cap"
+
+    def test_the_missing_coupling_marker_is_declared_not_hidden(self):
+        """Scoring without an input is only honest if the payload says so --
+        otherwise this trades one silent misstatement for another."""
+        result = score_architecture_health(self._inputs(cycle_size=3), RepoContext())
+        assert result.inputs_complete is False
+        assert "bidirectional_coupling_hub" in result.missing_inputs
+        states = {m.key: m.state for m in result.markers}
+        assert states["bidirectional_coupling_hub"] == MARKER_NO_INPUT
+
+    def test_coupling_data_alone_still_produces_a_score(self):
+        """Symmetric case: cycles not yet computed, ranking done."""
+        ctx = RepoContext()
+        ctx.fan_in_p90, ctx.fan_in_p99 = 5, 20
+        ctx.fan_out_p90, ctx.fan_out_p99 = 5, 20
+        f = self._inputs(graph_available=True, fan_in=2, fan_out=2, cycle_size=None)
+        result = score_architecture_health(f, ctx)
+        assert result.available is True
+        assert "cycle_participation" in result.missing_inputs
+
+    def test_neither_input_still_reports_na(self):
+        """The gate did not disappear -- it narrowed. With no graph data at all
+        there is genuinely nothing to say."""
+        result = score_architecture_health(self._inputs(), RepoContext())
+        assert result.available is False
+        assert result.score is None
+
+    def test_both_inputs_present_reports_complete(self):
+        ctx = RepoContext()
+        ctx.fan_in_p90, ctx.fan_in_p99 = 5, 20
+        ctx.fan_out_p90, ctx.fan_out_p99 = 5, 20
+        f = self._inputs(graph_available=True, fan_in=2, fan_out=2, cycle_size=1)
+        result = score_architecture_health(f, ctx)
+        assert result.inputs_complete is True
+        assert result.missing_inputs == []

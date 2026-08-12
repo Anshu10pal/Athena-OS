@@ -6,12 +6,15 @@ bug found while building this: a registered repo nested inside a larger git
 working tree, where `git log`'s reported paths don't match CodeFile.path
 without stripping the offset.
 """
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import networkx as nx
 import pytest
 
 from app.db.models import CodeFile, CodeFileRank, CodeImport
+from app.services.codebase import git_ops, ranking
 from app.services.codebase.git_ops import run_git
 from app.services.codebase.ingest import ingest_repo
 from app.services.codebase.ranking import (
@@ -1282,3 +1285,215 @@ class TestResolutionRateTripwire:
         db_session.commit()
         with pytest.raises(ResolutionRateCollapseError, match=r"100\.0%.*25\.0%"):
             rank_repo(db_session, repo)
+
+
+class TestHistoryCollectionSurvivesSlowRepos:
+    """Cascade suppression, instance 3: an uncaught TimeoutExpired walked past
+    this function's own "None means no history" contract, so one slow git log
+    cost apache/superset its entire ranking -- no fan-in, no fan-out, no
+    reading list, and an Architecture axis marked N/A for want of inputs a
+    different pass had already computed."""
+
+    def _repo(self, db_session, tmp_path):
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "a.py", "def a():\n    return 1\n")
+        _write(root / "b.py", "from a import a\n\n\ndef b():\n    return a() + 1\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        return repo
+
+    @staticmethod
+    def _failing_log(exc):
+        """Fail only the `git log` call. Patching run_git wholesale would break
+        the earlier `rev-parse --show-toplevel` instead, and pass for the wrong
+        reason -- the guard under test is on the log call specifically."""
+        real = git_ops.run_git
+
+        def side_effect(args, **kw):
+            if args and args[0] == "log":
+                raise exc
+            return real(args, **kw)
+
+        return side_effect
+
+    def test_a_timeout_degrades_to_no_history_instead_of_failing(self, db_session, tmp_path):
+        import subprocess
+        repo = self._repo(db_session, tmp_path)
+
+        exc = subprocess.TimeoutExpired(cmd="git log", timeout=600)
+        with patch("app.services.codebase.git_ops.run_git", side_effect=self._failing_log(exc)):
+            assert ranking._collect_git_history(repo) is None
+
+    def test_a_timeout_does_not_stop_the_ranking_run(self, db_session, tmp_path):
+        """The load-bearing property: --no-renames makes the known-large case
+        fast, this makes every other large case survivable."""
+        import subprocess
+        repo = self._repo(db_session, tmp_path)
+
+        with patch("app.services.codebase.ranking._collect_git_history",
+                   side_effect=lambda r: None):
+            rank_repo(db_session, repo)
+
+        rows = db_session.query(CodeFileRank).filter(CodeFileRank.repo_id == repo.id).all()
+        assert rows, "ranking must still produce rows when history is unavailable"
+        files = db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).all()
+        assert all(f.fan_in is not None for f in files), (
+            "fan-in/fan-out come from the import graph, not from git history, and must "
+            "survive a history failure"
+        )
+
+    def test_an_os_error_degrades_the_same_way(self, db_session, tmp_path):
+        repo = self._repo(db_session, tmp_path)
+        with patch("app.services.codebase.git_ops.run_git",
+                   side_effect=self._failing_log(OSError("boom"))):
+            assert ranking._collect_git_history(repo) is None
+
+
+class TestHistoryCommandShape:
+    """--numstat asked for line counts the parser discarded on the next line,
+    and rename detection needs blob CONTENT -- which a --filter=blob:none clone
+    does not have locally, turning every rename check into a network round
+    trip. Measured on superset: 427s extrapolated vs 8.45s."""
+
+    def _repo(self, db_session, tmp_path):
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "a.py", "def a():\n    return 1\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        return repo
+
+    def test_rename_detection_is_disabled(self, db_session, tmp_path):
+        repo = self._repo(db_session, tmp_path)
+        seen = {}
+
+        real = git_ops.run_git
+
+        def capture(args, **kw):
+            if args and args[0] == "log":
+                seen["args"] = args
+            return real(args, **kw)
+
+        with patch("app.services.codebase.git_ops.run_git", side_effect=capture):
+            ranking._collect_git_history(repo)
+
+        assert "--no-renames" in seen["args"], (
+            "without this, a blob-filtered clone lazily fetches blobs to compare "
+            "file contents for rename detection"
+        )
+        assert "--name-only" in seen["args"]
+        assert "--numstat" not in seen["args"], "the add/delete columns were never used"
+
+    def test_history_is_still_collected_correctly(self, db_session, tmp_path):
+        """The command changed; the output it produces must not."""
+        repo = self._repo(db_session, tmp_path)
+        history = ranking._collect_git_history(repo)
+        assert history is not None
+        assert "a.py" in history
+        assert history["a.py"]["commit_count"] == 1
+        assert history["a.py"]["authors"] == {"A"}
+
+    def test_a_second_commit_increments_the_count(self, db_session, tmp_path):
+        repo = self._repo(db_session, tmp_path)
+        root = Path(repo.local_path)
+        _write(root / "a.py", "def a():\n    return 2\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=B", "-c", "user.email=b@t.com", "commit", "-m", "second")
+
+        history = ranking._collect_git_history(repo)
+        assert history["a.py"]["commit_count"] == 2
+        assert history["a.py"]["authors"] == {"A", "B"}
+
+
+class TestGitOutputDecoding:
+    """Pins the fix for the four-layer failure on apache/superset:
+
+        180s timeout -> UnicodeDecodeError -> stdout=None -> AttributeError
+
+    `text=True` decodes with the platform default. On Windows that is the ANSI
+    codepage (cp1252 here); git emits UTF-8 author names.
+
+    ## Why the first test looks structural rather than behavioural
+
+    The bug is platform-specific: on Linux the default IS UTF-8, so a purely
+    behavioural test passes there whether or not the fix is present -- the
+    classic pass-for-the-wrong-reason. Forcing a locale in CI is worse, because
+    locale handling is itself environment-dependent in exactly the way that
+    produces false confidence.
+
+    So the configuration is asserted directly. It fails on every platform if
+    the fix is reverted. The behavioural test below then proves the
+    configuration actually achieves the round trip.
+    """
+
+    def test_LOADBEARING_run_git_pins_utf8_and_never_inherits_the_platform_default(self):
+        """This is the one that pins the bug. Platform-independent by
+        construction: it fails on Linux and Windows alike if reverted."""
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen.update(kw)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch("app.services.codebase.git_ops.subprocess.run", side_effect=fake_run):
+            git_ops.run_git(["status"], cwd=".")
+
+        assert seen.get("encoding") == "utf-8", (
+            "text=True would decode with the platform codepage -- cp1252 on Windows, "
+            "UTF-8 on Linux. That difference is why this assertion is structural: a "
+            "behavioural test alone passes on Linux with the bug still present."
+        )
+        assert seen.get("errors") == "replace", (
+            "one unmappable byte must not cost a repository its entire history"
+        )
+        assert seen.get("text") is not True, "text=True re-introduces platform-default decoding"
+
+    def test_DOCUMENTS_INTENT_a_non_latin1_author_name_survives_the_round_trip(
+            self, db_session, tmp_path):
+        """Companion, deliberately NOT the primary. U+4E2D is outside cp1252,
+        so on Windows this raised UnicodeDecodeError inside subprocess's reader
+        thread and surfaced as stdout=None.
+
+        But on Linux the platform default IS UTF-8, so this passes there with
+        the defect fully present. It documents the intent and proves the round
+        trip works; it does not pin the bug. The structural test above does
+        that."""
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "a.py", "def a():\n    return 1\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=\u4e2d\u6751", "-c", "user.email=n@t.com",
+             "commit", "-m", "initial")
+
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        history = ranking._collect_git_history(repo)
+
+        assert history is not None, "a non-ASCII author name must not kill history collection"
+        assert history["a.py"]["authors"] == {"\u4e2d\u6751"}
+
+    def test_history_survives_a_none_stdout(self, db_session, tmp_path):
+        """The layer beneath: even with decoding fixed, a None stdout from any
+        future cause must return None rather than raising AttributeError."""
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "a.py", "x = 1\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "i")
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+
+        real = git_ops.run_git
+
+        def none_stdout(args, **kw):
+            if args and args[0] == "log":
+                return subprocess.CompletedProcess(args, 0, stdout=None, stderr="")
+            return real(args, **kw)
+
+        with patch("app.services.codebase.git_ops.run_git", side_effect=none_stdout):
+            assert ranking._collect_git_history(repo) is None

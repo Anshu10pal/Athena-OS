@@ -44,6 +44,49 @@ class TestMissingKeyringBackend:
         assert "GIT_ASKPASS" not in env
         assert env["GIT_TERMINAL_PROMPT"] == "0"
 
+
+class TestInheritedAskpassIsDropped:
+    """Found by the full suite, not by running this file alone: VS Code exports
+    GIT_ASKPASS into every terminal it opens, so os.environ.copy() was handing
+    the editor's credential UI to our git subprocess."""
+
+    def test_an_inherited_askpass_helper_is_removed(self, monkeypatch):
+        monkeypatch.setenv("GIT_ASKPASS", r"C:\some\editor\askpass.sh")
+        monkeypatch.delenv(git_ops.token_env_var("github.com"), raising=False)
+        with patch("app.services.codebase.git_ops.keyring.get_password", return_value=None):
+            env = git_ops._askpass_env("github.com")
+        assert "GIT_ASKPASS" not in env, (
+            "GIT_TERMINAL_PROMPT=0 blocks terminal prompts only -- an inherited askpass "
+            "helper still runs and can hang on a GUI dialog"
+        )
+
+    def test_an_inherited_ssh_askpass_is_removed_too(self, monkeypatch):
+        monkeypatch.setenv("SSH_ASKPASS", "/usr/lib/ssh/ssh-askpass")
+        monkeypatch.delenv(git_ops.token_env_var("github.com"), raising=False)
+        with patch("app.services.codebase.git_ops.keyring.get_password", return_value=None):
+            env = git_ops._askpass_env("github.com")
+        assert "SSH_ASKPASS" not in env
+
+    def test_our_own_helper_still_wins_when_we_have_a_token(self, monkeypatch):
+        monkeypatch.setenv("GIT_ASKPASS", r"C:\some\editor\askpass.sh")
+        monkeypatch.setenv(git_ops.token_env_var("github.com"), "tok")
+        env = git_ops._askpass_env("github.com")
+        try:
+            assert env["GIT_ASKPASS"] != r"C:\some\editor\askpass.sh"
+            assert env["ATHENA_GIT_TOKEN"] == "tok"
+        finally:
+            git_ops._cleanup_askpass(env)
+
+    def test_the_ambient_helper_is_never_offered_to_a_submitted_host(self, monkeypatch):
+        """The disclosure case: a URL naming any host must not reach the
+        developer's stored credentials through an inherited prompt."""
+        monkeypatch.setenv("GIT_ASKPASS", r"C:\some\editor\askpass.sh")
+        monkeypatch.delenv("ATHENA_GIT_TOKEN_EVIL_EXAMPLE_COM", raising=False)
+        with patch("app.services.codebase.git_ops.keyring.get_password", return_value=None):
+            env = git_ops._askpass_env("evil.example.com")
+        assert "GIT_ASKPASS" not in env
+        assert "ATHENA_GIT_TOKEN" not in env
+
     def test_set_credential_reports_the_env_var_alternative(self):
         with patch("app.services.codebase.git_ops.keyring.set_password",
                    side_effect=NoKeyringError("No recommended backend was available")):

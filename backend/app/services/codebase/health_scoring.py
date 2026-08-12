@@ -344,6 +344,24 @@ def _scored(spec: MarkerSpec, value: float, warn: float, saturate: float,
     )
 
 
+# Markers whose absence makes an axis unreportable, as opposed to merely
+# incomplete. Withholding is for the case where the REMAINING evidence points
+# the wrong way: with no cycle data, Architecture Health reads 9.98 carried by
+# a marker that fires on ~1% of files, and a caveat beside a prominent 9.98
+# still anchors the reader on a conclusion the evidence does not support.
+#
+# The inverse is not symmetric. With cycle data present and coupling missing,
+# the number is derived from the axis's heaviest marker and is a conservative
+# FLOOR -- adding the missing marker could only lower it. Withholding that
+# would be cascade suppression one level up: discarding a usable, honest,
+# understated number because a lesser input is absent. Observed on
+# apache/superset, where 828 files sat in verified import cycles and the axis
+# reported nothing at all.
+DOMINANT_MARKERS = {
+    ARCHITECTURE: "cycle_participation",
+}
+
+
 def _assemble(axis: str, direction: str, markers: list,
               missing_inputs: Optional[list] = None) -> AxisResult:
     """Applies category caps then the axis cap, recording which bound. The
@@ -380,10 +398,17 @@ def _assemble(axis: str, direction: str, markers: list,
         inputs_complete=not missing,
         missing_inputs=missing,
     )
-    if missing:
+    dominant = DOMINANT_MARKERS.get(axis)
+    withhold = bool(missing) if dominant is None else (dominant in missing)
+    if withhold:
         # Withheld, not merely annotated -- see AxisResult.score's comment.
         result.provisional_value = value
         return result
+    if missing:
+        # Reported WITH its gaps declared: inputs_complete is already False and
+        # missing_inputs names them, so a caller cannot present this as a
+        # complete measurement. What it must not do is show nothing.
+        result.provisional_value = value
     if direction == HIGHER_IS_BETTER:
         result.score = value
     else:
@@ -436,9 +461,26 @@ def score_architecture_health(f: FileInputs, ctx: RepoContext) -> AxisResult:
     # barrel can sit in an import cycle or act as a coupling chokepoint, and
     # excluding it would blind this axis to files that exist to be
     # structurally significant.
-    if not f.graph_available:
+    # The gate is the DOMINANT marker, not every marker.
+    #
+    # `graph_available` means fan_in/fan_out exist, and those come from the
+    # ranking pass. Cycle membership comes from a different pass entirely
+    # (graph_structure.persist_graph_structure). Gating the whole axis on the
+    # coupling inputs meant that when ranking failed, a repo with complete,
+    # correct cycle data reported Architecture Health as N/A -- observed on
+    # apache/superset, where all 6,516 files had SCC data and 828 of them sat
+    # in real import cycles, the largest spanning 604 files. Every one of those
+    # findings was computed and then discarded because a 3.0-weight marker was
+    # missing.
+    #
+    # Cascade suppression again: a coarse upstream check throwing away
+    # fine-grained downstream signal because the discard was convenient rather
+    # than necessary. The per-marker N/A machinery below already handles a
+    # missing coupling input correctly and reports it honestly.
+    if f.cycle_size is None and not f.graph_available:
         return _unavailable(ARCHITECTURE, HIGHER_IS_BETTER,
-                            "No ranking run has produced an import graph for this repo yet.")
+                            "Neither import cycles nor fan-in/fan-out have been computed "
+                            "for this repo yet.")
 
     markers = []
     missing_inputs = []
@@ -457,7 +499,13 @@ def score_architecture_health(f: FileInputs, ctx: RepoContext) -> AxisResult:
 
     hub_spec = ALL_MARKERS["bidirectional_coupling_hub"]
     if f.fan_in is None or f.fan_out is None:
-        markers.append(_na(hub_spec, "Fan-in/fan-out not computed.", MARKER_NO_INPUT))
+        # Reachable for the first time now that the axis no longer requires
+        # fan-in/fan-out to score at all. It must be declared missing, or the
+        # axis would report inputs_complete while a marker it names had no
+        # data -- trading one silent misstatement for another.
+        markers.append(_na(hub_spec, "Fan-in/fan-out not computed -- no ranking run yet.",
+                           MARKER_NO_INPUT))
+        missing_inputs.append("bidirectional_coupling_hub")
     else:
         # Fires only when the file is heavily depended upon AND depends
         # heavily itself. A pure high-fan-in utility is deliberately not a

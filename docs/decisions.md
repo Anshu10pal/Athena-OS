@@ -216,7 +216,7 @@ validation repo report `commit_count == 1`.
 with nothing behind it. The axis reports N/A instead.
 
 ### C4 — The Architecture evidence gate is structural, not advisory
-*2026-08-09 · active*
+*2026-08-09 · active · **narrowed by K9***
 
 **Decision.** When `cycle_participation` has no data the axis sets
 `inputs_complete = False` and **withholds `score` entirely**; the provisional
@@ -499,7 +499,7 @@ not a restored raw all-files force graph.
 add an operational dependency to solve a rendering problem.
 
 ### G2 — A directory-cycle marker was deliberately *not* added
-*2026-08-09 · **at risk***
+*2026-08-09 · **premise superseded by K3***
 
 **Why at the time.** Adding a marker is a contract change with its own
 before/after obligation, and the file-level marker is not *wrong* — a file
@@ -517,6 +517,14 @@ and `b2→a2`, with no single file in a cycle.
 in a dedicated tab. F3 put it on the Overview carrying half the headline
 number, where a constant is actively misleading. This is the leading candidate
 for `thresholds_version` 4.
+
+**Superseded 2026-08-12 (K3).** The premise — that file-level cycles are rare —
+was drawn from 599 files across three small young repos. On apache/superset,
+**828 of 6,516 files sit in import cycles**, the largest spanning 604. The
+file-level marker was never inert; it was measuring something the corpus was
+too small to contain. A directory-cycle marker may still be worth adding, but
+no longer as a rescue for an axis that does not discriminate — it does. See
+K2 for the sampling rule this should have been held to.
 
 ### G3 — HDBSCAN keeps the library default `min_samples`
 *2026-08-08 · active*
@@ -619,12 +627,290 @@ docstrings are Python-only (C8). Both would have produced meaningless metrics.
 
 ## J. Open and deferred
 
+*Revised 2026-08-12 after the superset run — see §K.*
+
 | | Item | Status |
 |---|---|---|
-| G2 | Directory-cycle marker — Architecture Health cannot discriminate without it | **leading next change** |
-| C5 | Promote churn spread to first-class eligibility | candidate |
+| K8 | Non-ASCII paths silently lose their history (`core.quotepath`) | **open, cascade suppression instance 7** |
+| D5 | Calibration | **unblocked** — 10 of 25 fix-mentioning commits exist; the "0 conventional `fix:` commits" blocker measured the wrong thing |
+| C5 | Promote churn spread to first-class eligibility | candidate — superset is the first repo with real resolution to test it against |
 | A2 | Co-change coupling, coverage ingestion, ownership | deferred |
-| D5 | Calibration | blocked — no defect-labelled corpus |
+| G2 | Directory-cycle marker | **demoted** — the file-level marker discriminates (K3); this is now an addition, not a rescue |
 | — | ESLint validation never re-run against subsystem output, which was HDBSCAN's justification | open |
-| — | `codebase-agent-handoff.md` stops at K1; nothing covers health, deployment fixes, or the Overview restructure | open |
+| — | `codebase-agent-handoff.md` stops at K1; nothing covers health, deployment fixes, the Overview restructure, or §K | open |
 | H3 | `REPO_CLONE_ROOT` still defaults to an ephemeral path while the database is persistent | needs a mounted disk |
+| — | The encoding test (K7) must force a non-UTF-8 decode or it passes on Linux CI for the wrong reason | **open** |
+
+---
+
+## K. The first large-repo test — apache/superset, 2026-08-12
+
+6,516 files, 22,119 commits. The first mature codebase to go through the
+analyser. It reversed two published findings, exposed four nested defects in
+one code path, and produced the first result the model could not have obtained
+from small repos.
+
+### K1 — Cascade suppression, named as a recurring defect shape
+*2026-08-12 · active*
+
+**Decision.** Give the pattern a name, document every instance in
+`app/services/codebase/__init__.py`, and add the check to review discipline.
+
+**The shape.** A value is computed correctly and then discarded downstream
+because a *coarser* upstream check failed. The upstream failure is real; the
+discard is not required by it. Because the discard is quiet, the surface above
+reports "unavailable" rather than "partly available" — which a reader
+interprets as "nothing here" instead of "some of this is missing".
+
+**Why name it.** Eight instances across eight unrelated modules is a property
+of the codebase, not a coincidence:
+
+1. `_migrate_entry_priors` — a `continue` meant E4's own migration never
+   corrected rows already migrated under the older heuristic.
+2. G1 scorer scoping — rank rows correct at one level, discarded by a query at
+   another. Motivated the entire Phase G rewrite.
+3. History timeout — an uncaught `TimeoutExpired` walked past the function's own
+   `return None` contract, costing the repo its whole ranking.
+4. `--numstat` — computed line counts the next line discarded, at the cost of
+   thousands of lazy blob fetches.
+5. Architecture axis gate — the whole axis withheld for a missing 3.0-weight
+   marker while the 4.0-weight marker had complete data.
+6. UTF-8 decode — a `UnicodeDecodeError` in a subprocess reader thread became
+   `stdout=None`, which the caller trusted.
+7. **Non-ASCII paths** (K8, open) — `core.quotepath` escapes them, so they match
+   no `CodeFile.path` and the file's history is dropped with no error.
+8. **The calibration blocker** (D5) — §9 recorded "0 conventional `fix:`
+   commits" and concluded calibration was impossible. Ten of twenty-five commits
+   describe a fix in prose. The blocker was never "no defect data exists"; it
+   was "our extractor recognises one format." A coarse detector's miss became a
+   claim about the world, and it parked an entire workstream for weeks.
+
+Instance 8 is worth dwelling on, because it is the most expensive so far and
+the least like a bug. Nothing crashed, no value was silently dropped at a
+boundary — a narrow input format produced a negative result, and that negative
+result was written into a contract as a fact about the repository. It is the
+same shape as the resolution-rate collapse counting stdlib imports as failures:
+a detector's blind spot promoted to a finding.
+
+**Impact.** The check is one question: *is this discard necessary, or merely
+convenient?* In all six cases it was merely convenient. Every guard was
+defensible in isolation — each was written to avoid reporting a number without
+its inputs, the same instinct behind exclude-don't-zero. The failure is in
+scope, not intent: a guard sized to the **coarsest** input rather than the
+**required** one. That is why it survives review. It looks like caution.
+
+### K2 — Small-repo calibration is provisional until a large repo has run
+*2026-08-12 · active · **supersedes the reasoning behind G2***
+
+**Decision.** Any claim of the form "this marker does not discriminate" now
+requires a repository above roughly 2,000 files with several years of history
+before it may be recorded as a finding rather than an observation.
+
+**Why.** Two independent axes reversed on first contact with a real corpus, both
+in the same direction. Small repos are biased in ways that specifically
+suppress structural signals — fewer modules means fewer chances to form a
+cycle, shorter history means degenerate churn, fewer contributors means
+ownership carries no information. Every one is a **sampling** property, not a
+property of software.
+
+**Impact.** The measurements in §10.1 and §10.3 were never wrong; the inference
+was. Reading "did not occur in this corpus" as "does not occur" led to calling
+an axis decorative and deferring the work to fix it. See §17.0.
+
+### K3 — `cycle_participation` reversed: 0% → 12.7%
+*2026-08-12 · **supersedes G2's premise***
+
+**The finding.** 828 of 6,516 files sit in import cycles; the largest SCC spans
+**604 files**. Against zero across 599 files in three small repos.
+
+**Phrasing adopted:** the earlier finding held for the corpus tested and does
+not generalise. Correct about its sample, wrong about the world. A reversal,
+not a refinement.
+
+**Impact.** Architecture Health produced a distribution for the first time —
+mean 9.499, **p10 = 6.00**. M1 is no longer "make the axis informative or drop
+it"; the axis is informative and always was, on codebases large enough to
+contain the thing it measures.
+
+### K4 — `bidirectional_coupling_hub`: rare, not absent
+*2026-08-12 · correction*
+
+Called "looking for a shape that does not exist in practice" on the evidence
+that eslint's most-imported file had `min(fan_in, fan_out) = 4`. On superset it
+fires on **2.3%** of files (152 of 6,516). Same correction shape as K3, smaller
+magnitude. "Does not exist in practice" was too strong and is withdrawn.
+
+### K5 — `--name-only --no-renames` for history collection
+*2026-08-12 · active*
+
+**Why.** Rename detection compares file **contents**. On a `--filter=blob:none`
+clone the blobs are not local, so every rename check became a lazy fetch from
+the remote — thousands of network round trips disguised as CPU cost. Our own
+clone optimisation was breaking our own history pass; the two decisions were
+made in different modules and never met.
+
+`git log --numstat` ~427 s (extrapolated) → `--name-only --no-renames`
+**8.45 s**. The add/delete columns were parsed and discarded on the next line.
+
+**Cost, accepted deliberately.** A renamed file carries only commits made under
+its current name. Measured: history covers **24,835 paths against 6,516 files
+in the tree** — ~18,000 paths that no longer exist. On a repo mid-refactor this
+underweights exactly the files most recently reorganised. Accepted because the
+alternative is that large repos cannot be ranked at all. Verified not to lose
+data here: all 6,516 current files matched a history entry.
+
+### K6 — A history timeout degrades; it does not fail the run
+*2026-08-12 · active*
+
+**Why this is the load-bearing fix, not K5.** `--no-renames` makes the *known*
+large case fast. This makes every *other* large case survivable — a slow disk,
+a bad shard, a larger history. The function's contract already said "None means
+no history"; an uncaught exception walked straight past the graceful path that
+existed.
+
+**Impact.** Timeout raised to 600 s and made non-fatal. Ranking now produces
+fan-in, fan-out and a reading list even when history is unavailable — none of
+which depend on git history at all.
+
+### K7 — Git output is decoded as UTF-8, not as the system codepage
+*2026-08-12 · active · **the most important finding of the four***
+
+**Why it matters more than K5.** Four defects were nested:
+
+```
+180-second timeout → UnicodeDecodeError → None stdout → AttributeError
+```
+
+The obvious response to a timeout is to raise the budget. Doing so would have
+produced a **fast run returning no history, silently, via None** rather than
+loudly via timeout — supporting the conclusion that superset has no usable git
+history. The bug would have become permanent and invisible. **Fixing the
+symptom would have destroyed the evidence.** That is the argument for root
+causes over symptoms, with a concrete instance behind it.
+
+**The defect.** `text=True` decodes with the system codepage — cp1252 here —
+and git emits UTF-8 author names. Windows-specific: it would **not** reproduce
+on Linux, where the default is UTF-8. Any test pinning it must force a
+non-UTF-8 decode or feed bytes directly, or it passes on CI for the wrong
+reason.
+
+**`errors="replace"`, not strict.** One unmappable byte must not cost a
+repository its entire history, and unlike `ignore` it leaves a visible marker.
+Checked on superset: **0 of 24,835 paths contain U+FFFD** — because git escapes
+non-ASCII paths (see K8), so replacement only ever lands in author names, where
+a mangled name is strictly better than a dead pipeline.
+
+### K8 — Known and unfixed: non-ASCII paths lose their history silently
+*2026-08-12 · **open***
+
+`core.quotepath` defaults to true, so git emits a non-ASCII path escaped and
+quoted (`"src/\303\251t\303\251.py"`). That matches no `CodeFile.path`, so the
+file's history is dropped with no error and no marker — cascade suppression in
+miniature, instance seven.
+
+Not observed on superset (zero non-ASCII paths, which is why all 6,516 matched).
+Latent, not theoretical. The likely fix — `-c core.quotepath=false` — trades
+escaping for raw UTF-8 and moves the burden to the decoder, where
+`errors="replace"` could put U+FFFD in a path and fail the same way. Needs its
+own pass.
+
+### K9 — The Architecture gate requires the dominant marker, not every marker
+*2026-08-12 · active · **narrows C4***
+
+**Decision.** Two changes. The axis is N/A only when **both** cycle and coupling
+inputs are missing. And `_assemble` withholds a score only when the axis's
+**dominant** marker is missing (`DOMINANT_MARKERS`), rather than whenever any
+input is absent.
+
+**Why the asymmetry is principled.** C4's rationale was that with no cycle data
+the axis reads 9.98, carried by a marker firing on ~1% of files — a caveat
+beside a prominent 9.98 still anchors the reader on a conclusion the evidence
+does not support. The inverse is **not** symmetric: with cycle data present and
+coupling missing, the number derives from the heaviest marker and is a
+conservative **floor** — adding the missing marker could only lower it.
+
+**Impact.** Superset had complete cycle data for all 6,516 files and reported
+Architecture Health as N/A because ranking had not run. Every one of those 828
+cycle findings was computed and thrown away. Scores now report with
+`inputs_complete = false` and the gap named, rather than not reporting at all.
+
+### K10 — What superset validates
+*2026-08-12*
+
+**Superset ~95, Athena-OS 97.** The first time the large mature codebase scored
+**below** the small young one, with the architecture axis doing it.
+
+Every prior comparison had the model rewarding youth: a repo with too little
+history for churn to resolve and too few modules to form a cycle scored well by
+having nothing measurable held against it. No amount of further small-repo
+testing could have produced this result.
+
+Also worth recording: **seven predictions, seven correct**, including
+Architecture mean at 95 against a 94–96 band. That was arithmetic, not
+intuition — the SCC distribution was already persisted, so the marker's
+severity ramp could be applied to it in advance. See §17.7 for the derivation.
+When a marker's inputs are already stored, its distribution is computable
+before the run, and prediction becomes calibration rather than a guess.
+
+### K11 — D5 is unblocked but severely under-sampled, and the detector was measured not assumed
+*2026-08-12 · finding*
+
+**The correction to §9.** It recorded "0 conventional `fix:` commits" and
+concluded calibration was impossible. That measured the wrong thing — the
+blocker was never "no defect data exists", it was "our detector recognises one
+format" (cascade suppression instance 8, K1).
+
+**But the count was measured before being trusted.** All 25 commits were
+hand-classified. A commit counts as a defect fix when its primary purpose was
+correcting something that had already shipped.
+
+| Detector | Matches | True fixes | Precision | Recall |
+|---|---:|---:|---:|---:|
+| Conventional `fix:` prefix | 2 | 2 | **100%** | **50%** |
+| Subject-line keyword | 3 | 3 | **100%** | **75%** |
+| Full-message keyword | 10 | 4 | **40%** | **100%** |
+
+Ground truth: **4 defect-fix commits out of 25**.
+
+**The full-message detector is 60% noise**, and predictably so. Commit messages
+in this repo are long and narrative, so "fix" appears in prose describing what a
+*feature* does — `Add code-health UI…`, `Add file-level SCCs…` and four others
+all match on body text while being pure feature work. Using the raw count of 10
+would have taken D5 from "no data, blocked" to "bad data, unblocked", which is
+strictly worse.
+
+**No keyword detector reaches usable recall here.** The highest-precision one
+misses `003e2e6` — the most substantive fix in the entire history, correcting
+two live production defects — because its subject reads *"Stop serving a stale
+health score as current; stop ingest wiping a repo"*. No keyword, genuine fix.
+That is not a tuning problem. It is a property of how commit messages are
+written in this project, and it does not improve with a longer keyword list.
+
+**File-level base rate:** the 4 fix commits touch **32 of 281 tracked files =
+11.4%**. Not comparable to repowise's 7%, which was scoped to the last six
+months; this repo's entire history is shorter than that window.
+
+### K12 — D5's actual status: unblocked, not calibratable
+*2026-08-12 · **deferred, with the reason now quantified***
+
+Two different states, and only the second is true:
+
+| §9 precondition | Required | Actual | |
+|---|---|---:|---|
+| Defect-labelled commits | ≥ 50 | **4** | 8% of the bar |
+| Labelled files | ≥ 200 | **32** | 16% of the bar |
+| Time-ordered holdout | fit before T, evaluate after T | impossible | ~3 months of history total |
+| Beat NLOC-only **and** churn-only | required | untestable at n=4 | |
+
+**Unblocked** — the data is not zero, and the earlier claim that it was is
+withdrawn. **Not calibratable** — at n=4 any lift figure is noise, and a
+time-ordered holdout needs history this repo does not have.
+
+Stating both plainly because they are easy to conflate, and the optimistic
+reading ("unblocked!") would licence exactly the unvalidated defect-risk number
+B3 forbids. What changes is the *reason* D5 is deferred: not "no defect data
+exists" but "far too little, and no way to hold out".
+
+**What would move it:** an external corpus with real fix history — or, going
+forward, conventional-commit prefixes on this repo, which would raise the
+high-precision detector's recall for free.

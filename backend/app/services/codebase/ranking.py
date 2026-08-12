@@ -25,7 +25,9 @@ _write_back_entry_priors, the old fan_in==0-or-basename heuristic, is kept
 "graph" rows, and after E4's migration runs once, no row is left
 graph-sourced, so it has nothing left to act on.
 """
+import logging
 import posixpath
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -38,6 +40,14 @@ from app.core.config import BACKEND_DIR, settings
 from app.db.models import CodeFile, CodeFileRank, CodeImport, Repo, utcnow
 from app.services.codebase import edge_weights, entry_detection, git_ops, node_priors, repo_lock
 from app.services.codebase.ingest import _repo_root
+
+logger = logging.getLogger("athena.codebase.ranking")
+
+# Generous on purpose. With --no-renames a 22k-commit repo finishes in ~8s, so
+# this is not a budget anyone should be near -- it exists to bound a
+# pathological case, and exceeding it now degrades to "no history" rather than
+# failing the run.
+HISTORY_TIMEOUT_SECONDS = 600
 
 ENTRY_POINT_BASENAMES = {
     "main.py", "__main__.py", "manage.py", "wsgi.py", "asgi.py", "cli.py", "app.py",
@@ -545,11 +555,48 @@ def _collect_git_history(repo: Repo) -> Optional[dict]:
     CodeFile.path (verified against this exact scenario: backend/ here is a
     subdirectory of the actual git root, not the root itself).
 
-    Known blind spot: `--numstat` never emits ambiguous rename syntax (that
-    only appears in --stat/--summary output), so this never mis-parses a
-    rename -- but it also never reconnects one: commits before a rename stay
-    attributed to the old path, so a renamed file's commit_count/
-    distinct_authors under-count.
+    ## Why `--name-only --no-renames` and not `--numstat`
+
+    Measured on apache/superset (22,119 commits, 6,516 files), cloned the way
+    this project clones -- `--filter=blob:none`:
+
+        git log                                    2.3 s
+        git log --numstat                       ~427 s  (extrapolated; timed out)
+        git log --name-only  (renames on)       >600 s  (killed)
+        git log --name-only --no-renames         8.45 s
+
+    The decisive flag is `--no-renames`, and the mechanism is not "a heuristic
+    we skipped". Git detects a rename by comparing file CONTENTS -- that is how
+    it distinguishes a rename from a delete plus an add. On a blob-filtered
+    clone the blobs are not local, so every rename check becomes a lazy fetch
+    from the remote. The command was not computing slowly; it was
+    re-downloading the repository one object at a time over the network.
+    Thousands of unintended round trips, disguised as CPU cost.
+
+    This is our own clone optimisation colliding with our own history pass:
+    `--filter=blob:none` (git_ops._clone_git_exe) makes cloning fast and makes
+    any diff-bearing `git log` pathological. The two decisions were made in
+    different modules and never met.
+
+    `--numstat` was also asking for more than we use -- the added/deleted
+    columns were parsed and discarded on the very next line. `--name-only`
+    returns exactly what is consumed.
+
+    ## Known limitation, accepted deliberately
+
+    With rename detection off, A renamed to B appears as A deleted at time T
+    and B created at time T. Churn on A stops at the rename; churn on B starts
+    fresh, and B's commit_count no longer includes the work done under its old
+    name. Negligible on most repos; it will underweight files in a repo that
+    has just been through a large rename-heavy refactor. Accepted because the
+    alternative is that large repos cannot be ranked at all -- but it is a real
+    cost, not a free win, and belongs in any reading of churn numbers.
+
+    (The previous docstring claimed rename detection meant commits before a
+    rename stayed on the old path. That was already the behaviour and still is;
+    what changes is that the OLD path now also collects the deletion commit.
+    Old paths have no CodeFile row, so they are dropped when history is joined
+    back to files.)
     """
     if not git_ops.GIT_AVAILABLE:
         return None
@@ -566,11 +613,33 @@ def _collect_git_history(repo: Repo) -> Optional[dict]:
     # local_path-relative ones; it must never be reused as the pathspec
     # argument itself (that would double the offset when local_path is a
     # subdirectory of the git root -- caught by a real nested-repo test).
-    result = git_ops.run_git(
-        ["log", "--format=@@%an|%aI", "--numstat", "--", "."],
-        cwd=repo.local_path, timeout=180,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
+    # A timeout here must degrade to "no history", not kill the ranking run.
+    # This function's whole contract is that None means reduced confidence --
+    # the graceful path already existed and an uncaught TimeoutExpired walked
+    # straight past it, so one slow git call cost the repo its entire ranking:
+    # no fan-in, no fan-out, no reading list, and an Architecture axis that had
+    # to be marked N/A for want of inputs a different pass had already
+    # computed. Cascade suppression (see the module docstring): a coarse
+    # upstream failure discarding fine-grained downstream signal.
+    #
+    # --no-renames makes the known-large case fast; this makes every OTHER
+    # large case survivable. Both are needed and this is the general one.
+    try:
+        result = git_ops.run_git(
+            ["log", "--format=@@%an|%aI", "--name-only", "--no-renames", "--", "."],
+            cwd=repo.local_path, timeout=HISTORY_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "git history collection exceeded %ss for repo %s -- ranking continues "
+            "without history signals (reduced confidence).",
+            HISTORY_TIMEOUT_SECONDS, repo.id,
+        )
+        return None
+    except OSError as e:
+        logger.warning("git history collection failed for repo %s: %s", repo.id, e)
+        return None
+    if result.returncode != 0 or not (result.stdout or "").strip():
         return None
 
     history: dict[str, dict] = {}
@@ -583,10 +652,10 @@ def _collect_git_history(repo: Repo) -> Optional[dict]:
             continue
         if not line.strip():
             continue
-        parts = line.split("\t")
-        if len(parts) != 3:
-            continue
-        _added, _deleted, path = parts
+        # `--name-only` emits one bare path per line -- no leading add/delete
+        # columns to strip. A tab can legally appear inside a path, so the line
+        # is taken whole rather than split.
+        path = line
         if strip_prefix:
             if not path.startswith(strip_prefix):
                 continue
