@@ -1132,6 +1132,19 @@ export default function RepoDetail() {
               setFilters((f) => ({ ...f, subsystemId, subsystemAlgorithm }));
               setView("reading");
             }}
+            onSelectFile={(fileId) => {
+              selectFile(fileId);
+              setView("focus");
+            }}
+            // Collapsed by default, and persisted in the URL like the other
+            // filters so it survives a tab switch, a reload and a shared link.
+            collapsed={searchParams.get("clusters") !== "open"}
+            onCollapsedChange={(next) => {
+              const p = new URLSearchParams(searchParams);
+              if (next) p.delete("clusters");
+              else p.set("clusters", "open");
+              setSearchParams(p, { replace: true });
+            }}
           />
         </ViewBoundary>
       )}

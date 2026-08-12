@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from app.services.codebase import discovery
 
 JS_LANGUAGES = {"javascript", "typescript", "tsx"}
 
@@ -43,7 +44,6 @@ DEFAULT_FAN_IN_CONTRADICTION_THRESHOLD = 0
 # where PageRank's teleport mass originates.
 DEFAULT_SEED_INELIGIBLE_PATH_MARKERS = ["scripts/", "tools/", "tests/", "test/"]
 
-_IGNORED_DIR_NAMES = {"node_modules", "dist", "build", ".git", "venv", ".venv", "__pycache__"}
 
 # --- Python: authoritative sources -----------------------------------------
 
@@ -151,23 +151,20 @@ _VITE_INPUT_RE = re.compile(r'input\s*:\s*[\'"]([^\'"]+)[\'"]')
 
 
 def _iter_files_named(repo_root: Path, *names: str):
-    """Phase H1.5: was `repo_root.rglob(name)` filtered AFTER the fact --
-    rglob still walks INTO node_modules/.git/dist/build before a match
-    found there gets discarded, so the filter only ever hid the cost, it
-    never avoided it. Measured on this project's own repo (a real
-    frontend/node_modules with ~200 packages, ~300+ nested package.json
-    files): this one function was the entire 15-20s cost of a /graph
-    request, called on every read (see repos.py's now-removed live
-    _detect_entries call). os.walk's dirnames is mutable and read by the
-    walk itself, so pruning it in place skips descending into an ignored
-    directory entirely, rather than filtering results from a walk that
-    already happened."""
-    names_set = set(names)
-    for dirpath, dirnames, filenames in os.walk(repo_root):
-        dirnames[:] = [d for d in dirnames if d not in _IGNORED_DIR_NAMES]
-        for filename in filenames:
-            if filename in names_set:
-                yield Path(dirpath) / filename
+    """Delegates to discovery.iter_files_named.
+
+    Phase H1.5 fixed this function -- it was `rglob(name)` filtered AFTER the
+    fact, which still walks INTO node_modules/.git/dist/build before discarding
+    what it finds, so the filter hid the cost without avoiding it. That one
+    function was the entire 15-20s cost of a /graph request.
+
+    The pruning logic then lived here, and two OTHER modules kept their own
+    near-identical copies of the ignored-name list. All three disagreed, and
+    none contained a virtualenv marker, so a repo with a committed `venv310`
+    was walked in full from three separate code paths. The walk now has one
+    implementation and one list, which is also the only way the `pyvenv.cfg`
+    structural rule reaches all three callers."""
+    return discovery.iter_files_named(repo_root, *names)
 
 
 def find_js_authoritative_entry_paths(repo_root: Path) -> list:

@@ -72,18 +72,58 @@ class TooManyFilesError(RuntimeError):
     pass
 
 
-def _count_parseable(path: Path) -> int:
-    """Parseable files under a directory the walk is about to prune.
+# Directory names pruned by `iter_files_named`. One list, shared, rather than
+# the three divergent `_IGNORED_DIR_NAMES` sets that previously lived in
+# entry_detection, js_root_discovery and root_discovery -- they disagreed with
+# each other and none contained a virtualenv marker, so all three walked into
+# `venv310/Lib/site-packages` on a repo with a committed environment.
+PRUNED_DIR_NAMES = {
+    "node_modules", "dist", "build", ".git", "__pycache__",
+    "venv", ".venv", "site-packages", "dist-packages",
+    ".tox", "__pypackages__", "bower_components", ".gradle", "Pods",
+}
 
-    Costs one extra stat-walk of the pruned subtree, and only runs when
-    something is actually excluded -- the price of being able to say "7,000
-    files skipped as vendored" instead of silently dropping them."""
-    n = 0
-    for _, _, filenames in os.walk(path):
-        for f in filenames:
-            if Path(f).suffix.lower() in EXTENSION_LANGUAGE:
-                n += 1
-    return n
+
+def iter_files_named(search_root: Path, *names: str):
+    """Yield paths to files with any of `names`, pruning as it walks.
+
+    Phase H1.5 established the mechanism for `entry_detection`: `rglob(name)`
+    filtered AFTER the fact still walks INTO the ignored directory before
+    discarding what it found there, so the filter hides the cost without
+    avoiding it. `os.walk`'s `dirnames` is mutable and read by the walk, so
+    pruning it in place skips descending entirely.
+
+    Two other callers never got that fix and were measured on a repo with a
+    committed virtualenv: `root_discovery.find_marker_candidate_roots` at
+    3.54 s and `js_root_discovery._iter_files_named` at 2.14 s, together 5.67 s
+    of a 8.47 s ingest on a repo whose real source is 67 files. They were
+    walking the 7,698 vendored files that `discover_files` already excludes.
+
+    Also prunes any directory containing `pyvenv.cfg`, matching
+    `discover_files` -- a name list cannot catch `venv310`, and this is the
+    same structural marker for the same reason (§17.10).
+    """
+    names_set = set(names)
+    for dirpath, dirnames, filenames in os.walk(search_root):
+        if VENV_MARKER in filenames:
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames if d not in PRUNED_DIR_NAMES]
+        for filename in filenames:
+            if filename in names_set:
+                yield Path(dirpath) / filename
+
+
+# NOTE: an earlier version counted the parseable files inside each pruned
+# subtree so the summary could say "7,698 files skipped". It cost 1.39s of a
+# 3.72s ingest -- a second of wall clock for one log line -- because the count
+# is unobtainable from the main walk BY CONSTRUCTION: pruning means never
+# descending, so counting what was pruned requires a second traversal of
+# exactly the tree the pruning existed to avoid.
+#
+# The directory names are free (known at the prune point) and carry the finding
+# that mattered: that a virtualenv or a node_modules was excluded at all. The
+# file count was the more quotable number and is not worth a second.
 
 
 def _load_spec(root: Path, extra_excludes: Optional[list] = None) -> pathspec.PathSpec:
@@ -122,16 +162,17 @@ def discover_files_with_stats(root: Path, max_files: int,
     spec = _load_spec(root, extra_excludes)
     found: list[Path] = []
     skipped: dict = {}
+    pruned_dirs: list = []
 
     def note_skipped(rel_posix: str) -> None:
         head = rel_posix.split("/", 1)[0]
         skipped[head] = skipped.get(head, 0) + 1
 
-    def note_skipped_many(rel_posix: str, n: int) -> None:
-        if n <= 0:
-            return
-        head = rel_posix.split("/", 1)[0] or rel_posix
-        skipped[head] = skipped.get(head, 0) + n
+    def note_pruned(rel_posix: str) -> None:
+        """Free: the path is known at the prune point. The file COUNT inside it
+        is not -- see the note above, it needs a second traversal of exactly
+        the tree pruning exists to avoid."""
+        pruned_dirs.append(rel_posix)
 
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = Path(dirpath).relative_to(root)
@@ -144,7 +185,7 @@ def discover_files_with_stats(root: Path, max_files: int,
         # would swallow real first-party scripts).
         if VENV_MARKER in filenames:
             rel_here = "" if str(rel_dir) == "." else rel_dir.as_posix()
-            note_skipped_many(rel_here or ".", _count_parseable(Path(dirpath)))
+            note_pruned(rel_here or ".")
             dirnames[:] = []
             continue
 
@@ -153,7 +194,7 @@ def discover_files_with_stats(root: Path, max_files: int,
             rel = d if str(rel_dir) == "." else (rel_dir / d).as_posix()
             if spec.match_file(rel + "/"):
                 # Counted here because the walk will never descend into it.
-                note_skipped_many(rel, _count_parseable(Path(dirpath) / d))
+                note_pruned(rel)
             else:
                 kept.append(d)
         dirnames[:] = kept
@@ -173,7 +214,7 @@ def discover_files_with_stats(root: Path, max_files: int,
                     "REPO_MAX_FILES or narrow the repo's source_root."
                 )
     found.sort()
-    return found, skipped
+    return found, {"files": skipped, "dirs": pruned_dirs}
 
 
 # How many vendored files must be skipped before it is worth a line in the
@@ -181,7 +222,7 @@ def discover_files_with_stats(root: Path, max_files: int,
 VENDORED_REPORT_THRESHOLD = 50
 
 
-def vendored_summary(skipped_by_dir: dict, kept: int) -> Optional[str]:
+def vendored_summary(stats: dict, kept: int) -> Optional[str]:
     """Report what discovery THREW AWAY, not what dominates what it kept.
 
     ## Why not a concentration warning
@@ -209,12 +250,23 @@ def vendored_summary(skipped_by_dir: dict, kept: int) -> Optional[str]:
     with no false-positive mode at all, because it reports a fact rather than
     inferring a judgement.
     """
-    total_skipped = sum(skipped_by_dir.values())
-    if total_skipped < VENDORED_REPORT_THRESHOLD:
+    # .git is pruned on every repo and is not a finding -- listing it as
+    # "vendored" is noise that dilutes the line this exists to make.
+    dirs = [d for d in (stats.get("dirs") or []) if Path(d).name != ".git"]
+    loose = sum((stats.get("files") or {}).values())
+    if not dirs and loose < VENDORED_REPORT_THRESHOLD:
         return None
-    top = sorted(skipped_by_dir.items(), key=lambda kv: -kv[1])[:3]
-    where = ", ".join(f"{d}/ ({n})" for d, n in top)
-    return (
-        f"{total_skipped} source files were skipped as vendored or generated "
-        f"and are not part of this analysis (largest: {where}). Kept {kept}."
-    )
+
+    # Directory names, not a file count: the count needed a second traversal of
+    # exactly the tree pruning avoids, and cost 1.39s of a 3.72s ingest. The
+    # names are free and carry the finding -- that a virtualenv or a
+    # node_modules was excluded at all.
+    shown = ", ".join(sorted(dirs)[:4])
+    more = f" and {len(dirs) - 4} more" if len(dirs) > 4 else ""
+    parts = []
+    if dirs:
+        parts.append(f"{len(dirs)} vendored or generated directories were "
+                     f"excluded from this analysis ({shown}{more})")
+    if loose:
+        parts.append(f"{loose} further files matched an exclusion pattern")
+    return "; ".join(parts) + f". Kept {kept} files."

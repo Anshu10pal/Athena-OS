@@ -48,9 +48,9 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from app.services.codebase import discovery
 
 PYTHON_ROOT_MARKER_FILENAMES = ("requirements.txt", "pyproject.toml", "setup.py", "Pipfile")
-_IGNORED_DIR_NAMES = {"node_modules", "dist", "build", ".git", "__pycache__", "venv", ".venv"}
 
 DEFAULT_RELATIVE_FLOOR = 0.05
 DEFAULT_ABSOLUTE_FLOOR = 3
@@ -109,15 +109,16 @@ def find_marker_candidate_roots(repo_root: Path, config_search_root: Optional[Pa
     resolved_repo_root = repo_root.resolve()
 
     candidates = {""}
-    for marker_name in PYTHON_ROOT_MARKER_FILENAMES:
-        for p in search_root.rglob(marker_name):
-            if any(part in _IGNORED_DIR_NAMES for part in p.parts):
-                continue
-            try:
-                rel_dir = p.parent.resolve().relative_to(resolved_repo_root).as_posix()
-            except ValueError:
-                continue  # outside repo_root's own subtree -- not a valid candidate
-            candidates.add("" if rel_dir == "." else rel_dir)
+    # discovery.iter_files_named prunes as it walks rather than filtering a
+    # completed rglob. This function was 3.54s of an 8.47s ingest on a repo
+    # with a committed virtualenv, walking the 7,698 vendored files that
+    # discover_files already excludes.
+    for p in discovery.iter_files_named(search_root, *PYTHON_ROOT_MARKER_FILENAMES):
+        try:
+            rel_dir = p.parent.resolve().relative_to(resolved_repo_root).as_posix()
+        except ValueError:
+            continue  # outside repo_root's own subtree -- not a valid candidate
+        candidates.add("" if rel_dir == "." else rel_dir)
     return candidates
 
 

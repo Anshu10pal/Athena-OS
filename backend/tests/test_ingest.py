@@ -1035,34 +1035,42 @@ class TestVendoredCodeIsExcluded:
 
 
 class TestVendoredSummary:
-    """Reports what discovery threw away, rather than inferring a judgement
-    from what it kept.
+    """Reports what discovery excluded, rather than inferring a judgement from
+    what it kept.
 
-    A concentration warning ("warn when >50% of files sit under one top-level
-    directory") was built first and discarded: measured against the six repos
-    in this project's database it fires on four, including eslint at 98.7%
-    under lib/ -- which is exactly right for a library. Concentration cannot
-    separate a legitimate 98.7% from a vendored 90%, and a warning that fires
-    on two thirds of repos trains people to ignore it.
+    A concentration warning (">50% of files under one top-level directory")
+    was built first and discarded: measured against the six repos in this
+    project's database it fires on four, including eslint at 98.7% under lib/
+    -- which is exactly right for a library. Concentration cannot separate a
+    legitimate 98.7% from a vendored 90%.
+
+    Reports DIRECTORY NAMES, not a file count. The count needed a second
+    traversal of exactly the tree pruning exists to avoid, and cost 1.39s of a
+    3.72s ingest. The names are free at the prune point and carry the finding.
     """
 
-    def test_a_large_vendored_tree_is_reported(self):
-        s = vendored_summary({"backend": 7000, "frontend": 12}, kept=400)
+    def test_pruned_directories_are_named(self):
+        s = vendored_summary({"dirs": ["backend/venv310", "node_modules"], "files": {}}, kept=67)
         assert s is not None
-        assert "7012" in s and "backend/ (7000)" in s and "400" in s
+        assert "backend/venv310" in s and "node_modules" in s and "67" in s
 
-    def test_a_small_number_of_skips_is_not_worth_a_line(self):
-        assert vendored_summary({"src": 3}, kept=200) is None
+    def test_git_is_not_reported_as_vendored(self):
+        """Pruned on every repo; listing it dilutes the line."""
+        s = vendored_summary({"dirs": [".git"], "files": {}}, kept=67)
+        assert s is None
 
-    def test_no_skips_at_all_is_silent(self):
-        assert vendored_summary({}, kept=200) is None
+    def test_nothing_excluded_is_silent(self):
+        assert vendored_summary({"dirs": [], "files": {}}, kept=200) is None
+
+    def test_a_few_loose_pattern_matches_are_not_worth_a_line(self):
+        assert vendored_summary({"dirs": [], "files": {"src": 3}}, kept=200) is None
 
     def test_it_states_a_fact_and_never_infers_intent(self):
-        """The property that makes this better than the discarded design: it
-        has no false-positive mode, because it reports a count rather than
+        """The property that makes this better than the discarded design: no
+        false-positive mode, because it reports what happened rather than
         deciding whether a directory 'should' be dominant."""
-        s = vendored_summary({"node_modules": 900}, kept=50)
-        assert "skipped as vendored" in s
+        s = vendored_summary({"dirs": ["node_modules"], "files": {}}, kept=50)
+        assert "excluded from this analysis" in s
         for word in ("suspicious", "probably", "may be wrong", "warning"):
             assert word not in s.lower()
 
@@ -1074,25 +1082,25 @@ class TestDiscoveryStats:
         for i in range(60):
             _write(tmp_path / "backend" / "venv310" / "Lib" / "site-packages" / f"m{i}.py", "y = 2\n")
 
-        found, skipped = discover_files_with_stats(tmp_path, 10000)
+        found, stats = discover_files_with_stats(tmp_path, 10000)
         assert {p.as_posix() for p in found} == {"src/app.py"}
-        assert skipped.get("backend") == 60, skipped
+        assert any("venv310" in d for d in stats["dirs"]), stats
 
     def test_node_modules_is_counted_too(self, tmp_path):
         _write(tmp_path / "index.js", "x\n")
         for i in range(55):
             _write(tmp_path / "node_modules" / "react" / f"f{i}.js", "y\n")
 
-        found, skipped = discover_files_with_stats(tmp_path, 10000)
+        found, stats = discover_files_with_stats(tmp_path, 10000)
         assert {p.as_posix() for p in found} == {"index.js"}
-        assert skipped.get("node_modules") == 55
+        assert "node_modules" in stats["dirs"], stats
 
     def test_a_clean_repo_reports_nothing_skipped(self, tmp_path):
         _write(tmp_path / "a.py", "x = 1\n")
         _write(tmp_path / "pkg" / "b.py", "y = 2\n")
-        found, skipped = discover_files_with_stats(tmp_path, 10000)
+        found, stats = discover_files_with_stats(tmp_path, 10000)
         assert len(found) == 2
-        assert vendored_summary(skipped, kept=len(found)) is None
+        assert vendored_summary(stats, kept=len(found)) is None
 
     def test_discover_files_still_returns_a_plain_list(self, tmp_path):
         """The original signature is unchanged -- every existing caller and
