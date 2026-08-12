@@ -939,6 +939,7 @@ be mistaken later for settled context. It is not uniformly settled.
 | §17.9 check-shaped-wrong | **inference** | five instances, each with its own transcript evidence |
 | §17.10 name-versus-structure | **measurement** | pathspec match table; InsurIQ 7,698/7,715 skipped, 67 kept |
 | §17.11 signal must discriminate | **measurement** | top-directory shares across all six repos in this DB |
+| §17.12 verified-a-different-thing | **measurement** | two verifications of the same fix returned 67 and 7,715 |
 | §17.7 prediction derivation | **inference** | the method; the number it produced is a measurement |
 
 A later session should treat the measurements as settled and the inferences as
@@ -1024,6 +1025,38 @@ A prediction of this kind fails *more* convincingly than an intuited one,
 because it presents as a derivation. The check is one question: **what
 population did this number get measured over, and is it the population I am
 dividing by?**
+
+#### A fourth clause: a prediction that lands does not validate its model
+
+Repo 4's cold ingest was predicted at **15–35 s** from per-stage costs measured
+on superset. Actual: **22.7 s** — inside the range. The model was still wrong:
+
+| Stage | Predicted | Actual | |
+|---|---|---:|---|
+| discovering | 3–8 s | **1.6 s** | over-estimated by ~4 s |
+| cleanup | *not modelled at all* | **6.7 s** | second-largest stage, omitted |
+| resync / parsing / ranking / health | — | — | close |
+
+Two errors of opposite sign, roughly equal size, cancelling. **The range held
+because the mistakes offset, not because the reasoning was right.**
+
+This is not bad luck; it is what a range does. The wider the interval, the more
+room there is for offsetting errors, and the more likely a hit becomes
+independent of whether the model is any good. A prediction that lands is
+evidence about the *number*; it is not evidence about the *derivation*.
+
+**The rule: check the components, not just the total.** A prediction with named
+per-stage costs must be scored per stage. If only the total is compared, a
+model with a missing term and a compensating over-estimate is indistinguishable
+from a correct one — and the model is the reusable part.
+
+Consequence for the open work: **the cold-ingest model is unvalidated despite
+the prediction holding.** The per-file figure derived from that run
+(0.5 s / 67 files ≈ 7.5 ms per file for parse plus extract) is an
+order-of-magnitude estimate from a Python-heavy 67-file sample against a mixed
+6,516-file corpus, and it omits `cleanup` entirely — a stage now known to cost
+6.7 s on a repo with **zero deletions**, i.e. one whose cost is not
+proportional to work done.
 
 #### The correct decomposition, for when cold ingest is measured
 
@@ -1500,11 +1533,11 @@ which is why it survived. The check it suggests: *for each feature, which
 user-triggered path reaches it?* — and if the answer is "none", the tests are
 measuring an unreachable capability.
 
-### 17.9 Check-shaped-wrong — five instances, all in verification tooling
+### 17.9 Check-shaped-wrong — the instrument assumed a guarantee the system doesn't make
 
-None of these was a defect in the system under test. All five were defects in
-the instrument used to check it, and in each the instrument reported success or
-failure that the underlying state did not support.
+Six instances. None was a defect in the system under test; all were defects in
+the instrument used to check it. **Cost: time.** Split from §17.12, which is a
+distinguishable and more dangerous failure — see there.
 
 | # | Instrument | What it assumed | What was true |
 |---|---|---|---|
@@ -1513,6 +1546,7 @@ failure that the underlying state did not support.
 | 3 | Reading a background task's output file | a file read is complete | read an accumulating file mid-write, concluded the run had not started, launched a redundant 30-minute suite |
 | 4 | `page.waitForTimeout(4000)` | the page paints within a fixed time | repo 6 takes ~5 s for a 6,516-file payload → read a loading page as a failure state |
 | 5 | `Stop-Process -Force` | a command's report is its outcome | printed "killing PID 32536" four times while the process was already gone and a draining socket kept answering 200 |
+| 6 | `discover_files_with_stats` called directly | a direct call and the running server execute the same code | see §17.12 — this one produced a false finding, not just lost time |
 
 **The common property:** *the instrument assumed a guarantee the system does not
 make.* Text may wrap. A file may still be being written. A page paints when it
@@ -1618,3 +1652,61 @@ This was a correction to an explicit instruction, recorded as such rather than
 substituted silently. The instruction named the right requirement — *7,000 of
 7,719 files under one directory should have been one line* — and the wrong
 signal for it.
+
+### 17.12 Verified-a-different-thing — the check exercised a different code path than the fix
+
+Split from §17.9 because the cost is different in kind. Check-shaped-wrong
+costs time: the instrument misreports, you notice, you re-run. This produces a
+**false finding** — a number that enters the record and is wrong.
+
+**The instance.** The vendored-code exclusion (§17.10) was verified two ways
+that were assumed to agree:
+
+1. **Direct call** — `discover_files_with_stats(root, ...)` in a fresh Python
+   process. Returned **67 kept, 7,698 skipped**. Correct.
+2. **Through the job path** — `POST /api/repos/4/jobs` against the running
+   server. Returned **7,715 files**, i.e. the fix appeared not to work.
+
+Both were run after the edit. Both were believed to exercise the same code. The
+direct call loaded the module from disk; the server was still holding the
+pre-edit module, so the two differed by exactly the change under test.
+
+**Why the server was stale, which is the part worth reading twice.** An earlier
+"restart the backend" step did:
+
+```
+taskkill /F /PID <old>     -> exit 128, "process not found"
+Start-Process run.py       -> new instance hits main.py's port guard, dies
+Invoke-WebRequest /docs    -> 200
+```
+
+Every signal was consistent with success. `taskkill` "failing" looked like the
+process was already gone; the `200` looked like the new server answering. It
+was the **old** server, which had never stopped, answering on a port the new
+instance had just been refused. The port guard in `app/main.py` exists to catch
+exactly this and did its job — the message went to a redirected log nobody read.
+
+Had the direct call not also been run, "the exclusion fix does not work" would
+have gone into the record as a finding, with a plausible mechanism attached.
+
+**Guard: when verifying a server-side fix, confirm the SERVING PROCESS is
+running the new code — not that some process answers.**
+
+Concretely, and this is now the routine:
+
+```powershell
+$proc = Start-Process ... -PassThru
+$listener = (Get-NetTCPConnection -LocalPort 8000 -State Listen).OwningProcess
+(Get-Process -Id $listener).StartTime   # must match the launch second
+```
+
+The serving PID's start time has to match when you launched. A `200` proves
+*something* is listening; it proves nothing about *what*. With `reload=True` in
+`run.py` the reloader's child differs from the launched parent, so comparing
+PIDs directly does not work — the start time does.
+
+**The general form**, beyond servers: any fix verified through a long-lived
+process — a dev server, a worker, a REPL, a cached import, a warm container —
+needs the process's identity confirmed, not its responsiveness. Two code paths
+believed identical is the failure; the check is to make one of them prove which
+code it holds.
