@@ -371,6 +371,35 @@ unchanged):
 | `weighted_pagerank` (auto seed, `['bin/eslint.js', 'lib/api.js']`) | 3/20 | 2/10 | 1.000 (n=3 — not meaningful) | **NO-GO** |
 | `rrf` | 2/20 | 0/10 | 1.000 (n=2 — not meaningful) | **NO-GO** |
 
+> **Correction, 2026-08-12 — the per-scorer ordering in this table was never
+> meaningful, and earlier reporting treated it as though it were.**
+>
+> These are counts out of **20**. The gap between `weighted_pagerank` at 3/20
+> and the other two at 2/20 is **one component**. At that denominator a single
+> file entering or leaving a top-20 list moves a scorer's number, and §373–383
+> below documents exactly that happening in the opposite direction — `legacy`
+> went 3/20 → 2/20 on a single-item swap between two runs where nothing about
+> `legacy` changed.
+>
+> The finding of this validation was, throughout, **"all three scorers fail"**
+> — 2 and 3 against a threshold of 12. It was never "weighted PageRank does
+> marginally better." Both this document and subsequent summaries of it have at
+> points quoted the numbers as `3/20 vs 2/20` in a way that implies a ranking
+> the evidence cannot support. The Spearman column already carries
+> "not meaningful" for n=2 and n=3; the Overlap@20 column needed the same
+> caveat and did not have it.
+>
+> The general rule is now in the metric contract, §17.5c: **report the
+> denominator alongside the rate, and treat a difference smaller than the
+> resolution of the population as no difference.** Derived from the clustering
+> agreement statistic, where 100% across 4 clusters was similarly read as
+> confirmation when it was closer to a null result — the same error in a
+> different measurement.
+>
+> Nothing about the NO-GO conclusion changes. What changes is that the scorers
+> are **indistinguishable on this evidence**, and any future comparison between
+> them needs a population large enough to separate them.
+
 `legacy` moved 3/20 → 2/20 (a single-item swap, not a meaningful change
 at n=20). `weighted_pagerank`'s count is unchanged at 3/20 despite
 `cli.js`'s dramatic rank improvement, but not because nothing happened:

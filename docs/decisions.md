@@ -640,6 +640,7 @@ docstrings are Python-only (C8). Both would have produced meaningless metrics.
 | — | `codebase-agent-handoff.md` stops at K1; nothing covers health, deployment fixes, the Overview restructure, or §K | open |
 | H3 | `REPO_CLONE_ROOT` still defaults to an ephemeral path while the database is persistent | needs a mounted disk |
 | — | The encoding test (K7) must force a non-UTF-8 decode or it passes on Linux CI for the wrong reason | **open** |
+| — | **Flat text search against wrapped content — 2 occurrences, watching for a third.** The `open(` encoding audit returned 100% false positives because `encoding="utf-8"` sat on a continuation line; a doc-verification probe returned a false negative because `the fix was needed / for the reason given` spanned a wrap. Same root cause, opposite directions. Fix is mechanical — normalise whitespace before searching, or search a short fragment that cannot wrap. Recorded here rather than in contract §17 because two is not yet a pattern; a third makes it one | watching |
 
 ---
 

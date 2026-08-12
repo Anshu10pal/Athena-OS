@@ -821,6 +821,19 @@ has been *observed* failing. Reintroduce the defect, watch it fail, restore.
 An assertion whose failure mode has never been exercised is an assumption in
 test clothing.
 
+**This rule found a violation of itself within two hours of being written.**
+`test_the_stage_is_reported_in_the_job_result`, covering the new clustering
+stage, asserted only `status == "computed"`. The canary run deleted the stage
+and substituted a hard-coded result of the same shape — and the test passed. It
+was verifying the *report*, not the work. Left alone it would have shipped
+green and certified a deleted feature as present indefinitely. It now asserts
+real integer cluster counts and fails under the same canary.
+
+Worth recording next to §17.5's mojibake incident, for the same reason: the
+author of the rule violated it immediately after writing it. **Knowing a
+principle confers no immunity. Only the mechanical check does** — and in both
+cases the check was cheap and the thing it caught was not.
+
 ## 16. Amendment: the Overview aggregate (2026-08-09)
 
 A **Code health** tile scored out of 100 now sits on the repo Overview,
@@ -917,8 +930,12 @@ be mistaken later for settled context. It is not uniformly settled.
 | §17.4 timing table | **measurement** | re-run the four git commands |
 | §17.6 superset 95 < Athena 97 | **measurement** | axis summaries on both snapshots |
 | §17.0 the sampling rule | **inference** | an argument from two instances. Could be wrong |
+| §17.0b prediction mechanism rule | **inference** | an argument from two predictions in one session |
+| §17.8 the real job path | **measurement** | job 19's SSE timeline and stored result |
 | §17.5 encoding lesson | **inference** | generalised from two incidents in one session |
 | §17.5b non-ASCII path loss | **inference** | latent; not observed on superset (zero non-ASCII paths) |
+| §17.5c agreement / unclustered rates | **measurement** | cluster counts on snapshot 9; `scc`/degree columns on repo 6 |
+| §17.5d adjacent-is-not-attached | **inference** | three instances; the structural claim rests on two independent readers missing the same caveat |
 | §17.7 prediction derivation | **inference** | the method; the number it produced is a measurement |
 
 A later session should treat the measurements as settled and the inferences as
@@ -962,6 +979,33 @@ Refuting inertness needs one counter-example. Calibrating a threshold needs a
 sample. Treating this single large repo as calibration would replace
 "calibrated on three small repos" with "calibrated on one large one" — a
 different error of the same kind, and a more confident-sounding one.
+
+### 17.0b A prediction is only evidence if you had a mechanism for it
+
+Predict-before-measuring is load-bearing in this project. It degrades into
+theatre the moment it covers guesses as well as derivations, and both happened
+in the same session:
+
+| Prediction | Basis | Result |
+|---|---|---|
+| Architecture mean **95** (94–96) | SCC sizes were already persisted, so the severity ramp could be applied to the real distribution in advance (§17.7) | **7 of 7 correct** |
+| Job wall clock **4–9 min**, ingest dominant | Intuition about runtime — on a machine whose timing had been called unmeasurable an hour earlier | **114 s**, health dominant. **1 of 5 correct** |
+
+The difference is not luck or care. The first was **arithmetic over data
+already in the database**; the second was a feel for how long something takes.
+
+**The rule:** before writing a prediction down, name its mechanism. If the
+mechanism is "an existing table plus a formula", the prediction is evidence and
+a miss is informative. If it is "roughly, from experience", say so, or **decline
+to predict** — a soft number offered with a confidence rating still reads as a
+derivation to anyone reading the record later, including you.
+
+The second prediction also failed for a reason worth keeping separate from its
+mechanism: **it described a cold ingest and measured a warm one.**
+`files_parsed: 5, files_skipped_unchanged: 6511` — a 99.9% cache hit. The cold
+path, which is what a new user hits and where parse and resolve scale by orders
+of magnitude, **remains untested at this scale**. "How long does first analysis
+take" is the first question any user asks and the answer is currently unknown.
 
 ### 17.1 `cycle_participation` — reversed
 
@@ -1154,6 +1198,124 @@ layer masks a sick one; the mechanisms are opposites — one loses data that
 exists, the other keeps data that is already wrong. They need different
 diagnostics, so they are recorded as siblings rather than merged.
 
+### 17.5c Clustering agreement is uninformative below a certain cluster count
+
+A third small-corpus artifact, same family as §17.1 and §17.2.
+
+| Repo | Clusters (modularity / Louvain) | Agreement |
+|---|---|---|
+| Athena-OS | 4 / 4 | **100%** |
+| superset | **255 / 240** | **83.3%** |
+
+Perfect agreement on repo 1 was read as two independent algorithms confirming
+each other. It is closer to the null result: **there are not many ways to
+partition a tiny graph**, so two methods landing on the same answer is nearly
+forced. Agreement only carries information once the space of possible
+partitions is large enough for the algorithms to disagree.
+
+83.3% across 255 clusters is a real measurement about the methods. 100% across
+4 is a measurement about the corpus.
+
+**Applies to any agreement or concordance statistic in this project**, not just
+this one. Report the denominator alongside the rate, treat a perfect score on a
+small population as evidence of a small population, and **treat a difference
+smaller than the resolution of the population as no difference.**
+
+Applied retroactively to the ESLint validation, where the scorers were reported
+as `weighted_pagerank` 3/20 against `legacy` and `rrf` at 2/20. That is a
+**one-component** gap at n=20 — and the same document records `legacy` moving
+3/20 → 2/20 on a single-item swap between runs in which nothing about `legacy`
+changed. The finding was always "all three fail against a threshold of 12",
+never "weighted PageRank does marginally better"; the ordering was quoted as if
+it meant something and it did not. Correction recorded in
+`external-validation-eslint.md`.
+
+Note what the two cases have in common: the Spearman column in that table
+already said "not meaningful" for n=2 and n=3, and the Overlap@20 column beside
+it did not. The caveat existed, on the neighbouring statistic, and was not
+carried across.
+
+#### Related: the unclustered rate is structural, not a threshold judgement
+
+superset leaves **1,064 of 6,516 files unclustered (16.3%)**, under the 30%
+"clustering is not working here" threshold. But the aggregate is not the
+evidence — the breakdown by graph degree is:
+
+| Graph degree | Unclustered |
+|---|---|
+| 0 edges | **1064 / 1064 (100%)** |
+| 1 edge | 0 / 1503 |
+| 2+ edges | **0 / 3949** |
+
+Clustering runs over the co-import graph, so a file with no edges **cannot** be
+clustered. Every unclustered file is a genuine singleton and no file with any
+edge is missed. That is a structural certainty rather than a threshold that
+happened to pass. Composition confirms it: 163 are `superset/migrations/
+versions`, Alembic files that import nothing and are imported by nothing.
+
+**One number in that breakdown must not be quoted alone:** javascript reads
+66.2% unclustered — which is 45 of **68 files**, root-level config scripts. A
+base-rate artifact, not a language-specific gap. The denominator is the finding.
+
+### 17.5d Adjacent is not attached — a caveat that exists and does not travel
+
+Third recurring shape, distinct from cascade suppression and from faithful
+propagation (§17.5). Here **nothing is discarded and nothing is corrupted**.
+The needed information exists, is correct, and sits near the place it is
+needed — and does not reach it.
+
+**Instances:**
+
+1. **§10.3's sample-size limit.** The section itself said three repos was too
+   small a corpus to conclude file-level cycles are rare in general. That
+   sentence was written, then reasoned past within the same document, and the
+   marker was declared inert.
+2. **The `evidence_complete` → `inputs_complete` rename.** Applied correctly to
+   the models. Not applied to the database. Correct in one representation of
+   the schema, absent from the other, one file away.
+3. **The Spearman caveat, one column over.** In the ESLint results table, the
+   Spearman column reads *"1.000 (n=2 — not meaningful)"*. The Overlap@20
+   column beside it, in the same row, computed over the same population of 20,
+   carried no such note — and its 3-vs-2 ordering was then quoted as if it
+   meant something.
+
+#### Why this is a defect in the artifact, not a lapse in attention
+
+Instance 3 has evidence the others do not. The 3/20-vs-2/20 ordering was read
+as meaningful **by two people in different roles** — the author writing the
+record and a reader working directly from the document — repeatedly, across
+multiple turns. And the disconfirming evidence was in the same file: the same
+document records `legacy` moving 3/20 → 2/20 on a single-item swap between two
+runs in which nothing about `legacy` changed. That is the resolution of the
+measurement, demonstrated by the measurement, sitting ten lines below the
+table.
+
+Two independent readers, disconfirming evidence present, both missing it. That
+rules out attention as the explanation. **The document was structured so that
+the caveat was not where the number was read.**
+
+#### Two fixes, and only one of them works without anyone remembering
+
+**For authors — the question:** *is there a caveat elsewhere in this document
+that applies to what I am writing now?*
+
+Honest about its weakness: it requires the reader to already suspect a caveat
+exists. It is also uncomfortably hard to check mechanically, which is probably
+why the shape recurs. Useful, but it depends on the very attention whose
+absence it is meant to cover.
+
+**For artifacts — the layout rule:** *a caveat about a population belongs in
+the same cell or row as **every** statistic computed over that population,
+repeated rather than referenced.*
+
+Redundant. Ugly. Puts "(n=20)" beside numbers that share a table header already
+saying so. And it would have worked — in instance 3 the fix is literally
+copying six characters one column to the left, and no one would have needed to
+remember anything.
+
+**Prefer the second.** The first depends on a person; the second is a property
+of the document. Where they conflict, ugliness loses.
+
 ### 17.5b Known, unfixed: non-ASCII paths lose their history silently
 
 `core.quotepath` defaults to true, so git emits a non-ASCII path escaped and
@@ -1206,3 +1368,95 @@ to add 0.0276 mean deduction, pulling the result to the lower half of the band.
 The generalisable part: when a marker's inputs are already persisted, its
 distribution is computable in advance and a prediction becomes arithmetic
 rather than intuition. That is the difference between calibration and a guess.
+
+### 17.8 The real job path at scale — job 19, apache/superset
+
+Everything in §17.1–§17.7 was measured by calling `rank_repo` and
+`create_snapshot` **directly from a script**. That verifies the algorithm. It
+does not verify the product: the per-repo lock, SSE stage transitions,
+transaction boundaries, progress throttling and tripwires all live in
+`jobs.py`, wrapping the call. The timeout fixed in §17.4 lived in exactly that
+layer.
+
+Job 19 ran the path a user actually triggers — `resync → ingest → rank →
+health` — end to end on 6,516 files.
+
+| Stage | Duration |
+|---|---:|
+| resyncing | 19.4 s |
+| discovering | 2.1 s |
+| parsing | 14.4 s |
+| resolving | 20.4 s |
+| ranking_graph | 8.2 s |
+| ranking_history | 11.3 s |
+| ranking_scoring | 2.9 s |
+| health | 35.5 s |
+| **total** | **114.1 s** |
+
+No tripwire fired, no stage hung, no lock contention, no failure. **And the
+numbers match the direct-script run to three decimals** — 9.61 / 9.499 / 0.471
+across both. That retires the concern that §17.1–§17.7's findings were an
+artifact of bypassing the job layer; they stand without re-derivation.
+
+**Warm, not cold.** `files_parsed: 5, files_skipped_unchanged: 6511`. This
+measured an incremental ingest with a 99.9% cache hit. A first ingest of a repo
+this size is still untested and is the largest remaining unknown about real
+product behaviour — see §17.0b.
+
+#### Two defects it exposed
+
+**48% of wall clock had no progress reporting.** `resolving` (20.4 s) and
+`health` (35.5 s) each emitted one message and never updated — 55.9 s of 114.1 s
+where the UI cannot distinguish work from a hang, confirmed live at
+`stage=resolving, progress=0/0`. Both stages have natural units to count, so
+this was instrumentation, not architecture: `resolving` now reports against the
+import-row count (known before the loop starts), and `collect_inputs` samples
+through the AST pass. On a cold ingest these two stages dominate, so the
+problem was worst exactly where it mattered most.
+
+**Subsystem clustering was not in the pipeline at all.** It was reachable only
+through `POST /subsystems`, which nothing in the normal path calls — so every
+repo analysed the way a user analyses one had an empty Dependency Clusters tab
+and `CLUSTERS: 0` on the Overview, with a complete import graph sitting right
+there. A whole phase of work invisible to anyone who did not know to invoke it
+directly.
+
+Now a stage between rank and health, with the same error boundary as health: a
+clustering failure is recorded as retryable and never costs the completed
+ingest. Only modularity and Louvain run there — HDBSCAN stays on demand,
+because it embeds every file's symbol text where the other two are near-instant
+graph maths over a graph that already exists.
+
+#### Verified by refresh, not by assertion
+
+A fresh page load taken while job 21 sat in `resolving`, with no in-memory job
+state — i.e. a refresh:
+
+```
++0.0s   resolving (1000/60672)
++9.0s   resolving (4500/60672)
++18.0s  resolving (9500/60672)
++35.1s  resolving (19500/60672)
+```
+
+40 samples, counter advancing 1000 → 19500, non-zero denominator throughout, no
+page errors. The failure that would have passed a weaker check — recovering
+into a frozen `resolving 0/60672` and then jumping to complete — did not occur,
+and the sample sequence shows that rather than asserting it.
+
+**One honest note about the method.** The sampling interval was tightened from
+1.5 s to 600 ms out of a fear of collecting too few samples in a 20-second
+stage. In this run the concurrent test suite stretched `resolving` to 35
+seconds, so the original interval would have produced ~23 samples and been
+perfectly adequate. The tightening was correct against the timing that had
+actually been measured (the warm run's 20.4 s) and unnecessary against the
+timing that occurred. Recorded because "the fix worked" and "the fix was needed
+for the reason given" are different claims, and only the first is demonstrated
+here.
+
+This is a different failure shape from cascade suppression, and worth naming as
+such: nothing was discarded and nothing was wrong. **The feature simply was not
+on the path anyone takes.** It worked perfectly whenever tested deliberately,
+which is why it survived. The check it suggests: *for each feature, which
+user-triggered path reaches it?* — and if the answer is "none", the tests are
+measuring an unreachable capability.
