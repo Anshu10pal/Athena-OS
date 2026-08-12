@@ -936,6 +936,9 @@ be mistaken later for settled context. It is not uniformly settled.
 | §17.5b non-ASCII path loss | **inference** | latent; not observed on superset (zero non-ASCII paths) |
 | §17.5c agreement / unclustered rates | **measurement** | cluster counts on snapshot 9; `scc`/degree columns on repo 6 |
 | §17.5d adjacent-is-not-attached | **inference** | three instances; the structural claim rests on two independent readers missing the same caveat |
+| §17.9 check-shaped-wrong | **inference** | five instances, each with its own transcript evidence |
+| §17.10 name-versus-structure | **measurement** | pathspec match table; InsurIQ 7,698/7,715 skipped, 67 kept |
+| §17.11 signal must discriminate | **measurement** | top-directory shares across all six repos in this DB |
 | §17.7 prediction derivation | **inference** | the method; the number it produced is a measurement |
 
 A later session should treat the measurements as settled and the inferences as
@@ -999,6 +1002,42 @@ mechanism is "an existing table plus a formula", the prediction is evidence and
 a miss is informative. If it is "roughly, from experience", say so, or **decline
 to predict** — a soft number offered with a confidence rating still reads as a
 derivation to anyone reading the record later, including you.
+
+**And a third clause, which the two examples above do not illustrate:
+naming a mechanism is not sufficient. The mechanism must be checked against
+what the instrument actually measured.**
+
+The case that produced this clause, from the cold-ingest planning:
+
+> `files_parsed: 5` in a `parsing` stage lasting 14.4 s. The obvious per-file
+> parse cost is `14.4 / 5 = 2.9 s`.
+
+That has a mechanism, is arithmetic over measured quantities, and is wrong by
+roughly three orders of magnitude. The stage reads and SHA-256s **all 6,516
+files** to decide which changed; the 14.4 s is 6,516 hashes plus 5 parses.
+Dividing by 5 attributes the hashing to parsing. Dividing by 6,516 measures
+hashing and calls it parsing. **Neither denominator is the population the
+numerator was generated over** — which is §17.5d's shape, arriving in a
+prediction instead of a document.
+
+A prediction of this kind fails *more* convincingly than an intuited one,
+because it presents as a derivation. The check is one question: **what
+population did this number get measured over, and is it the population I am
+dividing by?**
+
+#### The correct decomposition, for when cold ingest is measured
+
+Three components with different behaviours, which is why a single "cold is
+slower" multiplier would be wrong in both directions at once:
+
+| Component | Cold vs warm | Measured basis |
+|---|---|---|
+| Read + hash | **unchanged** — every file is hashed either way | inside `parsing`'s 14.4 s |
+| Parse + extract | **the only part that grows** | nearest real figure is `collect_inputs`: 35.5 s / 6,516 files ≈ **5.4 ms/file** full tree-sitter parse — adjust upward, since ingest's extractors also emit symbols and import rows |
+| Resolve | **already at full cost** | re-resolves every row on every ingest by design; 20.4 s over 60,672 rows is not a warm-path saving |
+
+Resolution is the component most likely to be double-counted by someone
+reasoning that cold means everything is slower. It does not change at all.
 
 The second prediction also failed for a reason worth keeping separate from its
 mechanism: **it described a cold ingest and measured a warm one.**
@@ -1460,3 +1499,122 @@ on the path anyone takes.** It worked perfectly whenever tested deliberately,
 which is why it survived. The check it suggests: *for each feature, which
 user-triggered path reaches it?* — and if the answer is "none", the tests are
 measuring an unreachable capability.
+
+### 17.9 Check-shaped-wrong — five instances, all in verification tooling
+
+None of these was a defect in the system under test. All five were defects in
+the instrument used to check it, and in each the instrument reported success or
+failure that the underlying state did not support.
+
+| # | Instrument | What it assumed | What was true |
+|---|---|---|---|
+| 1 | `grep` for `open(` without `encoding=` | text does not wrap | `encoding="utf-8"` sat on a continuation line → 100% false positives |
+| 2 | `grep` verifying a doc edit landed | text does not wrap | probe spanned a line break → false negative on present text |
+| 3 | Reading a background task's output file | a file read is complete | read an accumulating file mid-write, concluded the run had not started, launched a redundant 30-minute suite |
+| 4 | `page.waitForTimeout(4000)` | the page paints within a fixed time | repo 6 takes ~5 s for a 6,516-file payload → read a loading page as a failure state |
+| 5 | `Stop-Process -Force` | a command's report is its outcome | printed "killing PID 32536" four times while the process was already gone and a draining socket kept answering 200 |
+
+**The common property:** *the instrument assumed a guarantee the system does not
+make.* Text may wrap. A file may still be being written. A page paints when it
+paints. A command reports intent, not effect.
+
+**Guard: do not trust a report of an action; observe its effect.**
+
+Instance 5 shows the shape most cleanly, and its fix shows the discipline: the
+writer was confirmed dead not by trusting `Stop-Process`, but by sampling
+`count(*) from code_files` twice six seconds apart and seeing it unchanged. The
+effect, not the report.
+
+Adjacent to §15.1's canary rule but a distinct discipline. §15.1 asks *can this
+check fail?* — a property of the check itself. This asks *is this check
+observing the thing it claims to observe?* — a property of the check's
+relationship to the system. A canary-verified test can still measure the wrong
+quantity, and instances 1 and 2 were both perfectly capable of failing.
+
+### 17.10 Name-versus-structure: a name enumeration is silently incomplete
+
+A repository with a committed virtualenv had **7,715 files discovered, 7,698 of
+them third-party** — matplotlib, jupyterlab, IPython — ingested as the project's
+own source. Real file count: **67**.
+
+`DEFAULT_EXCLUDES` listed `venv/` and `.venv/`. The directory was named
+`venv310`. The exclusion was name-based; the thing it was trying to exclude has
+a structural marker.
+
+| Approach | `venv/` | `venv310/` | `env/` | `virtualenv/` | Scripts, Include |
+|---|---|---|---|---|---|
+| Name enumeration | caught | **missed** | **missed** | **missed** | **missed** |
+| `pyvenv.cfg` (PEP 405) | caught | caught | caught | caught | caught |
+
+**Guard: where a structural marker exists, prefer it — a name enumeration is
+always incomplete, and the incompleteness is silent.** Nothing failed. 7,698
+files of pip packages were parsed, symbol-extracted and import-resolved without
+one error.
+
+#### The counter-case that makes the rule precise
+
+The rule is not "replace names with more names". Three candidates were
+deliberately **not** added, recorded in `discovery.AMBIGUOUS_NOT_EXCLUDED`:
+
+- **`bin/`** — interpreter shims in a virtualenv, first-party scripts almost
+  everywhere else. `bin/eslint.js` is a file this project validates its ranking
+  against; a `bin/` pattern would have deleted it from the analysis. Caught
+  instead by `pyvenv.cfg`, which is unambiguous about *which* `bin/` it means.
+- **`Scripts/`** — same, Windows layout.
+- **`packages/`** — NuGet dependencies in a .NET solution, first-party source in
+  a JS monorepo. It is real code on both `apache/superset` and
+  `palmerhq/monorepo-starter`.
+
+So the rule is sharper than "prefer structure": **a name that means third-party
+code in one ecosystem and first-party source in another cannot be a pattern at
+all.** Only structure can separate those, and where no structural marker exists
+the honest move is to exclude nothing and record why.
+
+### 17.11 A signal must discriminate, and a warning that cries wolf is worse than none
+
+A tripwire was specified: warn when more than 50% of discovered files sit under
+one top-level directory that is not the source root. It was built, measured
+against all six repositories in this project's database, and discarded.
+
+| Repo | Top directory | Share | Verdict |
+|---|---|---:|---|
+| eslint | `lib/` | 393/398 = **98.7%** | correct — a library's source lives in `lib/` |
+| Athena-OS | `backend/` | 144/224 = 64.3% | correct |
+| superset | `superset-frontend/` | 3903/6516 = 59.9% | correct |
+| AFDE | `frontend/` | 15/28 = 53.6% | correct |
+| InsurIQ | `backend/venv310/` | ~7000/7715 ≈ 90% | **broken** |
+
+**Four fires, zero true positives — and the broken case sits BELOW the most
+correct one.** ESLint at 98.7% is exactly right; InsurIQ at 90% is exactly
+wrong. No threshold separates them, because concentration was never the
+discriminating property. The property was that InsurIQ's dominant directory
+held third-party code — which is what the exclusion rules detect directly.
+
+**Guard: before shipping a signal, measure it against known-healthy inputs. A
+signal that does not separate healthy from broken is not a weak signal, it is
+not a signal.**
+
+And the reason it must be caught before shipping rather than tuned afterwards:
+**a warning that fires on two-thirds of healthy inputs trains its reader to
+ignore it**, which is strictly worse than no warning — it costs attention and
+then spends the credibility that would have made a real alert land.
+
+#### What shipped instead
+
+A count of what discovery excluded:
+
+```
+7,698 source files were skipped as vendored or generated and are not
+part of this analysis (largest: backend/ (7698)). Kept 67.
+```
+
+**It has no false-positive mode**, because it asserts a fact rather than
+inferring a judgement. On the five healthy repos it is silent; on InsurIQ it
+says the thing that mattered. A test asserts the wording contains none of
+"suspicious", "probably", "may be wrong", "warning" — §15.1's mechanical-check
+discipline applied to prose.
+
+This was a correction to an explicit instruction, recorded as such rather than
+substituted silently. The instruction named the right requirement — *7,000 of
+7,719 files under one directory should have been one line* — and the wrong
+signal for it.

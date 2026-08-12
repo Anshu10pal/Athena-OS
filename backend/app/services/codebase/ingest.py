@@ -21,8 +21,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.models import CodeFile, CodeImport, CodeSymbol, Repo, utcnow
 from app.services.codebase import (
-    edge_weights, extract_js, extract_python, git_ops, js_root_discovery, node_priors, registry,
-    repo_description, repo_lock, resolve_imports, root_discovery,
+    discovery, edge_weights, extract_js, extract_python, git_ops, js_root_discovery,
+    node_priors, registry, repo_description, repo_lock, resolve_imports, root_discovery,
 )
 from app.services.codebase.discovery import discover_files
 from app.services.codebase.languages import language_for_path
@@ -118,9 +118,19 @@ def _ingest_repo_locked(
 
     on_progress("discovering", 0, 0, "Discovering files")
     extra_excludes = registry.protected_data_exclusion_patterns(root)
-    rel_paths = discover_files(root, settings.REPO_MAX_FILES, extra_excludes=extra_excludes)  # raises TooManyFilesError, not truncated
+    # raises TooManyFilesError, not truncated
+    rel_paths, skipped_by_dir = discovery.discover_files_with_stats(
+        root, settings.REPO_MAX_FILES, extra_excludes=extra_excludes)
     all_paths = {p.as_posix() for p in rel_paths}
     total_files = len(rel_paths)
+
+    # Surfaced at discovery, before minutes of parsing are spent on it. A
+    # committed virtualenv contributed 7,000+ files to one repo and nothing
+    # said so until a progress log was watched by eye.
+    vendored = discovery.vendored_summary(skipped_by_dir, total_files)
+    if vendored:
+        print(f"[ingest] repo {repo.id}: {vendored}")
+        on_progress("discovering", 0, 0, vendored)
 
     # Discovering nothing where there was previously something is a broken
     # checkout far more often than it is a repo whose every source file was
@@ -460,4 +470,7 @@ def _ingest_repo_locked(
         python_cross_root_edges=python_cross_root_edges,
         js_configs_found=len(js_configs),
         js_cross_root_edges=js_cross_root_edges,
+        # Carried in the report as well as logged, so it reaches the job
+        # result and the UI rather than only a server console nobody reads.
+        blind_spots=(list(BLIND_SPOTS) + [vendored]) if vendored else list(BLIND_SPOTS),
     )

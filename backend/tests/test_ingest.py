@@ -11,7 +11,12 @@ import pytest
 
 from app.db.models import CodeFile, CodeImport, CodeSymbol, Repo
 from app.services.codebase import extract_js, extract_python, resolve_imports
-from app.services.codebase.discovery import TooManyFilesError, discover_files
+from app.services.codebase.discovery import (
+    TooManyFilesError,
+    discover_files,
+    discover_files_with_stats,
+    vendored_summary,
+)
 from app.services.codebase.ingest import RootPromotionCollapseError, ingest_repo
 from app.services.codebase.registry import register_from_path
 from app.services.codebase.repo_lock import RepoBusyError, repo_lock
@@ -947,3 +952,151 @@ class TestEmptyDiscoveryDoesNotWipeAPreviousIngest:
         assert report.files_deleted == 1
         paths = {p for (p,) in db_session.query(CodeFile.path).filter(CodeFile.repo_id == repo.id).all()}
         assert paths == {"a.py"}
+
+
+class TestVendoredCodeIsExcluded:
+    """A committed virtualenv was ingested as a repo's own source: 7,715 files
+    of matplotlib, jupyterlab and IPython attributed to a small full-stack app.
+    The directory was named `venv310`, so the name-based `venv/` pattern missed
+    it -- as it also misses `env/`, `virtualenv/`, `venv312/`.
+
+    The lesson is structural over nominal: where a marker exists, prefer it.
+    """
+
+    def test_a_virtualenv_named_anything_is_excluded_via_pyvenv_cfg(self, tmp_path):
+        """PEP 405 puts pyvenv.cfg at every virtualenv root, whatever the root
+        is called. This is the rule that generalises."""
+        _write(tmp_path / "app" / "main.py", "x = 1\n")
+        for name in ("venv310", "env", "virtualenv", "my-weird-venv"):
+            _write(tmp_path / "backend" / name / "pyvenv.cfg", "home = /usr\n")
+            _write(tmp_path / "backend" / name / "Lib" / "site-packages" / "numpy" / "core.py", "y = 2\n")
+            _write(tmp_path / "backend" / name / "Scripts" / "activate_this.py", "z = 3\n")
+
+        found = {p.as_posix() for p in discover_files(tmp_path, 10000)}
+        assert found == {"app/main.py"}, f"leaked: {sorted(found - {'app/main.py'})}"
+
+    def test_the_interpreter_shims_go_too_not_just_the_libraries(self, tmp_path):
+        """site-packages/ alone would leave Scripts/ and Include/ behind."""
+        _write(tmp_path / "venv310" / "pyvenv.cfg", "home = /usr\n")
+        _write(tmp_path / "venv310" / "Scripts" / "activate_this.py", "a = 1\n")
+        _write(tmp_path / "venv310" / "Include" / "site" / "x.py", "b = 2\n")
+        _write(tmp_path / "src" / "app.py", "c = 3\n")
+
+        found = {p.as_posix() for p in discover_files(tmp_path, 10000)}
+        assert found == {"src/app.py"}
+
+    def test_site_packages_is_excluded_without_a_pyvenv_marker(self, tmp_path):
+        """Backstop for older or non-standard layouts that predate PEP 405."""
+        _write(tmp_path / "lib" / "python3.9" / "site-packages" / "requests" / "api.py", "x = 1\n")
+        _write(tmp_path / "usr" / "lib" / "python3" / "dist-packages" / "yaml" / "loader.py", "y = 2\n")
+        _write(tmp_path / "src" / "app.py", "z = 3\n")
+
+        found = {p.as_posix() for p in discover_files(tmp_path, 10000)}
+        assert found == {"src/app.py"}
+
+    def test_a_first_party_bin_directory_is_NOT_excluded(self, tmp_path):
+        """The collision that stopped `bin/` becoming a pattern. eslint's own
+        bin/eslint.js is first-party source this project validates against; a
+        bare bin/ rule would delete it from the analysis. Venv shims are caught
+        by the pyvenv.cfg rule instead, which is unambiguous."""
+        _write(tmp_path / "bin" / "eslint.js", "module.exports = 1;\n")
+        _write(tmp_path / "lib" / "api.js", "module.exports = 2;\n")
+
+        found = {p.as_posix() for p in discover_files(tmp_path, 10000)}
+        assert "bin/eslint.js" in found, "a first-party bin/ must survive"
+
+    def test_a_js_monorepo_packages_directory_is_NOT_excluded(self, tmp_path):
+        """Same collision, other ecosystem: packages/ is NuGet's dependency
+        directory and a JS monorepo's source directory. It is real code on both
+        apache/superset and palmerhq/monorepo-starter."""
+        _write(tmp_path / "packages" / "ui" / "src" / "Button.tsx", "export const B = 1;\n")
+        _write(tmp_path / "packages" / "ui" / "node_modules" / "react" / "index.js", "x\n")
+
+        found = {p.as_posix() for p in discover_files(tmp_path, 10000)}
+        assert "packages/ui/src/Button.tsx" in found
+        assert not any("node_modules" in f for f in found), "nested node_modules must still go"
+
+    def test_the_other_vendored_layouts(self, tmp_path):
+        _write(tmp_path / "src" / "app.py", "x = 1\n")
+        for rel in (
+            "mypkg.egg-info/PKG.py",
+            ".tox/py312/lib/site-packages/a.py",
+            "__pypackages__/3.12/lib/b.py",
+            "bower_components/jquery/jquery.js",
+            ".yarn/cache/lodash/index.js",
+            ".pnpm-store/v3/files/c.js",
+            ".gradle/caches/d.java",
+            "Pods/Alamofire/Source/e.swift",
+        ):
+            _write(tmp_path / rel, "y = 2\n")
+
+        found = {p.as_posix() for p in discover_files(tmp_path, 10000)}
+        assert found == {"src/app.py"}, f"leaked: {sorted(found - {'src/app.py'})}"
+
+
+class TestVendoredSummary:
+    """Reports what discovery threw away, rather than inferring a judgement
+    from what it kept.
+
+    A concentration warning ("warn when >50% of files sit under one top-level
+    directory") was built first and discarded: measured against the six repos
+    in this project's database it fires on four, including eslint at 98.7%
+    under lib/ -- which is exactly right for a library. Concentration cannot
+    separate a legitimate 98.7% from a vendored 90%, and a warning that fires
+    on two thirds of repos trains people to ignore it.
+    """
+
+    def test_a_large_vendored_tree_is_reported(self):
+        s = vendored_summary({"backend": 7000, "frontend": 12}, kept=400)
+        assert s is not None
+        assert "7012" in s and "backend/ (7000)" in s and "400" in s
+
+    def test_a_small_number_of_skips_is_not_worth_a_line(self):
+        assert vendored_summary({"src": 3}, kept=200) is None
+
+    def test_no_skips_at_all_is_silent(self):
+        assert vendored_summary({}, kept=200) is None
+
+    def test_it_states_a_fact_and_never_infers_intent(self):
+        """The property that makes this better than the discarded design: it
+        has no false-positive mode, because it reports a count rather than
+        deciding whether a directory 'should' be dominant."""
+        s = vendored_summary({"node_modules": 900}, kept=50)
+        assert "skipped as vendored" in s
+        for word in ("suspicious", "probably", "may be wrong", "warning"):
+            assert word not in s.lower()
+
+
+class TestDiscoveryStats:
+    def test_skipped_vendored_files_are_counted_not_just_dropped(self, tmp_path):
+        _write(tmp_path / "src" / "app.py", "x = 1\n")
+        _write(tmp_path / "backend" / "venv310" / "pyvenv.cfg", "home = /usr\n")
+        for i in range(60):
+            _write(tmp_path / "backend" / "venv310" / "Lib" / "site-packages" / f"m{i}.py", "y = 2\n")
+
+        found, skipped = discover_files_with_stats(tmp_path, 10000)
+        assert {p.as_posix() for p in found} == {"src/app.py"}
+        assert skipped.get("backend") == 60, skipped
+
+    def test_node_modules_is_counted_too(self, tmp_path):
+        _write(tmp_path / "index.js", "x\n")
+        for i in range(55):
+            _write(tmp_path / "node_modules" / "react" / f"f{i}.js", "y\n")
+
+        found, skipped = discover_files_with_stats(tmp_path, 10000)
+        assert {p.as_posix() for p in found} == {"index.js"}
+        assert skipped.get("node_modules") == 55
+
+    def test_a_clean_repo_reports_nothing_skipped(self, tmp_path):
+        _write(tmp_path / "a.py", "x = 1\n")
+        _write(tmp_path / "pkg" / "b.py", "y = 2\n")
+        found, skipped = discover_files_with_stats(tmp_path, 10000)
+        assert len(found) == 2
+        assert vendored_summary(skipped, kept=len(found)) is None
+
+    def test_discover_files_still_returns_a_plain_list(self, tmp_path):
+        """The original signature is unchanged -- every existing caller and
+        test wants just the paths."""
+        _write(tmp_path / "a.py", "x = 1\n")
+        found = discover_files(tmp_path, 10000)
+        assert isinstance(found, list) and found[0].as_posix() == "a.py"
