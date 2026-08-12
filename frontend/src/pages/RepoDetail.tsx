@@ -17,6 +17,7 @@ import {
   NOISE_CATEGORIES,
 } from "../lib/filters";
 import { SlideOver } from "../components/SlideOver";
+import { ViewBoundary } from "../components/ViewBoundary";
 import { LayersView } from "../components/LayersView";
 import { ArchitectureMap } from "../components/ArchitectureMap";
 import { MatrixView } from "../components/MatrixView";
@@ -909,216 +910,230 @@ export default function RepoDetail() {
       )}
 
       {files.length > 0 && view === "reading" && (
-        <div className="card overflow-x-auto">
-          <div className="flex items-center justify-between gap-4 flex-wrap px-4 py-3 border-b border-line">
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-[10px] uppercase tracking-widest text-fog">Scorer</span>
-              <span className="font-mono text-xs text-accent border border-accent/40 rounded px-2 py-0.5">
-                {scorerLabel}
-              </span>
+        <ViewBoundary name="Reading list">
+          <div className="card overflow-x-auto">
+            <div className="flex items-center justify-between gap-4 flex-wrap px-4 py-3 border-b border-line">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-fog">Scorer</span>
+                <span className="font-mono text-xs text-accent border border-accent/40 rounded px-2 py-0.5">
+                  {scorerLabel}
+                </span>
+              </div>
+              <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-fog">
+                Switch scorer
+                <select
+                  value={scorer}
+                  onChange={(e) => setScorer(e.target.value as ScorerT)}
+                  className="bg-transparent border border-line rounded px-2 py-1 text-snow text-xs font-mono normal-case tracking-normal"
+                >
+                  {SCORERS.map((s) => (
+                    <option key={s.value} value={s.value} className="bg-ink">
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
-            <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-fog">
-              Switch scorer
-              <select
-                value={scorer}
-                onChange={(e) => setScorer(e.target.value as ScorerT)}
-                className="bg-transparent border border-line rounded px-2 py-1 text-snow text-xs font-mono normal-case tracking-normal"
-              >
-                {SCORERS.map((s) => (
-                  <option key={s.value} value={s.value} className="bg-ink">
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-line">
-                <th className="text-right px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-fog whitespace-nowrap">
-                  <HeaderLabel term="Rank" align="left" />
-                </th>
-                <th className="text-left px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-fog">
-                  <HeaderLabel term="Path" align="left" />
-                </th>
-                <th className="text-left px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-fog whitespace-nowrap">
-                  <HeaderLabel term="Language" />
-                </th>
-                {COLUMNS.map((c) => (
-                  <th
-                    key={c.key}
-                    onClick={() => toggleSort(c.key)}
-                    className="text-right px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-fog cursor-pointer hover:text-accent select-none whitespace-nowrap"
-                  >
-                    <HeaderLabel term={c.label} align={c.align} />
-                    {sortKey === c.key ? (sortDesc ? " ▾" : " ▴") : ""}
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-line">
+                  <th className="text-right px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-fog whitespace-nowrap">
+                    <HeaderLabel term="Rank" align="left" />
                   </th>
-                ))}
-                <th className="px-2 py-3" aria-hidden="true" />
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.length === 0 && (
-                <tr>
-                  <td colSpan={COLUMN_COUNT + 1} className="px-4 py-6 text-center font-mono text-xs text-fog">
-                    No files match the current filters.
-                  </td>
-                </tr>
-              )}
-              {sorted.map((f, i) => {
-                const next = sorted[i + 1];
-                const showDividerAfter =
-                  f.rank <= VALIDATION_THRESHOLD_RANK && next && next.rank > VALIDATION_THRESHOLD_RANK;
-                const isSelected = selectedFileId === f.file_id;
-                return (
-                  <Fragment key={f.file_id}>
-                    <tr
-                      id={`file-row-${f.file_id}`}
-                      onClick={() => selectFile(f.file_id)}
-                      className={
-                        "group border-b border-line/50 cursor-pointer transition-colors " +
-                        (isSelected ? "bg-accent/10" : "hover:bg-glass")
-                      }
+                  <th className="text-left px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-fog">
+                    <HeaderLabel term="Path" align="left" />
+                  </th>
+                  <th className="text-left px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-fog whitespace-nowrap">
+                    <HeaderLabel term="Language" />
+                  </th>
+                  {COLUMNS.map((c) => (
+                    <th
+                      key={c.key}
+                      onClick={() => toggleSort(c.key)}
+                      className="text-right px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-fog cursor-pointer hover:text-accent select-none whitespace-nowrap"
                     >
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.rank}</td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-snow">
-                        {f.path}
-                        {f.is_entry_point && (
-                          <span className="ml-2 text-[9px] uppercase tracking-widest text-accent border border-accent/40 rounded px-1 py-0.5">
-                            entry
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-fog whitespace-nowrap">{f.language}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-snow">{f.score.toFixed(3)}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.fan_in}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.fan_out}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.pagerank.toFixed(4)}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.commit_count ?? "—"}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.distinct_authors ?? "—"}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">
-                        {f.days_since_last_change ?? "—"}
-                      </td>
-                      <td className="px-2 py-2.5 text-right">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            mermaidTriggerRef.current = e.currentTarget;
-                            setMermaidFileId(f.file_id);
-                          }}
-                          aria-label={`Show ${f.path}'s neighborhood as a Mermaid diagram`}
-                          className="font-mono text-[9px] text-fog hover:text-accent opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          LR
-                        </button>
-                      </td>
-                    </tr>
-                    {showDividerAfter && (
-                      <tr aria-hidden="true">
-                        <td colSpan={COLUMN_COUNT + 1} className="p-0">
-                          <div className="border-t-2 border-dashed border-accent/50 relative">
-                            <span className="absolute -top-2 right-4 bg-ink px-2 font-mono text-[9px] uppercase tracking-widest text-accent">
-                              rank 20 -- validation threshold
+                      <HeaderLabel term={c.label} align={c.align} />
+                      {sortKey === c.key ? (sortDesc ? " ▾" : " ▴") : ""}
+                    </th>
+                  ))}
+                  <th className="px-2 py-3" aria-hidden="true" />
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.length === 0 && (
+                  <tr>
+                    <td colSpan={COLUMN_COUNT + 1} className="px-4 py-6 text-center font-mono text-xs text-fog">
+                      No files match the current filters.
+                    </td>
+                  </tr>
+                )}
+                {sorted.map((f, i) => {
+                  const next = sorted[i + 1];
+                  const showDividerAfter =
+                    f.rank <= VALIDATION_THRESHOLD_RANK && next && next.rank > VALIDATION_THRESHOLD_RANK;
+                  const isSelected = selectedFileId === f.file_id;
+                  return (
+                    <Fragment key={f.file_id}>
+                      <tr
+                        id={`file-row-${f.file_id}`}
+                        onClick={() => selectFile(f.file_id)}
+                        className={
+                          "group border-b border-line/50 cursor-pointer transition-colors " +
+                          (isSelected ? "bg-accent/10" : "hover:bg-glass")
+                        }
+                      >
+                        <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.rank}</td>
+                        <td className="px-4 py-2.5 font-mono text-xs text-snow">
+                          {f.path}
+                          {f.is_entry_point && (
+                            <span className="ml-2 text-[9px] uppercase tracking-widest text-accent border border-accent/40 rounded px-1 py-0.5">
+                              entry
                             </span>
-                          </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 font-mono text-xs text-fog whitespace-nowrap">{f.language}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-xs text-snow">{f.score.toFixed(3)}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.fan_in}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.fan_out}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.pagerank.toFixed(4)}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.commit_count ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">{f.distinct_authors ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-xs text-fog">
+                          {f.days_since_last_change ?? "—"}
+                        </td>
+                        <td className="px-2 py-2.5 text-right">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              mermaidTriggerRef.current = e.currentTarget;
+                              setMermaidFileId(f.file_id);
+                            }}
+                            aria-label={`Show ${f.path}'s neighborhood as a Mermaid diagram`}
+                            className="font-mono text-[9px] text-fog hover:text-accent opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            LR
+                          </button>
                         </td>
                       </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      {showDividerAfter && (
+                        <tr aria-hidden="true">
+                          <td colSpan={COLUMN_COUNT + 1} className="p-0">
+                            <div className="border-t-2 border-dashed border-accent/50 relative">
+                              <span className="absolute -top-2 right-4 bg-ink px-2 font-mono text-[9px] uppercase tracking-widest text-accent">
+                                rank 20 -- validation threshold
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </ViewBoundary>
       )}
 
       {files.length > 0 && view === "architecture" && dirGraph && (
-        <ArchitectureMap
-          nodes={dirGraph.nodes}
-          edges={dirGraph.edges}
-          files={files}
-          selectedFileId={selectedFileId}
-          onSelectFile={(fileId) => {
-            selectFile(fileId);
-            setView("focus");
-          }}
-          pairFilter={pairFilter}
-          onClearPairFilter={() => setPairFilter(null)}
-          onSelectDir={selectDir}
-          colorMode={colorMode}
-          onColorModeChange={setColorMode}
-          clusterLabelById={modularityLabelById}
-        />
+        <ViewBoundary name="Architecture">
+          <ArchitectureMap
+            nodes={dirGraph.nodes}
+            edges={dirGraph.edges}
+            files={files}
+            selectedFileId={selectedFileId}
+            onSelectFile={(fileId) => {
+              selectFile(fileId);
+              setView("focus");
+            }}
+            pairFilter={pairFilter}
+            onClearPairFilter={() => setPairFilter(null)}
+            onSelectDir={selectDir}
+            colorMode={colorMode}
+            onColorModeChange={setColorMode}
+            clusterLabelById={modularityLabelById}
+          />
+        </ViewBoundary>
       )}
 
       {files.length > 0 && view === "depgraph" && graph && (
-        <Suspense
-          fallback={<p className="text-fog text-sm font-mono">Loading graph engine…</p>}
-        >
-          <DependencyGraph
-            nodes={depGraphNodes}
-            edges={graph.edges}
-            focusIds={graphFocus.ids}
-            focusLabel={graphFocus.label}
-            onSelectFile={selectFile}
-            onFocusFile={(fileId) => {
-              setGraphFocusDir(null);
-              setGraphFocusFileId(fileId);
-              selectFile(fileId);
-            }}
-          />
-        </Suspense>
+        <ViewBoundary name="Dependency Graph">
+          <Suspense
+            fallback={<p className="text-fog text-sm font-mono">Loading graph engine…</p>}
+          >
+            <DependencyGraph
+              nodes={depGraphNodes}
+              edges={graph.edges}
+              focusIds={graphFocus.ids}
+              focusLabel={graphFocus.label}
+              onSelectFile={selectFile}
+              onFocusFile={(fileId) => {
+                setGraphFocusDir(null);
+                setGraphFocusFileId(fileId);
+                selectFile(fileId);
+              }}
+            />
+          </Suspense>
+        </ViewBoundary>
       )}
 
       {files.length > 0 && view === "matrix" && dirGraph && (
-        <MatrixView
-          nodes={dirGraph.nodes}
-          edges={dirGraph.edges}
-          onSelectPair={(a, b) => {
-            setPairFilter([a, b]);
-            selectDir(a);
-            setView("architecture");
-          }}
-          colorMode={colorMode}
-          onColorModeChange={setColorMode}
-        />
+        <ViewBoundary name="Matrix">
+          <MatrixView
+            nodes={dirGraph.nodes}
+            edges={dirGraph.edges}
+            onSelectPair={(a, b) => {
+              setPairFilter([a, b]);
+              selectDir(a);
+              setView("architecture");
+            }}
+            colorMode={colorMode}
+            onColorModeChange={setColorMode}
+          />
+        </ViewBoundary>
       )}
 
       {files.length > 0 && view === "focus" && id && (
-        <FocusView
-          repoId={id}
-          fileId={selectedFileId}
-          scorer={scorer}
-          onSelectFile={selectFile}
-        />
+        <ViewBoundary name="Focus">
+          <FocusView
+            repoId={id}
+            fileId={selectedFileId}
+            scorer={scorer}
+            onSelectFile={selectFile}
+          />
+        </ViewBoundary>
       )}
 
       {files.length > 0 && view === "layers" && (
-        <LayersView
-          nodes={visibleGraphNodes}
-          selectedFileId={selectedFileId}
-          onSelect={selectFile}
-          onOpenMermaid={(fileId, trigger) => {
-            mermaidTriggerRef.current = trigger;
-            setMermaidFileId(fileId);
-          }}
-        />
+        <ViewBoundary name="Layers">
+          <LayersView
+            nodes={visibleGraphNodes}
+            selectedFileId={selectedFileId}
+            onSelect={selectFile}
+            onOpenMermaid={(fileId, trigger) => {
+              mermaidTriggerRef.current = trigger;
+              setMermaidFileId(fileId);
+            }}
+          />
+        </ViewBoundary>
       )}
 
       {files.length > 0 && view === "subsystems" && id && (
-        <SubsystemsView
-          repoId={id}
-          algorithm={subsystemAlgorithm}
-          onAlgorithmChange={setSubsystemAlgorithm}
-          data={subsystemsResponseFor(subsystemAlgorithm)}
-          onCompute={subsystemAlgorithm === "hdbscan" ? computeSubsystemsHdbscan : computeSubsystems}
-          computing={subsystemAlgorithm === "hdbscan" ? computingSubsystemsHdbscan : computingSubsystems}
-          onDataChanged={loadSubsystems}
-          onSelectSubsystem={(subsystemId) => {
-            setFilters((f) => ({ ...f, subsystemId, subsystemAlgorithm }));
-            setView("reading");
-          }}
-        />
+        <ViewBoundary name="Dependency Clusters">
+          <SubsystemsView
+            repoId={id}
+            algorithm={subsystemAlgorithm}
+            onAlgorithmChange={setSubsystemAlgorithm}
+            data={subsystemsResponseFor(subsystemAlgorithm)}
+            onCompute={subsystemAlgorithm === "hdbscan" ? computeSubsystemsHdbscan : computeSubsystems}
+            computing={subsystemAlgorithm === "hdbscan" ? computingSubsystemsHdbscan : computingSubsystems}
+            onDataChanged={loadSubsystems}
+            onSelectSubsystem={(subsystemId) => {
+              setFilters((f) => ({ ...f, subsystemId, subsystemAlgorithm }));
+              setView("reading");
+            }}
+          />
+        </ViewBoundary>
       )}
 
       </div>

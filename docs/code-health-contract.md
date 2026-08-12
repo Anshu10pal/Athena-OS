@@ -821,6 +821,30 @@ has been *observed* failing. Reintroduce the defect, watch it fail, restore.
 An assertion whose failure mode has never been exercised is an assumption in
 test clothing.
 
+**And the inverse, which the requirement above does not cover:**
+
+> **A negative result is only informative if the stimulus is first shown to
+> produce the condition being checked for.** Otherwise *"nothing caught it"*
+> and *"nothing happened"* are indistinguishable.
+
+The instance. Error boundaries were verified by intercepting an API response
+and returning `{ files: null }`, expecting a render throw the boundary would
+catch. No boundary fired — and the reason was not the boundary. `RepoDetail`
+does `const files = ranking?.files ?? []`, which coerces `null` to `[]`, so
+nothing ever threw. The stimulus could not produce the condition.
+
+Read as written, the run said *"the boundary did not catch a throw"*. What
+actually happened was *"there was no throw"*. Those support opposite
+conclusions, and the output looks the same either way — the failure mode is
+that a broken boundary and a defensive component under test are
+indistinguishable from outside.
+
+It is the mirror of the canary rule and needs its own check. The canary asks:
+*can this check fail?* This asks: *does my stimulus reach the code I am
+checking?* The boundary was ultimately verified by injecting a real
+`throw new Error(...)` into a component body — a stimulus that cannot fail to
+produce the condition — rather than by hoping a malformed payload would.
+
 **This rule found a violation of itself within two hours of being written.**
 `test_the_stage_is_reported_in_the_job_result`, covering the new clustering
 stage, asserted only `status == "computed"`. The canary run deleted the stage
@@ -1535,9 +1559,9 @@ measuring an unreachable capability.
 
 ### 17.9 Check-shaped-wrong — the instrument assumed a guarantee the system doesn't make
 
-Six instances. None was a defect in the system under test; all were defects in
-the instrument used to check it. **Cost: time.** Split from §17.12, which is a
-distinguishable and more dangerous failure — see there.
+Eight instances. None was a defect in the system under test; all were defects
+in the instrument used to check it. **Cost: time.** Split from §17.12, which is
+a distinguishable and more dangerous failure — see there.
 
 | # | Instrument | What it assumed | What was true |
 |---|---|---|---|
@@ -1547,6 +1571,8 @@ distinguishable and more dangerous failure — see there.
 | 4 | `page.waitForTimeout(4000)` | the page paints within a fixed time | repo 6 takes ~5 s for a 6,516-file payload → read a loading page as a failure state |
 | 5 | `Stop-Process -Force` | a command's report is its outcome | printed "killing PID 32536" four times while the process was already gone and a draining socket kept answering 200 |
 | 6 | `discover_files_with_stats` called directly | a direct call and the running server execute the same code | see §17.12 — this one produced a false finding, not just lost time |
+| 7 | a malformed API payload as a boundary stimulus | the payload will throw | `?? []` coerced it, so nothing threw — "boundary broken" and "no error occurred" were indistinguishable (see §15.1's inverse clause) |
+| 8 | canary injecting a throw at `s.index("{", i)` | the first brace after a function name opens its body | it opened the destructured **parameter list**; the file never compiled and the run read as a boundary failure |
 
 **The common property:** *the instrument assumed a guarantee the system does not
 make.* Text may wrap. A file may still be being written. A page paints when it
