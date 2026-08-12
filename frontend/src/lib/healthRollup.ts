@@ -126,10 +126,17 @@ export function hotCohortSentence(data: HealthDirectoriesT | null): string | nul
   }
   const direction = h.delta < 0 ? "below" : "above";
   const magnitude = Math.abs(h.delta).toFixed(2);
+  // Names the axis. The cohort is always Maintainability -- the only axis with
+  // no change-history input, so the comparison is not circular -- but the
+  // sentence sits above a table that follows the lens selector. On the
+  // Architecture lens a reader would otherwise connect "8.49" to the
+  // architecture numbers directly beneath it.
   if (Math.abs(h.delta) < 0.005) {
-    return `The files you change most average ${h.hot_mean.toFixed(2)} — the same as the codebase overall.`;
+    return `The files you change most score ${h.hot_mean.toFixed(
+      2,
+    )} on Maintainability — the same as the codebase overall.`;
   }
-  return `The files you change most average ${h.hot_mean.toFixed(
+  return `The files you change most score ${h.hot_mean.toFixed(
     2,
-  )} — ${magnitude} ${direction} the codebase overall.`;
+  )} on Maintainability — ${magnitude} ${direction} the codebase overall.`;
 }

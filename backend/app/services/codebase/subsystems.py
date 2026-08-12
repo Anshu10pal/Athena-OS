@@ -361,24 +361,43 @@ def _persist_algorithm(db: Session, repo: Repo, algorithm: str, clusters: list,
     return cluster_of, carried, reset
 
 
-def compute_subsystems(db: Session, repo: Repo) -> dict:
+def compute_subsystems(db: Session, repo: Repo, on_progress=None) -> dict:
     """Holds the per-repo advisory lock (repo_lock.py) for the whole call --
     same reasoning as ranking.py's rank_repo*: this reads the resolved
     import graph, so it must not run inside an in-flight ingest's
-    two-stage resolution window."""
+    two-stage resolution window.
+
+    `on_progress(stage, current, total, message)` is optional. It exists
+    because this became a pipeline stage (jobs.py) and shipped emitting a bare
+    `0, 0` -- a new stage with the exact instrumentation gap that had just been
+    fixed on two others. Phase-based rather than per-file: the graph build and
+    the two clustering passes are the units, and a reader wants to know which
+    is running, not how many nodes are left.
+    """
     with repo_lock.repo_lock(repo.id, "subsystems"):
-        return _compute_subsystems_locked(db, repo)
+        return _compute_subsystems_locked(db, repo, on_progress=on_progress)
 
 
-def _compute_subsystems_locked(db: Session, repo: Repo) -> dict:
+CLUSTERING_PHASES = 3  # graph build, modularity, louvain
+
+
+def _compute_subsystems_locked(db: Session, repo: Repo, on_progress=None) -> dict:
     files = db.query(CodeFile).filter(CodeFile.repo_id == repo.id).all()
     file_by_id = {f.id: f for f in sorted(files, key=lambda f: f.path)}
     path_of = {fid: f.path for fid, f in file_by_id.items()}
     fan_in_of = {fid: f.fan_in for fid, f in file_by_id.items()}
 
+    def report(step: int, message: str) -> None:
+        if on_progress is not None:
+            on_progress("clustering", step, CLUSTERING_PHASES, message)
+
+    report(0, "Building the co-import graph")
     graph = _build_undirected_weighted_graph(db, repo, file_by_id)
+    report(1, "Grouping files (modularity)")
     modularity_clusters = cluster_modularity(graph)
+    report(2, "Grouping files (Louvain)")
     louvain_clusters = cluster_louvain(graph)
+    report(3, "Recording subsystems")
 
     agreement = algorithm_agreement(modularity_clusters, louvain_clusters)
     repo.subsystem_algorithm_agreement = agreement

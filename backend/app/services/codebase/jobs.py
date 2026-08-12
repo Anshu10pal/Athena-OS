@@ -20,6 +20,7 @@ from app.services.codebase.graph_structure import persist_graph_structure
 from app.services.codebase.health_snapshots import create_snapshot, should_create_snapshot
 from app.services.codebase.ingest import ingest_repo
 from app.services.codebase.ranking import rank_repo
+from app.services.codebase.subsystems import compute_subsystems
 
 _PROGRESS_WRITE_INTERVAL = 0.3  # seconds -- avoid a DB write on every single file
 
@@ -53,6 +54,43 @@ def start_job(repo_id: int) -> int:
     return job_id
 
 
+def _run_clustering_stage(db, repo, progress) -> dict:
+    """Subsystem clustering, in the pipeline rather than only on demand.
+
+    It was previously reachable ONLY through POST /subsystems, which nothing in
+    the normal path calls -- so every repo analysed the way a user actually
+    analyses one had an empty Dependency Clusters tab. Found on
+    apache/superset: 6,516 files, a complete import graph, and CLUSTERS reading
+    0 on the Overview. A whole phase of work invisible to anyone who did not
+    know to invoke it directly.
+
+    Only modularity + Louvain run here. HDBSCAN stays on demand deliberately:
+    it embeds every file's symbol text, which is real CPU work, where these two
+    are near-instant graph maths over a graph that already exists.
+
+    Same error boundary as the health stage below, for the same reason -- this
+    is derived output, and losing a completed ingest because a clustering pass
+    failed would be the expensive half thrown away for the cheap half. Runs
+    AFTER rank_repo has released the per-repo lock, since compute_subsystems
+    takes that lock itself.
+    """
+    try:
+        progress("clustering", 0, 3, "Grouping files into subsystems")
+        result = compute_subsystems(db, repo, on_progress=progress)
+        algorithms = result.get("algorithms", {})
+        return {
+            "status": "computed",
+            "modularity_clusters": algorithms.get("modularity", {}).get("cluster_count"),
+            "louvain_clusters": algorithms.get("louvain", {}).get("cluster_count"),
+            "agreement": result.get("agreement"),
+            "retryable": False,
+        }
+    except Exception as e:
+        db.rollback()
+        print(f"[clustering] repo {repo.id}: stage failed, ingest/rank unaffected: {e}")
+        return {"status": "failed", "error": str(e), "retryable": True}
+
+
 def _run_health_stage(db, repo, progress) -> dict:
     """The health stage's own error boundary.
 
@@ -68,7 +106,7 @@ def _run_health_stage(db, repo, progress) -> dict:
         decision = should_create_snapshot(db, repo)
         if not decision.should_create:
             return {"status": "skipped", "reason": decision.reason, "retryable": False}
-        snapshot = create_snapshot(db, repo)
+        snapshot = create_snapshot(db, repo, on_progress=progress)
         return {
             "status": "created",
             "snapshot_id": snapshot.id,
@@ -129,6 +167,7 @@ def _run_job(job_id: int) -> None:
         #
         # Still zero outbound AI: this stage is AST parsing, git history and
         # graph maths only, same as every other stage here.
+        clustering_stage = _run_clustering_stage(db, repo, progress)
         health_stage = _run_health_stage(db, repo, progress)
 
         job.status = "done"
@@ -144,6 +183,7 @@ def _run_job(job_id: int) -> None:
             "imports_resolved": report.imports_resolved,
             "blind_spots": report.blind_spots,
             "reduced_confidence": rank_result["reduced_confidence"],
+            "clustering": clustering_stage,
             "health": health_stage,
         }
         job.finished_at = datetime.now(timezone.utc)

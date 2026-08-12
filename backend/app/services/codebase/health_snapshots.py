@@ -192,12 +192,25 @@ def _repo_root(repo: Repo) -> Path:
     return root / repo.source_root if repo.source_root else root
 
 
-def collect_inputs(db: Session, repo: Repo) -> list:
+def collect_inputs(db: Session, repo: Repo, on_progress=None) -> list:
     """One AST pass over the repo's files, joined to already-persisted graph
-    and history facts. Read-only."""
+    and history facts. Read-only.
+
+    `on_progress(stage, current, total, message)` is optional and defaults to
+    silence, so every existing caller and test is unaffected. It exists because
+    this loop is where the health stage spends nearly all its time -- a full
+    tree-sitter parse per file, independent of what changed, so its cost tracks
+    repo size rather than diff size. On apache/superset that was 35.5s behind a
+    single unchanging "Computing code health" message, the longest silent
+    stretch in the whole pipeline.
+    """
     root = _repo_root(repo)
+    files = db.query(CodeFile).filter(CodeFile.repo_id == repo.id).all()
+    total = len(files)
     inputs = []
-    for f in db.query(CodeFile).filter(CodeFile.repo_id == repo.id).all():
+    for index, f in enumerate(files, 1):
+        if on_progress is not None and index % 200 == 0:
+            on_progress("health", index, total, "Computing code health")
         try:
             data = (root / f.path).read_bytes()
         except OSError:
@@ -463,7 +476,7 @@ def _axis_summary(results: list, axis_name: str) -> dict:
     return summary
 
 
-def create_snapshot(db: Session, repo: Repo) -> CodeHealthSnapshot:
+def create_snapshot(db: Session, repo: Repo, on_progress=None) -> CodeHealthSnapshot:
     """Score everything in memory, then write the snapshot and all per-file
     rows in a single transaction. Raises without writing anything if scoring
     fails -- there is no partial snapshot state."""
@@ -471,7 +484,7 @@ def create_snapshot(db: Session, repo: Repo) -> CodeHealthSnapshot:
     # content it actually measured, not of whatever the tree looks like by the
     # time the write happens.
     fingerprint = source_fingerprint(db, repo)
-    inputs = collect_inputs(db, repo)
+    inputs = collect_inputs(db, repo, on_progress=on_progress)
     ctx = build_repo_context(inputs)
 
     # --- everything below this line is pure computation; no DB writes yet ---

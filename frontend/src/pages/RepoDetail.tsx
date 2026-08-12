@@ -517,33 +517,69 @@ export default function RepoDetail() {
     document.getElementById(`file-row-${selectedFileId}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [view, selectedFileId]);
 
+  // Reattach to a job already running server-side.
+  //
+  // Without this the job id lived only inside the click handler that created
+  // it, so a refresh -- or a second tab -- landed on a page showing nothing
+  // while analysis was actively running. On a large repo that window is
+  // minutes, and it appears at exactly the moment a user is most likely to
+  // reload: waiting with no feedback. The rational reading of an idle page is
+  // "it died", and the rational response is to start it again, which then
+  // contends with the running job for the per-repo lock.
+  //
+  // The lock worked. The recovery endpoint worked. Nothing connected either to
+  // the moment a user needed them.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    api<RepoJobT>(`/api/repos/${id}/jobs/latest`)
+      .then((latest) => {
+        // 404 before any job is the normal state and lands in .catch below.
+        if (cancelled || (latest.status !== "running" && latest.status !== "queued")) return;
+        setJob(latest);
+        setRunning(true);
+        attachToJob(Number(id), latest.id).catch(() => setRunning(false));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  // Shared by the button and by reattachment on mount, so a recovered job
+  // renders exactly like one started in this tab rather than through a second,
+  // subtly different path.
+  const attachToJob = async (repoId: number, jobId: number) => {
+    await streamJobProgress(repoId, jobId, (evt) => {
+      if (evt.type === "progress") {
+        setJob((j) => ({
+          ...(j as RepoJobT),
+          status: evt.status as RepoJobT["status"],
+          stage: evt.stage,
+          progress_current: evt.current,
+          progress_total: evt.total,
+          message: evt.message,
+        }));
+      } else if (evt.type === "done") {
+        setRunning(false);
+        loadRepo();
+        loadRanking(scorer);
+        loadGraph(scorer);
+        loadDirGraph(scorer);
+      } else if (evt.type === "error") {
+        setRunning(false);
+        setError(evt.message);
+      }
+    });
+  };
+
   const sync = async () => {
     if (!repo) return;
     setRunning(true);
     setError("");
     try {
       const { job_id } = await api<{ job_id: number }>(`/api/repos/${repo.id}/jobs`, { method: "POST" });
-      await streamJobProgress(repo.id, job_id, (evt) => {
-        if (evt.type === "progress") {
-          setJob((j) => ({
-            ...(j as RepoJobT),
-            status: evt.status as RepoJobT["status"],
-            stage: evt.stage,
-            progress_current: evt.current,
-            progress_total: evt.total,
-            message: evt.message,
-          }));
-        } else if (evt.type === "done") {
-          setRunning(false);
-          loadRepo();
-          loadRanking(scorer);
-          loadGraph(scorer);
-          loadDirGraph(scorer);
-        } else if (evt.type === "error") {
-          setRunning(false);
-          setError(evt.message);
-        }
-      });
+      await attachToJob(repo.id, job_id);
     } catch (e: any) {
       setRunning(false);
       setError(e.message);

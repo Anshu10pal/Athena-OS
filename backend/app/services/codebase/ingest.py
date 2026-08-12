@@ -281,9 +281,15 @@ def _ingest_repo_locked(
     # exclusive, no cascading -- see js_root_discovery.config_for_file).
     # Stage 2 (below, Python only) picks up whatever stage 1 couldn't
     # resolve and applies Phase E2.1's evidence-based root discovery.
-    on_progress("resolving", 0, 0, "Resolving imports")
     id_to_file = {cf.id: cf for cf in files_by_path.values()}
     all_rows = db.query(CodeImport).filter(CodeImport.repo_id == repo.id).all()
+    # Counted, not announced once. This stage re-resolves EVERY import row on
+    # every ingest by design, so its cost scales with the import count rather
+    # than with what changed -- on apache/superset it sat at a bare `0, 0` for
+    # 20 seconds while working through 60,668 rows, which from the UI is
+    # indistinguishable from a hang. The caller throttles its own DB writes, so
+    # reporting per row costs nothing but an attribute assignment.
+    on_progress("resolving", 0, len(all_rows), "Resolving imports")
     imports_resolved = 0
 
     # config_search_root is always the true repo.local_path, NOT `root`
@@ -299,7 +305,9 @@ def _ingest_repo_locked(
     js_cross_root_edges = 0
 
     unresolved_python_rows = []  # (row, from_file, name) -- stage 2 candidates
-    for row in all_rows:
+    for row_index, row in enumerate(all_rows, 1):
+        if row_index % 500 == 0:
+            on_progress("resolving", row_index, len(all_rows), "Resolving imports")
         from_file = id_to_file.get(row.from_file_id)
         if from_file is None:
             continue

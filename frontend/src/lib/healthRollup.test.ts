@@ -159,6 +159,20 @@ describe("hotCohortSentence", () => {
     expect(s).toContain("1.03 below");
   });
 
+  it("names the axis, since the sentence sits above a lens-switched table", () => {
+    const s = hotCohortSentence(payload([], {
+      available: true, hot_mean: 8.39, baseline_mean: 9.43, delta: -1.03,
+    }));
+    expect(s).toContain("on Maintainability");
+  });
+
+  it("names the axis in the no-gap wording too", () => {
+    const s = hotCohortSentence(payload([], {
+      available: true, hot_mean: 9.0, baseline_mean: 9.0, delta: 0,
+    }));
+    expect(s).toContain("on Maintainability");
+  });
+
   it("distinguishes no gap from no comparison", () => {
     const s = hotCohortSentence(payload([], {
       available: true, hot_mean: 9.0, baseline_mean: 9.0, delta: 0,
