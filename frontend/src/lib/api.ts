@@ -430,6 +430,50 @@ export interface HealthTrendT {
   deltas: Record<string, number>;
 }
 
+export interface RollupAxisT {
+  files_scored: number;
+  files_na: number;
+  weighted_mean: number | null;
+  mean: number | null;
+  worst: number | null;
+  worst_path: string | null;
+  rankable: boolean;
+}
+
+export interface DirectoryRollupT {
+  path: string;
+  depth: number;
+  files_total: number;
+  nloc: number;
+  axes: Record<string, RollupAxisT>;
+}
+
+export interface HotCohortT {
+  available: boolean;
+  na_reason: string | null;
+  hot_files: number;
+  hot_mean: number | null;
+  baseline_files: number;
+  baseline_mean: number | null;
+  delta: number | null;
+  churn_threshold: number | null;
+  caveat: string | null;
+  paths: string[];
+  axis: string;
+  axis_note: string;
+}
+
+export interface HealthDirectoriesT {
+  snapshot_id: number;
+  rollup_version: number;
+  files_in_snapshot: number;
+  min_files_to_rank: number;
+  directories: DirectoryRollupT[];
+  weakest: Record<string, string[]>;
+  hot_cohort: HotCohortT;
+  staleness: HealthStalenessT;
+}
+
 export interface HealthStalenessT {
   stale: boolean;
   reason: "no_files_ingested" | "scoring_changed" | "source_changed" | null;

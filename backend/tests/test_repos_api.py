@@ -22,6 +22,7 @@ from app.api.repos import (
     get_graph,
     get_ranking,
     get_health,
+    get_health_directories,
     get_health_files,
     get_subsystem_members,
     get_subsystems,
@@ -1022,3 +1023,101 @@ class TestStalenessTravelsWithTheScore:
         repo = self._analysed(db_session, tmp_path)
         payload = compute_health_endpoint(repo.id, user=None, db=db_session)
         assert "staleness" in payload
+
+
+class TestDirectoryRollupEndpoint:
+    """The rollup is a view of stored rows, so the endpoint's job is to refuse
+    to serve one when there is nothing to view, and to carry the same staleness
+    verdict the scores themselves carry."""
+
+    def _analysed(self, db_session, tmp_path):
+        root = tmp_path / "repo"
+        _init_repo(root)
+        _write(root / "pkg" / "core.py",
+               '"""Core."""\n\n\n'
+               "def run(a, b):\n"
+               "    if a:\n        return 1\n"
+               "    if b:\n        return 2\n"
+               "    return 0\n\n\n"
+               "def classify(v):\n"
+               "    if v > 10:\n        return 'high'\n"
+               "    return 'low'\n")
+        _write(root / "pkg" / "util.py",
+               "from pkg.core import run, classify\n\n\n"
+               "def helper(x):\n"
+               "    value = run(x, False)\n"
+               "    label = classify(value)\n"
+               "    if label == 'high':\n        return value * 2\n"
+               "    return value\n\n\n"
+               "def describe(x):\n"
+               "    return f'{x}: {helper(x)}'\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        return repo
+
+    def test_404_before_any_snapshot_rather_than_an_empty_table(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        with pytest.raises(HTTPException) as e:
+            get_health_directories(repo.id, user=None, db=db_session)
+        assert e.value.status_code == 404
+
+    def test_directories_are_derived_from_the_stored_snapshot(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+
+        payload = get_health_directories(repo.id, user=None, db=db_session)
+        paths = {d["path"] for d in payload["directories"]}
+        assert "pkg" in paths
+        assert payload["files_in_snapshot"] > 0
+
+    def test_every_directory_reports_its_scored_and_na_counts(self, db_session, tmp_path):
+        """A number without its denominator is the failure this whole surface
+        exists to prevent."""
+        repo = self._analysed(db_session, tmp_path)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+
+        payload = get_health_directories(repo.id, user=None, db=db_session)
+        for d in payload["directories"]:
+            for axis in ("maintainability", "architecture_health", "change_hotspot"):
+                a = d["axes"][axis]
+                assert "files_scored" in a and "files_na" in a
+                if a["weighted_mean"] is not None:
+                    assert a["files_scored"] > 0
+
+    def test_the_ranking_floor_is_declared_in_the_payload(self, db_session, tmp_path):
+        """A reader must be able to tell that small directories were held back
+        from the ranking rather than found healthy."""
+        repo = self._analysed(db_session, tmp_path)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+        payload = get_health_directories(repo.id, user=None, db=db_session)
+        assert payload["min_files_to_rank"] >= 1
+
+    def test_staleness_travels_with_the_rollup_too(self, db_session, tmp_path):
+        from app.db.models import CodeFile
+
+        repo = self._analysed(db_session, tmp_path)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+        db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).delete()
+        db_session.commit()
+
+        payload = get_health_directories(repo.id, user=None, db=db_session)
+        assert payload["staleness"]["stale"] is True
+        assert payload["staleness"]["reason"] == "no_files_ingested"
+
+    def test_hot_cohort_is_na_on_a_single_commit_repo(self, db_session, tmp_path):
+        """One commit means one distinct commit count, so there is no cohort to
+        compare -- the endpoint must say so rather than slice arbitrarily."""
+        repo = self._analysed(db_session, tmp_path)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+        payload = get_health_directories(repo.id, user=None, db=db_session)
+        assert payload["hot_cohort"]["available"] is False
+        assert payload["hot_cohort"]["na_reason"]
+
+    def test_max_depth_is_validated(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        with pytest.raises(HTTPException) as e:
+            get_health_directories(repo.id, max_depth=-1, user=None, db=db_session)
+        assert e.value.status_code == 400

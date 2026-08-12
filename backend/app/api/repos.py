@@ -20,6 +20,7 @@ from app.services.codebase.git_ops import GitBinaryUnavailable
 from app.services.codebase.ingest import ingest_repo
 from app.services.codebase.ordering import compute_layers
 from app.services.codebase.graph_structure import persist_graph_structure
+from app.services.codebase.health_rollup import build_rollup
 from app.services.codebase.health_snapshots import create_snapshot, snapshot_staleness, trend_delta
 from app.services.codebase.overview import build_overview
 from app.services.codebase.policy import RepoBlocked
@@ -676,6 +677,43 @@ def get_health(repo_id: int, user: User = Depends(get_current_user), db: Session
     if not snapshot:
         raise HTTPException(404, "No code-health snapshot for this repo yet.")
     return _serialize_snapshot(db, snapshot, repo)
+
+
+@router.get("/{repo_id}/health/directories")
+def get_health_directories(
+    repo_id: int, max_depth: Optional[int] = None, weak_limit: int = 5,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Per-directory aggregates plus the change-cohort comparison, both derived
+    from the latest snapshot's stored per-file rows.
+
+    Read-only and additive: no threshold, weight or marker is involved, so
+    these numbers cannot disagree with the scores they summarise. Works on
+    snapshots taken before this endpoint existed, since it re-reads rows rather
+    than requiring anything new to have been written.
+
+    404 with no snapshot, matching GET /health -- an empty directory table
+    would read as "measured and nothing to report"."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    if max_depth is not None and max_depth < 0:
+        raise HTTPException(400, "max_depth must be >= 0")
+    snapshot = (
+        db.query(CodeHealthSnapshot)
+        .filter(CodeHealthSnapshot.repo_id == repo_id)
+        .order_by(CodeHealthSnapshot.computed_at.desc(), CodeHealthSnapshot.id.desc())
+        .first()
+    )
+    if not snapshot:
+        raise HTTPException(404, "No code-health snapshot for this repo yet.")
+    payload = build_rollup(db, repo, snapshot, max_depth=max_depth, weak_limit=weak_limit)
+    # The staleness verdict travels with any surface that shows these numbers,
+    # for the same reason it travels with the scores themselves: a directory
+    # table built from a snapshot describing files that no longer exist is
+    # exactly as misleading as the headline was.
+    payload["staleness"] = snapshot_staleness(db, repo, snapshot)
+    return payload
 
 
 @router.get("/{repo_id}/health/files")

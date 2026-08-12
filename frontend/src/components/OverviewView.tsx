@@ -1,4 +1,5 @@
-import { HealthResponseT, OverviewT, timeAgo } from "../lib/api";
+import { HealthDirectoriesT, HealthResponseT, OverviewT, timeAgo } from "../lib/api";
+import { HealthDetail } from "./HealthDetail";
 import { HealthTiles } from "./HealthTiles";
 
 // The repo overview is orientation, and now carries the code-health tiles
@@ -31,10 +32,11 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 type OverviewViewT = "reading" | "depgraph" | "architecture" | "layers" | "subsystems";
 
 export function OverviewView({
-  data, health, onComputeHealth, computingHealth, onSelectFile, onGoToView,
+  data, health, directories, onComputeHealth, computingHealth, onSelectFile, onGoToView,
 }: {
   data: OverviewT;
   health: HealthResponseT | null;
+  directories: HealthDirectoriesT | null;
   onComputeHealth: () => void;
   computingHealth: boolean;
   onSelectFile: (fileId: number) => void;
@@ -83,6 +85,11 @@ export function OverviewView({
         onCompute={onComputeHealth}
         computing={computingHealth}
       />
+
+      {/* Directly under the tiles on purpose: the tiles give the number, this
+          gives the location. Anywhere else and the reader has to hold one in
+          their head while they find the other. */}
+      {health && <HealthDetail data={directories} />}
 
       <section className="space-y-3">
         <h3 className="font-display text-xl text-snow/85">Contents</h3>

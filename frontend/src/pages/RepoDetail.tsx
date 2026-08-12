@@ -2,7 +2,7 @@ import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState } from "
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   api, DirGraphResponseT, GraphResponseT, RankedFileT, RankingResponseT, RepoJobT, RepoT, ScorerT,
-  SubsystemAlgorithmT, SubsystemsResponseT, OverviewT, HealthResponseT,
+  SubsystemAlgorithmT, SubsystemsResponseT, OverviewT, HealthResponseT, HealthDirectoriesT,
   streamJobProgress, timeAgo,
 } from "../lib/api";
 import {
@@ -336,6 +336,7 @@ export default function RepoDetail() {
   const [graphFocusDir, setGraphFocusDir] = useState<string | null>(null);
   const [overview, setOverview] = useState<OverviewT | null>(null);
   const [health, setHealth] = useState<HealthResponseT | null>(null);
+  const [directories, setDirectories] = useState<HealthDirectoriesT | null>(null);
   const [computingHealth, setComputingHealth] = useState(false);
 
   // DetailPanel shows file details whenever selectedFileId is set,
@@ -370,22 +371,36 @@ export default function RepoDetail() {
   };
 
   // 404 before any snapshot is the expected state, not an error worth
-  // surfacing -- the view renders its own "no snapshot yet" prompt.
+  // surfacing -- the view renders its own "no snapshot yet" prompt. The
+  // directory rollup 404s under exactly the same condition, so it is loaded
+  // alongside rather than gated on the first call succeeding.
   const loadHealth = () => {
     api<HealthResponseT>(`/api/repos/${id}/health`)
       .then(setHealth)
       .catch(() => setHealth(null));
+    api<HealthDirectoriesT>(`/api/repos/${id}/health/directories`)
+      .then(setDirectories)
+      .catch(() => setDirectories(null));
   };
 
   const computeHealth = async () => {
     setComputingHealth(true);
     try {
       setHealth(await api<HealthResponseT>(`/api/repos/${id}/health`, { method: "POST" }));
+      // Derived from the snapshot that was just written, so it has to be
+      // re-read after a compute or the detail would describe the previous one.
+      loadDirectories();
     } catch (e: any) {
       setError(e.message);
     } finally {
       setComputingHealth(false);
     }
+  };
+
+  const loadDirectories = () => {
+    api<HealthDirectoriesT>(`/api/repos/${id}/health/directories`)
+      .then(setDirectories)
+      .catch(() => setDirectories(null));
   };
 
   const loadRanking = (activeScorer: ScorerT) => {
@@ -843,6 +858,7 @@ export default function RepoDetail() {
         <OverviewView
           data={overview}
           health={health}
+          directories={directories}
           onComputeHealth={computeHealth}
           computingHealth={computingHealth}
           onSelectFile={(fileId) => {
