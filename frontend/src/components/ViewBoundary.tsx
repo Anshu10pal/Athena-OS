@@ -1,4 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from "react";
+import { readViewDiagnostics } from "../lib/viewDiagnostics";
 
 // A React error boundary per view.
 //
@@ -30,6 +31,19 @@ type Props = {
    * the nav mounted and the back link gone.
    */
   backTo?: { href: string; label: string };
+  /**
+   * Called AT CATCH TIME to capture state the throw itself does not carry --
+   * which view, which filters, what the user had narrowed to.
+   *
+   * A function rather than a value so nothing is computed on every render of a
+   * boundary that will almost always catch nothing, and so the snapshot
+   * describes the moment of the failure rather than the last render before it.
+   *
+   * Added for the unreproduced Dependency Graph crash: the next occurrence
+   * should be diagnosable from one pasted log line instead of another
+   * reproduction hunt.
+   */
+  context?: () => Record<string, unknown>;
   children: ReactNode;
 };
 
@@ -47,13 +61,30 @@ export class ViewBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     this.setState({ info });
-    // Prefixed with the view name so a user can paste one greppable line, and
-    // logged as a group so the component stack is not lost in a wall of text.
+
+    // Every diagnostic is gathered defensively. A boundary that throws while
+    // reporting a throw replaces a useful stack with its own, and the original
+    // is gone -- which is exactly the failure this boundary exists to prevent.
+    let context: Record<string, unknown> = {};
+    try {
+      context = { ...(this.props.context?.() ?? {}), ...readViewDiagnostics() };
+    } catch (e) {
+      context = { contextCaptureFailed: String(e) };
+    }
+
+    // One structured object, not a dozen labelled arguments: the point is that
+    // a user can right-click, "Copy object", and paste the whole state in one
+    // block. Same [ViewBoundary:<name>] prefix so the existing grep still works.
     // eslint-disable-next-line no-console
     console.error(
       `[ViewBoundary:${this.props.name}] ${error.name}: ${error.message}`,
-      "\ncomponent stack:", info.componentStack,
-      "\nerror stack:", error.stack,
+      {
+        view: this.props.name,
+        error: { name: error.name, message: error.message, stack: error.stack },
+        componentStack: info.componentStack,
+        url: typeof location !== "undefined" ? location.href : null,
+        ...context,
+      },
     );
   }
 

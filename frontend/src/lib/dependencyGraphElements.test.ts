@@ -176,3 +176,81 @@ describe("expandableDirs", () => {
     expect(dirs.map((d) => d.dir)).toEqual(["b", "a"]);
   });
 });
+
+describe("dangling edges — every emitted edge names an emitted node", () => {
+  // This pins an INVARIANT. It does not claim to fix the reported
+  // `Cannot read properties of undefined (reading 'index')` crash in the
+  // Dependency Graph, which has never been reproduced -- see decisions.md. The
+  // invariant is worth holding on its own: cytoscape throws when an edge names
+  // a node that is not in the graph, and DependencyGraph adds exactly what this
+  // function returns (`cy.elements().remove(); cy.add(elements)`), so a
+  // dangling edge here becomes a throw there.
+
+  function assertNoDanglingEdges(elements: { nodes: any[]; edges: any[] }) {
+    const ids = new Set(elements.nodes.map((n) => n.data.id));
+    for (const edge of elements.edges) {
+      expect(ids.has(edge.data.source), `edge ${edge.data.id} names missing source`).toBe(true);
+      expect(ids.has(edge.data.target), `edge ${edge.data.id} names missing target`).toBe(true);
+    }
+  }
+
+  it("LOADBEARING: an edge whose endpoint is outside the scope is dropped", () => {
+    // The shape that produces one in the app: the node set narrows (a filter,
+    // or a scope hop limit) while the edge list still refers to what was there
+    // before.
+    const elements = buildGraphElements(input({
+      nodes: [n(1, "a/one.py"), n(2, "b/two.py"), n(3, "c/three.py")],
+      scopedNodeIds: [1, 2],           // 3 is out of scope
+      scopedEdges: [e(1, 2), e(2, 3), e(3, 1)],
+    }));
+
+    assertNoDanglingEdges(elements);
+    expect(elements.edges).toHaveLength(1);
+  });
+
+  it("LOADBEARING: holds when every edge endpoint is missing", () => {
+    const elements = buildGraphElements(input({
+      nodes: [n(1, "a/one.py"), n(9, "z/nine.py")],
+      scopedNodeIds: [1],
+      scopedEdges: [e(9, 9), e(9, 1), e(1, 9)],
+    }));
+
+    assertNoDanglingEdges(elements);
+    expect(elements.edges).toEqual([]);
+  });
+
+  it("LOADBEARING: holds across collapsed folders, where ids are rewritten", () => {
+    // Folder collapsing maps file ids onto directory node ids. An edge to a file
+    // that is out of scope must not survive as an edge to its folder.
+    const elements = buildGraphElements(input({
+      nodes: [n(1, "pkg/a.py"), n(2, "pkg/b.py"), n(3, "other/c.py"), n(4, "gone/d.py")],
+      scopedNodeIds: [1, 2, 3],
+      scopedEdges: [e(1, 3), e(2, 4), e(4, 1)],
+    }));
+
+    assertNoDanglingEdges(elements);
+  });
+
+  it("LOADBEARING: holds when a scoped id has no matching node at all", () => {
+    // scopedNodeIds referencing an id absent from `nodes` -- the two lists are
+    // computed separately, so nothing structurally prevents this.
+    const elements = buildGraphElements(input({
+      nodes: [n(1, "a/one.py")],
+      scopedNodeIds: [1, 42],
+      scopedEdges: [e(1, 42), e(42, 1)],
+    }));
+
+    assertNoDanglingEdges(elements);
+  });
+
+  it("LOADBEARING: holds when an expanded folder narrows what is represented", () => {
+    const elements = buildGraphElements(input({
+      nodes: [n(1, "pkg/a.py"), n(2, "pkg/b.py"), n(3, "pkg/c.py"), n(5, "out/e.py")],
+      scopedNodeIds: [1, 2, 3],
+      scopedEdges: [e(1, 5), e(5, 2), e(1, 2)],
+      expandedDirs: new Set(["pkg"]),
+    }));
+
+    assertNoDanglingEdges(elements);
+  });
+});

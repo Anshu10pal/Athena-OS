@@ -1151,8 +1151,38 @@ export default function RepoDetail() {
         </ViewBoundary>
       )}
 
+      {/* The only boundary given a context callback so far, because it wraps the
+          one open unreproduced crash. Filter state travels because the reported
+          sequence was a filter interaction (a CLUSTER chip clicked then
+          unclicked); the element counts and ELK layout phase come from
+          viewDiagnostics, which DependencyGraph writes. */}
       {files.length > 0 && view === "depgraph" && graph && (
-        <ViewBoundary name="Dependency Graph">
+        <ViewBoundary
+          name="Dependency Graph"
+          context={() => ({
+            filters: {
+              segments: filters.segments,
+              languages: filters.languages,
+              subsystemId: filters.subsystemId,
+              subsystemAlgorithm: filters.subsystemAlgorithm,
+              query: filters.query,
+              hideNoise: filters.hideNoise,
+              hideZeroFanIn: filters.hideZeroFanIn,
+            },
+            filterActive,
+            counts: {
+              files: files.length,
+              visible: visible.length,
+              graphNodes: graphNodes.length,
+              visibleGraphNodes: visibleGraphNodes.length,
+              depGraphNodes: depGraphNodes.length,
+              apiEdges: graph?.edges.length ?? null,
+            },
+            selectedFileId,
+            graphFocusFileId,
+            scorer,
+          })}
+        >
           <Suspense
             fallback={<p className="text-fog text-sm font-mono">Loading graph engine…</p>}
           >

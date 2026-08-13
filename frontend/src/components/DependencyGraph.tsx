@@ -5,6 +5,7 @@ import { GraphEdgeT, GraphNodeT } from "../lib/api";
 import { clusterColor } from "./ArchitectureMap";
 import { buildGraphElements, CyNodeData, expandableDirs } from "../lib/dependencyGraphElements";
 import { GraphDirectionT, MAX_NODES_ADVISORY, scopeGraph } from "../lib/dependencyGraphScope";
+import { recordGraphElements, recordLayoutSettled, recordLayoutStarted } from "../lib/viewDiagnostics";
 
 // Phase J1: the file-level dependency graph, rebuilt as a scoped explorer.
 //
@@ -363,8 +364,24 @@ export function DependencyGraph({
   // dependency and not a ref read (see the state comment above).
   useEffect(() => {
     if (!cy) return;
+    // Diagnostic only -- see lib/viewDiagnostics.ts. Recorded here because a
+    // ViewBoundary catching a throw sits above this component and cannot read
+    // its state once it has unmounted.
+    //
+    // Note what this update does: a FULL replacement, not a diff. Whatever
+    // cytoscape held is removed and the freshly built set added, so an edge
+    // naming a missing node can only come from buildGraphElements itself (which
+    // drops them -- see its dangling-edge tests), never from a stale graph.
+    // `elements` is a flat ElementDefinition[]; an edge is the one carrying a
+    // source, which is cytoscape's own discriminator.
+    const edgeCount = elements.filter((el) => (el.data as { source?: string }).source !== undefined).length;
+    recordGraphElements(elements.length - edgeCount, edgeCount, {
+      showFullGraph,
+      focusCount: focusIds.length,
+    });
     cy.elements().remove();
     cy.add(elements);
+    recordLayoutStarted();
     const layout = cy.layout({
       name: "elk",
       // @ts-expect-error -- cytoscape-elk's options are not part of
@@ -386,8 +403,11 @@ export function DependencyGraph({
     layout.run();
     // ELK resolves asynchronously; fit after it settles, not before, or
     // the viewport is fitted to pre-layout positions.
-    cy.one("layoutstop", () => cy.fit(undefined, 40));
-  }, [cy, elements]);
+    cy.one("layoutstop", () => {
+      recordLayoutSettled();
+      cy.fit(undefined, 40);
+    });
+  }, [cy, elements, showFullGraph, focusIds]);
 
   const hasFocus = focusIds.length > 0 || showFullGraph;
 
