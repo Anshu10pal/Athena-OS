@@ -67,6 +67,27 @@ export const EMPTY_FILTER_STATE: FilterState = {
   subsystemAlgorithm: "modularity",
 };
 
+// Whether any filter is narrowing the file set right now.
+//
+// `subsystemAlgorithm` is deliberately NOT part of this: it records WHICH
+// algorithm's ids a subsystem filter refers to, and on its own selects nothing.
+// Treating it as a filter would make every view believe it was filtered from
+// first render, since it always has a value.
+//
+// Stated as one function rather than re-derived per caller: a view that suppresses
+// a repo-wide statistic under a filter and a counter that reports a filtered
+// total must agree about whether a filter is active, or one of them is lying.
+export function isFilterActive(state: FilterState): boolean {
+  return (
+    state.segments.length > 0 ||
+    state.languages.length > 0 ||
+    state.hideNoise ||
+    state.hideZeroFanIn ||
+    state.query.trim() !== "" ||
+    state.subsystemId !== null
+  );
+}
+
 // "(root)" for a file with no "/" at all -- a repo's own top-level files
 // (README.md, package.json) need a segment too, not to be silently dropped
 // from the derived chip list.

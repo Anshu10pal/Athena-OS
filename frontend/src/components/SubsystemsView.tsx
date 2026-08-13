@@ -7,7 +7,7 @@ import {
   SubsystemsResponseT,
   SubsystemT,
 } from "../lib/api";
-import { shapeClusterList, TOP_N } from "../lib/clusterList";
+import { shapeClusterList, TOP_N, VisibleCountsT } from "../lib/clusterList";
 
 // Phase I1 (extended I6): modularity/Louvain are two independent
 // clustering algorithms over the resolved import graph; on this repo they
@@ -62,10 +62,12 @@ function CycleFinding({ entry }: { entry: CycleCoherenceEntryT }) {
 }
 
 function SubsystemCard({
-  repoId, subsystem, expanded, members, loadingMembers, onSelect, onSelectFile, onToggleExpand, onRenamed,
+  repoId, subsystem, visibleCount, expanded, members, loadingMembers, onSelect, onSelectFile, onToggleExpand, onRenamed,
 }: {
   repoId: string;
   subsystem: SubsystemT;
+  /** Files matching the active filter, or null when no filter is active. */
+  visibleCount: number | null;
   expanded: boolean;
   members: SubsystemMembersResponseT | null;
   loadingMembers: boolean;
@@ -139,7 +141,18 @@ function SubsystemCard({
           </button>
         )}
       </div>
-      <p className="font-mono text-[10px] text-fog">{subsystem.member_count} files · {ruleNote}</p>
+      {/* BOTH numbers under a filter, never the filtered one alone. "3 files"
+          on a 20-member cluster misrepresents the cluster; "3 of 20" states
+          what matched and what the cluster is. The same reasoning that made
+          client-side filtering of the directory map wrong -- a filtered count
+          displayed as an aggregate -- with the difference that here both
+          numbers are available, so both are shown. */}
+      <p className="font-mono text-[10px] text-fog">
+        {visibleCount === null
+          ? `${subsystem.member_count} files`
+          : `${visibleCount} of ${subsystem.member_count} files match`}{" "}
+        · {ruleNote}
+      </p>
       <button onClick={() => onToggleExpand(subsystem.id)} className="font-mono text-[10px] text-fog hover:text-accent">
         {loadingMembers ? "loading…" : expanded ? "− hide files" : "+ show files"}
       </button>
@@ -171,7 +184,7 @@ function SubsystemCard({
 
 export function SubsystemsView({
   repoId, algorithm, onAlgorithmChange, data, onCompute, computing, onSelectSubsystem, onSelectFile,
-  collapsed, onCollapsedChange, onDataChanged,
+  collapsed, onCollapsedChange, onDataChanged, visibleCounts, filterActive,
 }: {
   repoId: string;
   algorithm: SubsystemAlgorithmT;
@@ -187,6 +200,11 @@ export function SubsystemsView({
   collapsed: boolean;
   onCollapsedChange: (v: boolean) => void;
   onDataChanged: () => void;
+  /** Visible files per cluster id under the active file filter, null when none.
+   * Supplied by the caller because only the ranked file list carries subsystem
+   * membership for all three algorithms. */
+  visibleCounts: VisibleCountsT;
+  filterActive: boolean;
 }) {
   const [memberCache, setMemberCache] = useState<Record<number, SubsystemMembersResponseT>>({});
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -194,7 +212,7 @@ export function SubsystemsView({
   const [showAll, setShowAll] = useState(false);
 
   const { grouped, singletons, visible, clusteredFiles } =
-    shapeClusterList(data?.subsystems, showAll);
+    shapeClusterList(data?.subsystems, showAll, visibleCounts);
 
   const handleToggleExpand = async (id: number) => {
     if (expandedId === id) {
@@ -239,13 +257,26 @@ export function SubsystemsView({
             ? "Detecting…"
             : "Detect Dependency Clusters"}
         </button>
-        {data?.agreement !== null && data?.agreement !== undefined && (
+        {/* Suppressed under a filter, not caveated. Agreement is computed over
+            every file in the repo; beside a filtered cluster list it is a
+            statistic whose population is not the one on screen (§17.5c). A
+            caveated number still gets read and compared -- a suppressed one
+            with a reason cannot be. */}
+        {!filterActive && data?.agreement !== null && data?.agreement !== undefined && (
           <span className="font-mono text-[10px] text-fog">
             {algorithm === "hdbscan" ? "HDBSCAN ⇄ Modularity agreement" : "Modularity ⇄ Louvain agreement"}:{" "}
             <span className="text-snow">{Math.round(data.agreement * 100)}%</span>
           </span>
         )}
       </div>
+
+      {filterActive && data && (
+        <p className="font-mono text-[10px] text-fog leading-relaxed max-w-2xl">
+          Algorithm agreement and cycle coherence are computed across the whole repository and are not
+          recalculated under a filter, so they are hidden here. Cluster sizes below show how many of each
+          cluster's files match.
+        </p>
+      )}
 
       <p className="text-fog text-[11px] font-mono leading-relaxed max-w-2xl">
         These are files that import each other more than they import the rest of the repo -- a measured coupling
@@ -271,7 +302,7 @@ export function SubsystemsView({
         </p>
       )}
 
-      {data && data.cycle_coherence && data.cycle_coherence.length > 0 && (
+      {!filterActive && data && data.cycle_coherence && data.cycle_coherence.length > 0 && (
         <div className="space-y-2">
           <p className="font-mono text-[10px] uppercase tracking-widest text-fog">Cycle-cluster coherence</p>
           {data.cycle_coherence.map((entry) => (
@@ -305,8 +336,16 @@ export function SubsystemsView({
               </span>
             </div>
             <p className="font-mono text-[10px] text-fog mt-1.5">
-              {clusteredFiles} of {clusteredFiles + data.unclustered_count} files clustered
-              {typeof data.agreement === "number" && (
+              {/* Under a filter this counts MATCHING files, so it agrees with
+                  the filter bar's own "Showing N of M" line. The unclustered
+                  total is repo-wide and cannot be filtered without membership
+                  for unclustered files, so it is omitted rather than mixed with
+                  a filtered numerator -- which would read as a ratio of two
+                  different populations. */}
+              {filterActive
+                ? `${clusteredFiles} matching files in these clusters`
+                : `${clusteredFiles} of ${clusteredFiles + data.unclustered_count} files clustered`}
+              {!filterActive && typeof data.agreement === "number" && (
                 <> · {(data.agreement * 100).toFixed(1)}% algorithm agreement</>
               )}
             </p>
@@ -320,6 +359,7 @@ export function SubsystemsView({
                     key={s.id}
                     repoId={repoId}
                     subsystem={s}
+                    visibleCount={visibleCounts ? visibleCounts.get(s.id) ?? 0 : null}
                     expanded={expandedId === s.id}
                     members={memberCache[s.id] ?? null}
                     loadingMembers={loadingMembers && expandedId === s.id}
@@ -343,7 +383,12 @@ export function SubsystemsView({
                   </div>
                 )}
 
-                {data.unclustered_count > 0 && (
+                {/* Hidden under a filter: `unclustered_count` is a repo-wide
+                    scalar with no per-file membership behind it, so it cannot be
+                    narrowed to the visible set. Showing the repo-wide figure
+                    beside filtered clusters would invite the same
+                    two-populations comparison the summary line avoids. */}
+                {!filterActive && data.unclustered_count > 0 && (
                   <div className="card p-4 space-y-1 border-dashed">
                     <p className="font-display text-sm text-fog">Unclustered</p>
                     <p className="font-mono text-[10px] text-fog">

@@ -14,7 +14,9 @@ import {
   FilterState,
   filterFiles,
   filterStateFromSearchParams,
+  isFilterActive,
   NOISE_CATEGORIES,
+  subsystemIdOf,
 } from "../lib/filters";
 import { SlideOver } from "../components/SlideOver";
 import { ViewBoundary } from "../components/ViewBoundary";
@@ -673,6 +675,26 @@ export default function RepoDetail() {
   const subsystemIds = useMemo(() => deriveSubsystemIds(files, subsystemAlgorithm), [files, subsystemAlgorithm]);
   const visible = useMemo(() => filterFiles(files, filters), [files, filters]);
   const visibleGraphNodes = useMemo(() => filterFiles(graphNodes, filters), [graphNodes, filters]);
+  const filterActive = useMemo(() => isFilterActive(filters), [filters]);
+
+  // Dependency Clusters honours the file filter without a new endpoint: the
+  // ranked file list already carries a subsystem id per algorithm (RankedFileT,
+  // which is how the cluster filter chips are derived), so the matching count
+  // per cluster is a local count over the FILTERED list.
+  //
+  // Deliberately built from `visible` (RankedFileT) and not `visibleGraphNodes`
+  // (GraphNodeT): the latter carries only `subsystem_modularity_id`, so counts
+  // for Louvain or HDBSCAN would silently come out as zero for every cluster --
+  // a filter that appears to match nothing rather than one that fails loudly.
+  const clusterVisibleCounts = useMemo(() => {
+    if (!filterActive) return null;
+    const counts = new Map<number, number>();
+    for (const f of visible) {
+      const id = subsystemIdOf(f, subsystemAlgorithm);
+      if (id != null) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }, [filterActive, visible, subsystemAlgorithm]);
 
   // Phase J1: opening the Dependency Graph adopts whatever is already
   // selected -- click a directory on the Architecture map (or a file
@@ -935,9 +957,25 @@ export default function RepoDetail() {
                 visibleGraphNodes, used by every other tab) doesn't carry
                 subsystem membership at all, so falling through to it while
                 a subsystem filter is active would always read 0 regardless
-                of tab, which is exactly what a browser pass caught. */}
-            Showing {view === "reading" || filters.subsystemId !== null ? visible.length : visibleGraphNodes.length} of{" "}
-            {files.length} files
+                of tab, which is exactly what a browser pass caught.
+
+                Phase L: `subsystems` joins that branch, because Dependency
+                Clusters now filters from `visible` too -- see
+                clusterVisibleCounts. This counter and the view it sits above
+                have to report the same population or one of them is lying, and
+                that disagreement IS the recorded defect on the remaining tabs.
+
+                Architecture and Matrix still fall through to
+                visibleGraphNodes and still do not filter their content, so this
+                number moves there while the view does not. Not fixed here: that
+                needs the /graph endpoint to accept the filter (see
+                decisions.md), and it is deliberately a separate pass -- the
+                endpoint is read by six other things. */}
+            Showing{" "}
+            {view === "reading" || view === "subsystems" || filters.subsystemId !== null
+              ? visible.length
+              : visibleGraphNodes.length}{" "}
+            of {files.length} files
           </p>
         </div>
       )}
@@ -1210,6 +1248,8 @@ export default function RepoDetail() {
             }}
             // Collapsed by default, and persisted in the URL like the other
             // filters so it survives a tab switch, a reload and a shared link.
+            visibleCounts={clusterVisibleCounts}
+            filterActive={filterActive}
             collapsed={searchParams.get("clusters") !== "open"}
             onCollapsedChange={(next) => {
               const p = new URLSearchParams(searchParams);

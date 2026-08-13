@@ -7,7 +7,9 @@ import {
   deriveTopLevelSegments,
   EMPTY_FILTER_STATE,
   filterFiles,
+  FilterState,
   filterStateFromSearchParams,
+  isFilterActive,
   topLevelSegment,
 } from "./filters";
 
@@ -232,5 +234,41 @@ describe("URL round-trip", () => {
   it("an unrecognized subsystemAlgo param falls back to modularity", () => {
     const params = new URLSearchParams({ subsystem: "1", subsystemAlgo: "not-a-real-algorithm" });
     expect(filterStateFromSearchParams(params).subsystemAlgorithm).toBe("modularity");
+  });
+});
+
+describe("isFilterActive", () => {
+  it("is false for the empty state", () => {
+    expect(isFilterActive(EMPTY_FILTER_STATE)).toBe(false);
+  });
+
+  it("LOADBEARING: subsystemAlgorithm alone is not a filter", () => {
+    // It records WHICH algorithm's ids a subsystem filter refers to and selects
+    // nothing on its own. Counting it would make every view believe it was
+    // filtered from first render, since it always holds a value -- which would
+    // suppress the repo-wide cluster statistics permanently.
+    expect(isFilterActive({ ...EMPTY_FILTER_STATE, subsystemAlgorithm: "louvain" })).toBe(false);
+    expect(isFilterActive({ ...EMPTY_FILTER_STATE, subsystemAlgorithm: "hdbscan" })).toBe(false);
+  });
+
+  it("is true for each filter dimension on its own", () => {
+    const cases: Partial<FilterState>[] = [
+      { segments: ["backend"] },
+      { languages: ["python"] },
+      { hideNoise: true },
+      { hideZeroFanIn: true },
+      { query: "utils" },
+      { subsystemId: 4 },
+    ];
+    for (const patch of cases) {
+      expect(isFilterActive({ ...EMPTY_FILTER_STATE, ...patch })).toBe(true);
+    }
+  });
+
+  it("treats a whitespace-only query as no filter", () => {
+    // filterFiles trims before matching, so a whitespace query narrows nothing.
+    // Reporting it as active would suppress repo-wide statistics for a filter
+    // that removes no files.
+    expect(isFilterActive({ ...EMPTY_FILTER_STATE, query: "   " })).toBe(false);
   });
 });
