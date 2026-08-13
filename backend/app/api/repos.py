@@ -13,7 +13,7 @@ from app.db.models import (
     CodeFile, CodeFileHealth, CodeFileRank, CodeHealthSnapshot, CodeImport,
     CodeSubsystem, Repo, RepoJob, User,
 )
-from app.services.codebase import edge_weights, findings_queue, jobs, registry
+from app.services.codebase import deletion, edge_weights, findings_queue, jobs, registry, repo_lock
 from app.services.codebase.dir_aggregation import DEFAULT_MAX_GROUPS, aggregate_to_directories
 from app.services.codebase.discovery import TooManyFilesError
 from app.services.codebase.git_ops import GitBinaryUnavailable
@@ -123,6 +123,55 @@ def set_seed_exclude_paths(
     repo.seed_exclude_paths = payload.seed_exclude_paths
     db.commit()
     return serialize_repo(repo)
+
+
+class RepoDeleteIn(BaseModel):
+    # Typed confirmation, matching the shape used for other irreversible or
+    # externally-visible actions. Named `confirm` rather than `name` so a caller
+    # cannot pass it by accident while meaning something else.
+    confirm: str
+
+
+@router.delete("/{repo_id}")
+def delete_repo_endpoint(
+    repo_id: int, body: RepoDeleteIn,
+    user: User = Depends(require_write_access), db: Session = Depends(get_db),
+):
+    """Remove a repo: its rows always, its clone directory only when Athena
+    created it. Irreversible, no undo.
+
+    Held under the per-repo advisory lock for the whole operation. Without it an
+    in-flight ingest would keep writing rows into a repo being deleted, and the
+    two would interleave into a half-present repo -- exactly the contention the
+    lock already exists for. A busy repo is a 409 naming the job, not a failure
+    partway through.
+
+    See deletion.py for why the directory guard has two independent conditions
+    and why the delete order is written out."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+
+    try:
+        with repo_lock.repo_lock(repo_id, "delete"):
+            try:
+                report = deletion.delete_repo(db, repo, body.confirm)
+            except deletion.RepoDeletionRefused as e:
+                raise HTTPException(400, str(e))
+            except OSError as e:
+                # Rows are already committed at this point; only the directory
+                # removal can fail here. Reported as a partial success with the
+                # path, because "the repo is gone but this directory is still on
+                # disk" is actionable and "500" is not.
+                raise HTTPException(
+                    500,
+                    f"Repo rows were deleted, but its directory could not be removed: {e}. "
+                    f"Remove {repo.local_path!r} by hand.",
+                )
+    except RepoBusyError as e:
+        raise HTTPException(409, str(e))
+
+    return report.to_dict()
 
 
 @router.post("/{repo_id}/resync")
