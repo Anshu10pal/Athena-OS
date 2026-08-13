@@ -1103,6 +1103,43 @@ path, which is what a new user hits and where parse and resolve scale by orders
 of magnitude, **remains untested at this scale**. "How long does first analysis
 take" is the first question any user asks and the answer is currently unknown.
 
+*(Since resolved: the cold run is §17.14. It cost 477.9 s and produced the
+fifth clause below.)*
+
+#### A fifth clause: structure and magnitude are separately predictable, and only one of them was
+
+The cold-ingest prediction (§17.14) was scored per stage, per the rule above.
+The result splits cleanly in a way a single score would have hidden:
+
+| What was predicted | Score |
+|---|---|
+| **Structure** — which stages scale with a cold cache, which are flat | **8 of 10** |
+| **Magnitude** — the seconds per stage | **2 of 10**, and every miss low, by 1.8× to 4.7× |
+
+Eight misses in one direction is a bias, not error. A model wrong at random
+overshoots somewhere.
+
+The two halves came from different places. The structural claims were reasoning
+about **what the code does**: parsing is gated on a content hash so it scales
+with a cold cache; resolution re-resolves every row by design so it does not.
+Those held. The magnitudes were **arithmetic over a 67-file Python sample**
+extrapolated to a mixed 6,516-file corpus — the same too-small, too-unlike
+sample §17.5d warns about, used as a rate.
+
+**The rule: score structure and magnitude separately, and report them
+separately.** They have different mechanisms, different failure modes, and
+different worth. A structural claim is reusable and falsifiable — "resolution is
+flat" is either true or not, and the warm run settled it. A magnitude carried
+from an unrepresentative sample is a guess wearing arithmetic, and per the third
+clause the check is the same one: *what population was this rate measured over,
+and is it the population I am applying it to?*
+
+Note also that one of the two magnitude "hits" does not count. `clustering` was
+predicted at 20 s and came in at 16.2 s, but had been labelled *widest
+uncertainty, never timed* before the run. **A hit inside a band declared
+unreliable is not evidence of a model** — it is the fourth clause again, at the
+level of a single stage.
+
 ### 17.1 `cycle_participation` — reversed
 
 §10.3 concluded the marker was **empirically inert**: zero file-level cycles
@@ -1736,3 +1773,145 @@ process — a dev server, a worker, a REPL, a cached import, a warm container �
 needs the process's identity confirmed, not its responsiveness. Two code paths
 believed identical is the failure; the check is to make one of them prove which
 code it holds.
+
+### 17.13 Self-amplifying cost — when slowness causes more of the operation that caused it
+
+A slow function is a slow function. This is a different animal: **a periodic
+operation whose frequency is driven by elapsed time, and whose cost is charged
+to the same elapsed time.** Slowness produces more occurrences, which produce
+more slowness. It is a loop, not a rate.
+
+**The instance.** `jobs.py`'s progress callback committed whenever
+`_PROGRESS_WRITE_INTERVAL` (0.3s) had passed, so the SSE stream could see the
+job row change. SQLAlchemy expires all loaded objects on commit by default, and
+by the resolution stage that session held ~90k of them (6,522 files + 22,856
+symbols + 60,865 imports). Every commit therefore invalidated the working set,
+and the loop re-SELECTed each row the moment it next touched an attribute.
+
+Resolution on apache/superset went from ~20s to ~90s. It was not read as a
+regression for two ingests, because a plausible story was available: the
+per-500-row progress reporting had been added deliberately, so of course
+reporting costs something.
+
+**The measurement that identified the loop.** Reducing the commit frequency —
+the obvious fix — bought back far less than proportionally:
+
+| commits | resolving | over silent | cost per commit |
+|--------:|----------:|------------:|----------------:|
+|     170 |    91.52s |      70.97s |           0.42s |
+|      56 |    69.75s |      49.20s |           0.88s |
+|      21 |    63.95s |      43.41s |           2.07s |
+|       0 |    20.55s |           — |               — |
+
+**8× fewer commits removed only 39% of the overhead, and the cost per commit
+rose 5×.** That shape is the diagnostic. A per-call price is linear: halve the
+calls, halve the cost. Here, rarer commits each expired a larger accumulated
+set, so the total was roughly conserved while the per-call figure inflated to
+match.
+
+**The tell, stated generally: if halving the frequency does not roughly halve
+the cost, you are not paying a per-call price — you are in a loop.** Any
+throttled-commit, throttled-flush, time-based-checkpoint, periodic-GC or
+autosave-on-a-timer pattern has this exposure.
+
+**Why it also poisons the variance.** Two runs under *identical* conditions
+measured 66.53s and 42.98s — a 1.5× spread that reads as machine noise and
+would have been written off as such. It isn't noise. Commit count is
+time-driven, so the slower run took more ticks, committed more, and was slower
+for it. The loop amplifies any initial perturbation, so the spread is a
+*symptom of the defect*, not a property of the machine. Writing it off as
+variance is the wrong explanation for the right observation.
+
+**Why the obvious fix was the wrong one.** Sampling harder — fewer callback
+invocations — improves the number and leaves the loop intact, so the
+improvement looks like a fix. The actual fix removes the coupling:
+`expire_on_commit=False` on the job session, after which commit frequency stops
+mattering and the interval is no longer load-bearing. Measured on the real job
+path, warm: 183.5s → 94.3s, with resolution at 11.20s and output identical to
+the digit (26,557 resolved, 254/241 clusters, agreement 0.8133015756687432).
+
+**Two-layer diagnosis, and the layer that was nearly missed.** The first
+hypothesis was that the callback ran per row. It does not — `ingest.py`'s
+resolution loop calls `on_progress` once per 500 rows, so 60,865 rows produce
+122 calls. That was checkable in the source before hypothesising, and checking
+it is what moved the question from *how often is it called* to *what does each
+call do*. Same shape as §17.12: a number was built on without first checking
+what it measured.
+
+**The scoping argument, which is what makes the flag correct rather than merely
+faster.** `expire_on_commit=False` is applied to the job's session only, never
+to `SessionLocal` globally — request sessions serving concurrent writers do want
+the default, because staleness is a real risk when another writer exists. It is
+safe for the job session specifically because ingest holds the repo advisory
+lock (`repo_lock.py`) for its whole call, making that session the sole writer
+for the duration: there is no concurrent mutation whose value it could go stale
+against. A reader who finds the flag without that argument will reasonably
+assume it is a shortcut, which is why the argument is written at the flag site
+and not only here.
+
+### 17.14 Cold ingest at scale — apache/superset, 6,522 files
+
+The cold counterpart to §17.8's warm job 19, and the measurement §17.0b's fifth
+clause was scored against. It existed to settle one design question: whether an
+MCP server's first call can be synchronous.
+
+**Method, because the number is only worth what the setup is worth.** Quiet
+machine; one listener, no `--reload`, serving PID's start time matched to the
+launch second (§17.12); parse cache invalidated by overwriting `content_sha256`
+for repo 6 only, with the other six repos' hashes verified untouched; cold state
+confirmed **in the job record** rather than assumed — `files_parsed: 6522`,
+`files_skipped_unchanged: 0`.
+
+**Result: 477.9 s (8.0 min).** Against the stated 5-minute threshold, that
+settles it: **the first call cannot be synchronous; the interface needs an async
+job handle from the start.**
+
+| Stage | Cold | Warm | |
+|---|---:|---:|---|
+| parsing | 234.80s | 18.84s | **the only stage that scales** — 12.5× |
+| resolving | 93.44s | 98.56s | flat, as predicted |
+| health | 64.11s | *skipped* | not comparable |
+| resyncing | 30.52s | 12.00s | cold fetched real commits |
+| clustering | 16.23s | 16.39s | flat |
+| ranking_graph | 14.72s | 14.61s | flat |
+| ranking_history | 9.55s | 8.72s | flat |
+| cleanup | 5.36s | 5.48s | flat, and not deletion work — see below |
+| ranking_scoring | 4.33s | 3.80s | flat |
+| discovering | 3.50s | 3.22s | flat |
+| **total** | **477.9s** | **183.5s** | |
+
+**The instrument had to be replaced before the measurement.** Every prior
+per-stage figure came from the SSE stream, which polls a row written on a 0.3 s
+throttle — so a stage's silence is charged to whichever stage last managed a
+write. That is how 6.7 s once landed on `cleanup`, a stage independently
+measured at 0.01 s. Stage times now come from marks taken in-process at the
+transition itself, stored as `stage_seconds` in the job record. **Measuring with
+a known-bad instrument produces a number nobody can use**, so replacing it first
+was not scope creep.
+
+**A property of every figure above, including the fixed ones: stage marks bound
+labels, not work.** The 5.36 s `cleanup` interval contains **zero** deletions —
+it is `ingest.py`'s flush of ~90k pending rows plus the load of all 60,865
+import rows, both of which sit between the `cleanup` mark and the `resolving`
+mark. The new instrument is honest about where labels change and silent about
+what falls between them, which is one level down from the bug it fixed.
+
+**The finding that outlived the headline.** Cold cost is a one-time price paid
+knowingly. The warm floor is paid on every run, and at the time of measurement
+**165 s of the 183.5 s reran regardless of what changed** — the parse cache
+saved 45% and left a floor incrementality does not touch. That reclassified the
+warm path from *pre-existing debt* to *blocks drift-detection-on-push*: a tool
+that re-checks every push cannot cost three minutes.
+
+That floor then turned out to be mostly artificial. Chasing why `resolving` had
+gone from 20 s to 93 s found §17.13's feedback loop; removing it took the warm
+job to **94.3 s**, with non-health non-resync work at **41.5 s** rather than
+170 s. Drift-on-push is arguable at 40 s where it was not at three minutes —
+though `health` (30.6 s) and `resync` (22.0 s) now dominate a full warm cycle
+and neither has been looked at. The floor moved from *blocks Phase 8* to *Phase
+8 needs its own look at health and resync*, which is progress, not resolution.
+
+**The 477.9 s figure is pre-fix and now overstates cold cost.** It is
+deliberately not re-measured: the decision it gates is unchanged either way, and
+a fresh single run on a machine with ~1.5× between-run variance would trade an
+honestly-labelled stale number for a falsely-precise new one.

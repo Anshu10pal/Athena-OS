@@ -123,7 +123,36 @@ def _run_health_stage(db, repo, progress) -> dict:
 
 
 def _run_job(job_id: int) -> None:
-    db = SessionLocal()
+    # expire_on_commit=False, and this is a correctness-shaped perf fix rather
+    # than a tuning knob.
+    #
+    # `progress` below commits so the SSE stream can see the row change. Under
+    # SQLAlchemy's default, every one of those commits expires ALL loaded
+    # objects -- and by the resolution stage this session holds ~90k of them
+    # (6,522 files + 22,856 symbols + 60,865 imports). The loop then re-SELECTs
+    # each row the moment it touches an attribute, so a UI progress tick was
+    # silently paying to reload the working set.
+    #
+    # Measured on apache/superset, same repo, output identical
+    # (imports_resolved=26,557 in every condition):
+    #
+    #     resolving, expire_on_commit=True     43-67s
+    #     resolving, expire_on_commit=False       11s
+    #
+    # Raising _PROGRESS_WRITE_INTERVAL was the obvious alternative and is a bad
+    # one: the saving is sharply sublinear (170 commits -> 0.42s each, 21
+    # commits -> 2.07s each), because rarer commits expire more rows per storm.
+    # Worse, commit count is time-driven, so a slow run takes more ticks and
+    # commits more, which makes it slower -- duration and commit count feed each
+    # other. Removing the expiry breaks that loop; lengthening the interval only
+    # loosens it.
+    #
+    # Safe here specifically because this session is the sole writer for the
+    # duration: ingest holds the repo advisory lock (repo_lock.py), so there is
+    # no concurrent mutation whose value this session could go stale against.
+    # This is deliberately NOT applied to SessionLocal globally -- request
+    # sessions serving concurrent writers do want the default.
+    db = SessionLocal(expire_on_commit=False)
     try:
         job = db.get(RepoJob, job_id)
         repo = db.get(Repo, job.repo_id)
@@ -133,8 +162,26 @@ def _run_job(job_id: int) -> None:
 
         last_write = 0.0
 
+        # Per-stage wall time, measured where the stage actually changes.
+        #
+        # The SSE stream cannot be used for this. `progress` assigns job.stage
+        # immediately but COMMITS only every _PROGRESS_WRITE_INTERVAL, and the
+        # stream polls the committed row -- so an observer sees a transition up
+        # to one interval late, and worse, a stage that emits nothing for a
+        # while has that silence charged to whichever stage last managed a
+        # write. Reading stage times off the stream once put 6.7s on `cleanup`,
+        # a stage independently measured at 0.01s; the time belonged to
+        # `resolving`, which had simply not written yet.
+        #
+        # These marks are taken in-process at the transition itself, so they do
+        # not inherit the throttle. Ten-ish entries per job, appended on stage
+        # change only -- not per file.
+        stage_marks: list[tuple[str, float]] = []
+
         def progress(stage: str, current: int, total: int, message: str) -> None:
             nonlocal last_write
+            if not stage_marks or stage_marks[-1][0] != stage:
+                stage_marks.append((stage, time.monotonic()))
             job.stage = stage
             job.progress_current = current
             job.progress_total = total
@@ -173,7 +220,14 @@ def _run_job(job_id: int) -> None:
         job.status = "done"
         job.stage = "done"
         job.progress_current = job.progress_total
+        stage_marks.append(("done", time.monotonic()))
         job.result = {
+            # Seconds per stage, in execution order. A stage that runs more
+            # than once (none currently do) would appear once per run.
+            "stage_seconds": [
+                {"stage": stage_marks[i][0], "seconds": round(stage_marks[i + 1][1] - stage_marks[i][1], 2)}
+                for i in range(len(stage_marks) - 1)
+            ],
             "files_total": report.files_total,
             "files_parsed": report.files_parsed,
             "files_skipped_unchanged": report.files_skipped_unchanged,
