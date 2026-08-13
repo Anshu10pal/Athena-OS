@@ -1630,6 +1630,13 @@ quantity, and instances 1 and 2 were both perfectly capable of failing.
 
 ### 17.10 Name-versus-structure: a name enumeration is silently incomplete
 
+> **Generalised by §17.15.** This entry states the rule for one case --
+> names versus a structural marker -- and its guard and counter-case below
+> stand unchanged. §17.15 widens it beyond names, and adds a second failure
+> mode this entry does not describe: failing by MISCATEGORISATION rather
+> than by omission, which removes the evidence of a defect instead of
+> leaving it in place.
+
 A repository with a committed virtualenv had **7,715 files discovered, 7,698 of
 them third-party** — matplotlib, jupyterlab, IPython — ingested as the project's
 own source. Real file count: **67**.
@@ -1915,3 +1922,292 @@ and neither has been looked at. The floor moved from *blocks Phase 8* to *Phase
 deliberately not re-measured: the decision it gates is unchanged either way, and
 a fresh single run on a machine with ~1.5× between-run variance would trade an
 honestly-labelled stale number for a falsely-precise new one.
+
+### 17.15 Predicate-as-property versus predicate-as-list
+
+**Supersedes §17.10**, which stated this rule for one case — name enumeration
+versus a structural marker — and got the mechanism half right. §17.10's guard
+("prefer a structural marker; a name enumeration is always incomplete") remains
+correct and its counter-case (`bin/`, `Scripts/`, `packages/`) remains the
+sharpest illustration. What follows generalises it beyond names, and adds a
+second failure mode §17.10 does not describe.
+
+**The general form:**
+
+> **A predicate stated as a PROPERTY can be evaluated against a case nobody
+> anticipated. A predicate stated as a LIST cannot, and its failure is silent.**
+
+"Enumerations are incomplete" is the weaker version of this and it misses why
+the incompleteness matters. A list does not merely omit — it cannot be
+*consulted* about a new case. There is nothing to evaluate. The new case simply
+does not appear, and no code path reports that it was not considered.
+
+#### The three instances
+
+| # | List-shaped predicate | Property-shaped predicate | What the list missed |
+|---|---|---|---|
+| 1 | `DEFAULT_EXCLUDES` naming `venv/`, `.venv/` | `pyvenv.cfg` exists in this directory (PEP 405) | `venv310` — 7,698 vendored files ingested as first-party source |
+| 2 | Three separate `_IGNORED_DIR_NAMES` constants, 7 / 4 / 7 names, no two alike | one shared `discovery.iter_files_named` applying the same `pyvenv.cfg` rule | the same virtualenv, invisible from **three** code paths at once |
+| 3 | "hide the filter bar on Overview and Findings" | "could a file filter meaningfully apply to what this view renders" | that **three other views** have the inverse defect |
+
+Instance 2 is worth dwelling on because it shows the failure compounding. The
+three lists were maintained independently and disagreed with each other; each
+was individually plausible; none contained a virtualenv marker. Three chances to
+catch the bug, three misses, and the divergence between the lists was itself
+invisible until they were put side by side.
+
+#### Two distinct failure modes, and the second is worse
+
+**Failure by omission** — instance 1 and 2. The case is absent from the list, so
+nothing happens. Nothing errors. 7,698 files of pip packages were parsed,
+symbol-extracted and import-resolved without a single failure.
+
+**Failure by miscategorisation** — instance 3. This one did not merely omit; it
+would have produced a *confident wrong action*.
+
+The instruction was list-shaped: hide the file filter bar on Overview and
+Findings. Evaluating the property instead — *could a file filter meaningfully
+apply to what this view renders* — separated two things the list conflated:
+
+- **Filters inapplicable.** Overview is an aggregate landing page; Findings rows
+  are (marker × directory). Nothing there is a file set. Correct fix: hide the
+  bar.
+- **Filters applicable and unimplemented.** Architecture and Matrix receive a
+  server-built `dirGraph` plus the **unfiltered** `files`; `SubsystemsView`
+  takes no filtered input at all. Their content *is* file-derived. Correct fix:
+  honour the filters.
+
+Same surface, same symptom — a bar that does nothing — **opposite fixes**. The
+list version hides the bar on all five, which for three of them removes a
+control that ought to work and buries a real defect under a cosmetic change. The
+defect then becomes *harder* to find, because the visible symptom is gone.
+
+**That is the sharper cost.** An omission leaves the bug where it was. A
+miscategorisation removes the evidence of it.
+
+#### How to tell which kind you are writing
+
+A list answers *"is this one of these?"*. A property answers *"does this have
+the quality I care about?"*. The test is whether a case that did not exist when
+the predicate was written can be evaluated at all:
+
+- `view !== "overview" && view !== "findings"` — a new view is silently included
+- `keyedOnFiles: boolean` on each view definition — a new view **cannot be added
+  without answering the question**
+
+The second forces the author of the next case to categorise it. That is the
+whole mechanism: not that properties are more complete, but that they make
+omission impossible to express.
+
+**Guard: state the condition, not the members. Where the members must be
+enumerated anyway, attach the property to each member so a new one cannot be
+added without evaluating it.**
+
+Note the limit, inherited from §17.10's counter-case: this does not license
+inventing a property where none exists. `packages/` means third-party in .NET
+and first-party in a JS monorepo — no property of the *name* separates those,
+and the honest move there was to exclude nothing and record why.
+
+### 17.16 Report which instrument produced a number, not only its denominator
+
+§17.5c requires the denominator to travel with a rate. This is the same rule for
+**time**: when the instrument changes, a bare figure invites a comparison
+against a figure the instrument could not have produced.
+
+#### The instance
+
+"2,733 findings" was quoted across three sessions, including in the instruction
+that specified this work. The current figure is **6,649**. The corpus grew 13.7%
+over the same period. A reader reconciling those two numbers concludes the
+codebase got substantially worse.
+
+It did not. Decomposed per marker, snapshot 6 against snapshot 13:
+
+| Marker | Snap 6 | Snap 13 | Δ |
+|---|---:|---:|---:|
+| churn_volume | 0 | 2,745 | +2,745 |
+| cycle_participation | 0 | 832 | +832 |
+| complexity_under_churn | 0 | 175 | +175 |
+| bidirectional_coupling_hub | 0 | 152 | +152 |
+| the six maintainability markers | 2,733 | 2,745 | **+12** |
+| **total** | **2,733** | **6,649** | **+3,916** |
+
+Four markers went from producing **nothing** to producing 3,904 findings. Three
+of them were the subjects of §17.1, §17.2 and §17.4 — `cycle_participation`
+reversed, `bidirectional_coupling_hub` reversed, and churn dependent on the git
+history pass that §17.4 rewrote. Snapshot 6 predates all three.
+
+**So 2,733 was not a smaller measurement of the same thing. It was one working
+axis out of three.** The six markers that worked in both snapshots moved by 12.
+
+#### Why this needs a rule rather than a footnote
+
+The contract now contains figures computed under different analyzer versions
+sitting beside each other with nothing marking which is which. Every count
+recorded before §17.1/§17.2/§17.4 describes a **different instrument**, and
+nothing in the number says so.
+
+The failure mode is not that someone recomputes and gets a surprise — that is
+fine. It is that someone *compares two recorded numbers* and infers a trend from
+an instrument change. That inference is unfalsifiable from the record alone: both
+numbers are correct, both are labelled with their snapshot, and the conclusion
+drawn from them is wrong.
+
+**Guard: a recorded count carries its analyzer/thresholds version, or a note
+naming what was broken when it was taken. A figure whose instrument has since
+changed is not comparable and must say so where it is written, not in a section
+someone might read.**
+
+This is why `code_health_snapshots` stores `analyzer_version`,
+`thresholds_version` and `weights_version` per row, and why `trend_delta`
+refuses to compare across them — that mechanism was already correct for scores
+and had no equivalent for prose. The rule above is the prose equivalent.
+
+Same family as §17.5d: a caveat that exists somewhere and does not travel to
+where the number is read is not a caveat.
+
+### 17.17 Count and size are inversely coupled in any fixed-depth grouping
+
+> **At a fixed level of a hierarchy, group count and group size trade against
+> each other, and no level satisfies both. This is a property of how the tree is
+> shaped, not a tuning failure — so it cannot be fixed by choosing a better
+> level.**
+
+#### The measurement
+
+The findings queue groups markers by directory. At the queue's default cut, on
+apache/superset snapshot 13:
+
+| Fixed level | Rows | Largest row |
+|---|---:|---:|
+| top 1 segment | 41 | 608 files |
+| top 2 segments | 255 | 410 files |
+| top 3 segments | 590 | 189 files |
+| full parent dir | 1,335 | 122 files |
+
+41 rows is scannable, and its top row is "every import cycle in the backend" —
+true, and useless as a task. 1,335 rows have workable sizes and are no longer a
+queue. The head and the tail move in opposite directions at every level, because
+source trees are a few enormous directories and a long tail of small ones.
+
+#### The resolution, twice
+
+Roll up to a **budget**, not to a depth. Seed at the coarsest level and split
+only what exceeds the budget:
+
+| Cap | Rows | Largest row |
+|---|---:|---:|
+| 500 | 93 | 410 |
+| **200** | **109** | **189** |
+| 100 | 238 | 122 |
+| 50 | 439 | 122 |
+
+H1's directory rollup reached the same wall and answered it the same way, with a
+cap of 24 groups. Two independent arrivals at the same answer is the evidence
+that this is structural rather than a quirk of one view.
+
+#### Irreducible groups, and why they must be marked
+
+Below cap 100 the row count runs away while the largest row **stops shrinking**
+at 122. That plateau is the diagnostic: `cycle_participation` across 122 files in
+`superset-ui-core`, all in one directory. No cap divides them, because path depth
+is the only axis the split has.
+
+Such a group must be **marked, not silently left oversized** — otherwise the next
+person tunes the cap trying to fix a row no cap fixes, and the plateau reads as a
+bug in the algorithm rather than a fact about the corpus.
+
+Marking it also forecloses the wrong fix. Splitting by a secondary key was
+considered and rejected on two grounds:
+
+- **Severity is degenerate here.** `cycle_participation`'s severity derives from
+  cycle size, so every member of one SCC scores near-identically. The split would
+  be on a variable that barely varies.
+- **Cluster id inverts what clustering computed.** It is a genuinely different
+  partition, but fragmenting one SCC across cluster boundaries presents a single
+  architectural problem as several unrelated smaller ones — and clustering
+  *condensed* that cycle. Using its output to divide the cycle back up undoes its
+  own finding.
+
+**So the honest output is one large row that says why it is large.** "122 files
+in one cycle in one package" is a correct and useful statement; four severity
+bands of the same cycle is a misleading one.
+
+**Guard: when a grouping has a size budget, report groups the budget could not
+reduce, and say why they are irreducible.**
+
+### 17.18 Verified-reachable-but-not-on-current-data — a convention
+
+Code whose correctness matters, whose trigger does not occur on the data in
+front of you, is in a trap: it looks like dead code to a reader and like a
+working feature to a reviewer. Both readings are wrong, and both are damaging —
+one deletes a real guard, the other cites a behaviour that has never run.
+
+> **Guard: such code carries a comment stating (a) that it does not fire on
+> current data, (b) how reachability was verified, and (c) the condition under
+> which it fires. It must not be read as a feature that fires today, and must
+> not be deleted as dead.**
+
+All three parts are load-bearing. (a) alone reads as an admission of dead code.
+(b) is what separates this from a guess — "I believe this could happen" is not
+verification. (c) is what lets a future reader recognise the case when it
+arrives.
+
+#### The three instances
+
+| # | Code | Why it does not fire | How reachability was verified |
+|---|---|---|---|
+| 1 | `clusterList.ts::isSingleton` | the backend's `_sorted_clusters` already drops single-member groups before persisting | inspected persisted data: 255 clusters on superset, **zero** with `member_count <= 1`, smallest is 2 |
+| 2 | `findings_queue` `irreducible` flag | the 122-file `superset-ui-core` group is under the 200 cap, so it is never split and never marked | **lowered the cap to 100 against real data** — produced exactly that row with `irreducible=True` |
+| 3 | the boundary invariant behind instance 1 | same upstream filter | kept deliberately: it holds the invariant at the boundary rather than trusting a filter in another process, and it is three lines |
+
+Instance 2 is the strongest verification of the three, and shows what (b)
+should look like. "It would fire if a directory held more than the cap" is
+reasoning. Lowering the cap until the case *must* occur, and observing the flag
+set on a specific named row, is evidence. The difference matters: §15.1's inverse
+clause says a negative result is only informative if the stimulus is first shown
+to produce the condition, and this is that clause applied to reachability rather
+than to a test.
+
+#### Why not just delete it
+
+Instances 1 and 3 are the same guard, and the argument for keeping it is not
+"it might fire one day". It is that the invariant is enforced **at the boundary**
+rather than assumed from a filter running in another process — three lines that
+do not depend on a remote guarantee holding. Instance 2 is different: its
+trigger is a **config value** (`MAX_FILES_PER_ROW`), so a repo shaped differently,
+or an operator lowering the cap, reaches it without any code changing.
+
+Neither is speculative, and neither fires today. That combination is exactly what
+the comment has to convey.
+
+### 17.19 What rests on measurement, what rests on inference
+
+Added with the §17.15–§17.18 batch. §17 mixes two kinds of claim, and they carry
+different weight and need different re-checking. A reader cannot tell them apart
+from the prose alone, and treating an inference as a measurement is how §17.0's
+original error happened — reading "did not occur in this corpus" as "does not
+occur".
+
+| § | Claim | Kind | Re-verification path |
+|---|---|---|---|
+| 17.1 | `cycle_participation` fires at 12.7% on superset | **measured** | re-run health on repo 6; compare `cycle_participation` fired count against 832 / 6,522 |
+| 17.2 | `bidirectional_coupling_hub` fires at 2.3% | **measured** | same, marker count 152 |
+| 17.4 | `--name-only --no-renames` took history from 427 s to 8.45 s | **measured** | time `_collect_git_history` on repo 6 |
+| 17.8 | job 19 stage timings | **measured, superseded** | instrument replaced — see §17.14; those per-stage figures came from the SSE stream and misattribute boundaries |
+| 17.13 | commit-in-callback cost, sublinear in frequency | **measured** | A/B `expire_on_commit` True/False on repo 6 at a fixed interval; expect ~4-6× on the resolution stage |
+| 17.14 | cold ingest 477.9 s; only `parsing` scales | **measured, pre-fix** | invalidate `content_sha256` for one repo, run one job, read `stage_seconds` from the job record |
+| 17.15 | property-shaped predicates catch cases list-shaped ones cannot | **inferred** from 3 instances | not re-runnable. Falsified by a case where a list-shaped predicate caught something a property-shaped one missed — none observed |
+| 17.16 | counts predating §17.1/§17.2/§17.4 describe a different instrument | **measured** | per-marker decomposition of snapshot 6 versus 13; the six maintainability markers moved by 12 |
+| 17.17 | count and size are inversely coupled at fixed depth | **measured on two independent cases** | re-run the level sweep on any repo's findings queue; expect the head and tail to move in opposite directions |
+| 17.18 | the three verified-unreachable sites are reachable | **measured per site** | instance 2: set `MAX_FILES_PER_ROW=100` on repo 6, expect `irreducible=True` on `cycle_participation` / `superset-ui-core` |
+
+**Two entries here are inferences and are marked as such.** §17.15 and §17.18's
+*convention* (as distinct from its per-site reachability checks, which are
+measured) are generalisations from a handful of instances. They are the most
+useful entries in §17 and the least verifiable, which is precisely the
+combination §17.0 warns about. Each says what would falsify it.
+
+**The rule this table encodes:** a §17 entry states whether it rests on a
+measurement or on a generalisation, and gives the path to re-check it. An entry
+that can state neither has not established anything yet.
