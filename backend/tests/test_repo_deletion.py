@@ -173,6 +173,35 @@ class TestConfirmation:
         repo = _populate(fk_session, source_kind="local", local_path=str(tmp_path))
         assert deletion.repo_label(repo) == "acme/widget"
 
+    def test_LOADBEARING_a_repo_with_no_owner_is_labelled_by_name_alone(
+            self, fk_session, tmp_path):
+        """Locally-registered repos have an EMPTY owner. An unconditional
+        f"{owner}/{name}" made the expected confirmation "/name" while the UI
+        displayed "name", so no local repo could be deleted through the dialog.
+        Every other test here uses a fixture WITH an owner and passed
+        throughout; a browser pass found it."""
+        repo = _populate(fk_session, source_kind="local", local_path=str(tmp_path))
+        repo.owner = ""
+        fk_session.commit()
+
+        assert deletion.repo_label(repo) == "widget"
+        # And the label it reports must be the one it accepts.
+        report = deletion.delete_repo(fk_session, repo, deletion.repo_label(repo))
+        assert report.label == "widget"
+
+    def test_LOADBEARING_the_reported_label_is_always_an_accepted_confirmation(
+            self, fk_session, tmp_path):
+        """The property the bug violated, stated directly: whatever repo_label
+        returns must be what delete_repo accepts. Any future divergence between
+        the two breaks the dialog for some class of repo."""
+        for owner in ("acme", ""):
+            repo = _populate(fk_session, source_kind="local",
+                             local_path=str(tmp_path / f"r{owner or 'none'}"))
+            repo.owner = owner
+            fk_session.commit()
+            label = deletion.repo_label(repo)
+            deletion.delete_repo(fk_session, repo, label)  # must not raise
+
 
 class TestDeleteOrderUnderEnforcedForeignKeys:
     def test_LOADBEARING_every_table_reaches_zero(self, fk_session, tmp_path):

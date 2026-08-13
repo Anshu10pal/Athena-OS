@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, RepoJobT, RepoT, streamJobProgress, timeAgo } from "../lib/api";
+import { DeleteRepoDialog } from "../components/DeleteRepoDialog";
 
 function AddRepoForm({ onAdded }: { onAdded: (repo: RepoT) => void }) {
   const [mode, setMode] = useState<"url" | "local_path">("url");
@@ -65,10 +66,17 @@ function AddRepoForm({ onAdded }: { onAdded: (repo: RepoT) => void }) {
   );
 }
 
-function RepoCard({ repo, onOpen, onChanged }: { repo: RepoT; onOpen: () => void; onChanged: (r: RepoT) => void }) {
+function RepoCard({ repo, onOpen, onChanged, onDeleted }: {
+  repo: RepoT;
+  onOpen: () => void;
+  onChanged: (r: RepoT) => void;
+  onDeleted: (id: number) => void;
+}) {
   const [job, setJob] = useState<RepoJobT | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleted, setDeleted] = useState(false);
 
   const sync = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -115,14 +123,48 @@ function RepoCard({ repo, onOpen, onChanged }: { repo: RepoT; onOpen: () => void
             {repo.source_root ? ` · ${repo.source_root}` : ""}
           </p>
         </div>
-        <button
-          className="btn-secondary shrink-0 !text-xs !py-1.5 disabled:opacity-50"
-          disabled={running}
-          onClick={sync}
-        >
-          {running ? "Syncing…" : "Sync & Rank"}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            className="btn-secondary !text-xs !py-1.5 disabled:opacity-50"
+            disabled={running}
+            onClick={sync}
+          >
+            {running ? "Syncing…" : "Sync & Rank"}
+          </button>
+          {/* Deliberately quiet: an irreversible action does not need to compete
+              for attention with the one people use daily. It is discoverable on
+              the card rather than hidden in a menu, because the alternative
+              until now was hand-written SQL across eight tables. */}
+          <button
+            aria-label={`Delete ${repo.owner ? `${repo.owner}/${repo.name}` : repo.name}`}
+            title="Delete this repo"
+            disabled={running}
+            onClick={(e) => { e.stopPropagation(); setConfirmingDelete(true); }}
+            className="font-mono text-[10px] uppercase tracking-widest text-fog hover:text-danger transition-colors disabled:opacity-40"
+          >
+            delete
+          </button>
+        </div>
       </div>
+
+      {/* The dialog portals into document.body, so it is outside this card's
+          DOM despite being written here -- the card's onClick cannot reach it
+          and no stopPropagation wrapper is needed. */}
+      {confirmingDelete && (
+        <>
+          <DeleteRepoDialog
+            repo={repo}
+            // The card is dropped from the list only when the dialog closes,
+            // not when the request returns: removing it the instant the delete
+            // succeeded would unmount the dialog and take the report with it.
+            onDeleted={() => setDeleted(true)}
+            onClose={() => {
+              setConfirmingDelete(false);
+              if (deleted) onDeleted(repo.id);
+            }}
+          />
+        </>
+      )}
 
       <div className="flex gap-2 mt-3 flex-wrap font-mono text-[10px]">
         <span className="text-fog border border-line rounded px-1.5 py-0.5">
@@ -187,6 +229,7 @@ export default function Repos() {
             repo={r}
             onOpen={() => navigate(`/repos/${r.id}`)}
             onChanged={(updated) => setRepos((rs) => rs.map((x) => (x.id === updated.id ? updated : x)))}
+            onDeleted={(id) => setRepos((rs) => rs.filter((x) => x.id !== id))}
           />
         ))}
       </div>

@@ -152,8 +152,17 @@ def repo_label(repo: Repo) -> str:
     """What the caller must type back to confirm. Uses owner/name rather than
     the id: an id is easy to mistype into another repo that also exists, and a
     confirmation that can silently name a DIFFERENT valid target is not a
-    confirmation."""
-    return f"{repo.owner}/{repo.name}"
+    confirmation.
+
+    `owner` is EMPTY for a locally-registered repo -- there is no host account
+    to attribute it to. An unconditional f"{owner}/{name}" produced
+    "/athena-owned-mev5Bo" for those, so the dialog displayed the sensible name,
+    the user typed what they were shown, and the confirmation was rejected: a
+    local repo could not be deleted through the UI at all. Found by a browser
+    pass; the unit tests all used a fixture WITH an owner, so every one of them
+    passed.
+    """
+    return f"{repo.owner}/{repo.name}" if repo.owner else repo.name
 
 
 def _on_rm_error(func, path, _exc_info):

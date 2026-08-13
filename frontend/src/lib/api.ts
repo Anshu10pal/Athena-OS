@@ -498,6 +498,21 @@ export interface HealthResponseT {
  *  Keyed on (marker x directory) rather than on files -- see
  *  backend/app/services/codebase/findings_queue.py for why a per-file queue
  *  cannot be ordered. */
+/** What DELETE /api/repos/{id} reports. Rendered in full rather than reduced to
+ *  a success toast: "what was removed, and whether the directory went and why"
+ *  is the part that makes an irreversible action auditable after the fact. */
+export interface RepoDeletionReportT {
+  repo_id: number;
+  label: string;
+  source_kind: string;
+  rows_deleted: Record<string, number>;
+  rows_total: number;
+  directory_deleted: boolean;
+  directory_path: string | null;
+  /** Always populated, including on success — a boolean does not carry why. */
+  directory_reason: string;
+}
+
 export interface FindingsRowT {
   marker: string;
   label: string;

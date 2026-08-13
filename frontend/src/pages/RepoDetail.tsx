@@ -18,6 +18,7 @@ import {
   NOISE_CATEGORIES,
   subsystemIdOf,
 } from "../lib/filters";
+import { shapeClusterChips, TOP_N as CLUSTER_CHIP_TOP_N } from "../lib/clusterChips";
 import { SlideOver } from "../components/SlideOver";
 import { ViewBoundary } from "../components/ViewBoundary";
 import { LayersView } from "../components/LayersView";
@@ -673,6 +674,25 @@ export default function RepoDetail() {
     [subsystemAlgorithm, subsystemsModularity, subsystemsLouvain, subsystemsHdbscan]
   );
   const subsystemIds = useMemo(() => deriveSubsystemIds(files, subsystemAlgorithm), [files, subsystemAlgorithm]);
+
+  // Cluster chips are capped and ordered by size. Sizes come from the fetched
+  // subsystems response rather than being recounted here -- one source for
+  // "how big is this cluster", the same one the Dependency Clusters view reads.
+  //
+  // Expanded state lives in the URL like the other filters: a row that
+  // re-collapses on every tab switch is a default, not a state.
+  const showAllClusterChips = searchParams.get("clusterChips") === "all";
+  const clusterSizeById = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const s of subsystemsResponseFor(subsystemAlgorithm)?.subsystems ?? []) {
+      map.set(s.id, s.member_count);
+    }
+    return map;
+  }, [subsystemAlgorithm, subsystemsModularity, subsystemsLouvain, subsystemsHdbscan]);
+  const clusterChips = useMemo(
+    () => shapeClusterChips(subsystemIds, clusterSizeById, filters.subsystemId, showAllClusterChips),
+    [subsystemIds, clusterSizeById, filters.subsystemId, showAllClusterChips],
+  );
   const visible = useMemo(() => filterFiles(files, filters), [files, filters]);
   const visibleGraphNodes = useMemo(() => filterFiles(graphNodes, filters), [graphNodes, filters]);
   const filterActive = useMemo(() => isFilterActive(filters), [filters]);
@@ -904,10 +924,15 @@ export default function RepoDetail() {
               </Chip>
             ))}
           </div>
+          {/* Capped, unlike Path and Language. Those are bounded by the repo's
+              shape (12 and 4 chips here); this one renders 254 on
+              apache/superset and consumed the whole viewport, pushing every
+              file-keyed view's content below the fold. The cluster LIST already
+              solved this with a top-N slice; the cluster FILTER never did. */}
           {subsystemIds.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-mono text-[10px] uppercase tracking-widest text-fog w-24 shrink-0">Cluster</span>
-              {subsystemIds.map((sid) => (
+              {clusterChips.visible.map((sid) => (
                 <Chip
                   key={sid}
                   active={filters.subsystemId === sid && filters.subsystemAlgorithm === subsystemAlgorithm}
@@ -922,6 +947,27 @@ export default function RepoDetail() {
                   {activeSubsystemLabelById.get(sid) ?? `Cluster ${sid}`}
                 </Chip>
               ))}
+              {(clusterChips.hiddenCount > 0 || showAllClusterChips) && (
+                <button
+                  onClick={() => {
+                    const p = new URLSearchParams(searchParams);
+                    if (showAllClusterChips) p.delete("clusterChips");
+                    else p.set("clusterChips", "all");
+                    setSearchParams(p, { replace: true });
+                  }}
+                  className="font-mono text-[10px] text-fog hover:text-accent underline decoration-dotted"
+                >
+                  {showAllClusterChips
+                    ? `show top ${CLUSTER_CHIP_TOP_N}`
+                    : `show all ${subsystemIds.length} (${clusterChips.hiddenCount} more)`}
+                </button>
+              )}
+              {clusterChips.selectedPinned && (
+                // Explains a chip sitting out of size order. Without this it
+                // reads as a sort bug rather than as the selection being kept
+                // reachable.
+                <span className="font-mono text-[10px] text-fog/70">selected cluster pinned</span>
+              )}
             </div>
           )}
           <div className="flex flex-wrap items-center gap-5">
