@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   api, DirGraphResponseT, GraphResponseT, RankedFileT, RankingResponseT, RepoJobT, RepoT, ScorerT,
   SubsystemAlgorithmT, SubsystemsResponseT, OverviewT, HealthResponseT, HealthDirectoriesT,
-  streamJobProgress, timeAgo,
+  FindingsResponseT, streamJobProgress, timeAgo,
 } from "../lib/api";
 import {
   applyFilterStateToSearchParams,
@@ -26,6 +26,7 @@ import { DetailPanel } from "../components/DetailPanel";
 import { FileSearch } from "../components/FileSearch";
 import { MermaidPanel } from "../components/MermaidPanel";
 import { SubsystemsView } from "../components/SubsystemsView";
+import { FindingsView } from "../components/FindingsView";
 import { OverviewView } from "../components/OverviewView";
 
 import { dirnameOfPath } from "../lib/layeredLayout";
@@ -60,7 +61,7 @@ type SortKey = keyof Pick<
 // where the full graph exists only behind an explicit opt-in that warns
 // about exactly the failure H5 recorded. Different default, different
 // layout, different question answered -- see components/DependencyGraph.tsx.
-type ViewT = "overview" | "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph";
+type ViewT = "overview" | "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph" | "findings";
 
 const COLUMNS: { key: SortKey; label: string; align?: "left" | "center" | "right" }[] = [
   { key: "score", label: "Score" },
@@ -78,16 +79,42 @@ const SCORERS: { value: ScorerT; label: string }[] = [
   { value: "rrf", label: "Reciprocal Rank Fusion" },
 ];
 
-const VIEWS: { value: ViewT; label: string }[] = [
-  { value: "overview", label: "Overview" },
-  { value: "layers", label: "Layers" },
-  { value: "reading", label: "Reading list" },
-  { value: "architecture", label: "Architecture" },
-  { value: "depgraph", label: "Dependency Graph" },
-  { value: "matrix", label: "Matrix" },
-  { value: "subsystems", label: "Dependency Clusters" },
-  { value: "focus", label: "Focus" },
+// `keyedOnFiles` decides whether the file filter bar and the file DetailPanel
+// render. Both operate on the FILE set, so a view whose content is not a file
+// set gets controls that cannot affect it.
+//
+// Stated as a property of each view rather than as `view !== "overview" &&
+// view !== "findings"`, because an exclusion list is silently incomplete and
+// the next non-file-keyed view inherits the bug -- the same name-versus-
+// structure lesson as enumerating virtualenv directory names instead of
+// detecting pyvenv.cfg. A new view must now answer the question to be added.
+//
+// The test is "could a file filter meaningfully apply to what this view
+// renders", not "does it currently honour one". Architecture, Matrix and
+// Dependency Clusters are file-derived and so answer yes, but do NOT currently
+// apply the filters -- see the note above the filter bar; that is a separate
+// defect and this flag is not the place to encode it.
+const VIEWS: { value: ViewT; label: string; keyedOnFiles: boolean }[] = [
+  // An aggregate landing page. Nothing on it is a file list.
+  { value: "overview", label: "Overview", keyedOnFiles: false },
+  { value: "layers", label: "Layers", keyedOnFiles: true },
+  { value: "reading", label: "Reading list", keyedOnFiles: true },
+  { value: "architecture", label: "Architecture", keyedOnFiles: true },
+  { value: "depgraph", label: "Dependency Graph", keyedOnFiles: true },
+  { value: "matrix", label: "Matrix", keyedOnFiles: true },
+  { value: "subsystems", label: "Dependency Clusters", keyedOnFiles: true },
+  // Rows are (marker x directory), and a file is reachable only by expanding a
+  // row -- at which point clicking it navigates to Focus. Neither the file
+  // filters nor the file detail panel has anything to act on.
+  { value: "findings", label: "Findings", keyedOnFiles: false },
+  { value: "focus", label: "Focus", keyedOnFiles: true },
 ];
+
+const FILE_KEYED_VIEWS = new Set<ViewT>(VIEWS.filter((v) => v.keyedOnFiles).map((v) => v.value));
+
+function isFileKeyed(view: ViewT): boolean {
+  return FILE_KEYED_VIEWS.has(view);
+}
 
 const VALIDATION_THRESHOLD_RANK = 20;
 const COLUMN_COUNT = 3 + COLUMNS.length; // Rank + Path + Language + COLUMNS
@@ -339,6 +366,8 @@ export default function RepoDetail() {
   const [health, setHealth] = useState<HealthResponseT | null>(null);
   const [directories, setDirectories] = useState<HealthDirectoriesT | null>(null);
   const [computingHealth, setComputingHealth] = useState(false);
+  const [findings, setFindings] = useState<FindingsResponseT | null>(null);
+  const [loadingFindings, setLoadingFindings] = useState(false);
 
   // DetailPanel shows file details whenever selectedFileId is set,
   // regardless of how stale -- without clearing the other one on every
@@ -382,6 +411,17 @@ export default function RepoDetail() {
     api<HealthDirectoriesT>(`/api/repos/${id}/health/directories`)
       .then(setDirectories)
       .catch(() => setDirectories(null));
+    loadFindings();
+  };
+
+  // Phase L. 404s under the same condition as the other two -- no snapshot yet
+  // -- so it is loaded alongside rather than gated on either succeeding.
+  const loadFindings = () => {
+    setLoadingFindings(true);
+    api<FindingsResponseT>(`/api/repos/${id}/findings`)
+      .then(setFindings)
+      .catch(() => setFindings(null))
+      .finally(() => setLoadingFindings(false));
   };
 
   const computeHealth = async () => {
@@ -391,6 +431,7 @@ export default function RepoDetail() {
       // Derived from the snapshot that was just written, so it has to be
       // re-read after a compute or the detail would describe the previous one.
       loadDirectories();
+      loadFindings();
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -802,12 +843,28 @@ export default function RepoDetail() {
         </div>
       )}
 
-      {/* Phase K1: the filter bar is hidden on Overview. It filters the FILE
-          set, and nothing on the overview is a filtered file list -- leaving
-          it there would offer controls that visibly do nothing, which is the
-          same class of confusion as the "Showing 0 of 173" counter bug an
-          earlier browser pass caught. */}
-      {files.length > 0 && view !== "overview" && (
+      {/* Phase K1, generalised in L: the filter bar renders only for views
+          keyed on files (see VIEWS). It filters the FILE set, so on any other
+          view it offers controls that visibly do nothing -- the same class of
+          confusion as the "Showing 0 of 173" counter bug an earlier browser
+          pass caught.
+
+          Overview was the first such view. Findings is the second, and showed
+          why the condition matters more than the exclusion: on apache/superset
+          the Cluster row alone renders 254 chips, which pushed the entire queue
+          below the fold. Every structural assertion passed -- the view HAD
+          rendered -- and only a browser pass showed it was unreachable without
+          scrolling past a screen of inert controls.
+
+          KNOWN, NOT FIXED HERE: Architecture, Matrix and Dependency Clusters
+          are file-derived and so pass this test, but do not actually apply the
+          filters -- ArchitectureMap and MatrixView are handed the unfiltered
+          `files` and a server-built dirGraph, and SubsystemsView takes no
+          filtered input at all. The bar and the "Showing N of M" counter above
+          them therefore move while the view does not. That is a different
+          defect -- controls that should work rather than controls that cannot
+          -- and its fix is to honour the filters, not to hide the bar. */}
+      {files.length > 0 && isFileKeyed(view) && (
         <div className="card p-5 space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-[10px] uppercase tracking-widest text-fog w-24 shrink-0">Path</span>
@@ -1118,6 +1175,21 @@ export default function RepoDetail() {
         </ViewBoundary>
       )}
 
+      {files.length > 0 && view === "findings" && id && (
+        <ViewBoundary name="Findings">
+          <FindingsView
+            repoId={id}
+            data={findings}
+            loading={loadingFindings}
+            onReload={loadFindings}
+            onSelectFile={(fileId) => {
+              selectFile(fileId);
+              setView("focus");
+            }}
+          />
+        </ViewBoundary>
+      )}
+
       {files.length > 0 && view === "subsystems" && id && (
         <ViewBoundary name="Dependency Clusters">
           <SubsystemsView
@@ -1151,12 +1223,16 @@ export default function RepoDetail() {
 
       </div>
 
-      {/* Phase K1: hidden on Overview for the same reason as the filter bar
-          -- the overview has no selection concept, so the panel could only
-          ever show its "select something" placeholder, spending a 320px
-          column to say nothing on the one page whose whole purpose is
-          orientation rather than detail. */}
-      {files.length > 0 && id && view !== "overview" && (
+      {/* Phase K1, generalised in L: same condition as the filter bar, and
+          deliberately the same one rather than a parallel rule. The panel
+          selects a FILE, so a view not keyed on files can only ever show its
+          "select something" placeholder -- 320px of column saying nothing.
+
+          Overview has no selection concept at all. Findings selects a
+          (marker x directory) row, and the only way to reach a file from it is
+          to expand a row and click through, which navigates to Focus -- so the
+          placeholder is the single state this panel could hold there. */}
+      {files.length > 0 && id && isFileKeyed(view) && (
         <div className="w-80 shrink-0">
           <DetailPanel
             repoId={id}

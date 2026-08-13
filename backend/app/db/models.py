@@ -796,6 +796,24 @@ class CodeHealthSnapshot(Base):
     axis_summary: Mapped[dict] = mapped_column(JSON, default=dict)
     files_scored: Mapped[int] = mapped_column(Integer, default=0)
     files_na: Mapped[int] = mapped_column(Integer, default=0)
+    # Files scored on SOME axes but not all. Stored beside files_na because
+    # files_na alone is read as "everything else was scored", and on
+    # apache/superset that is wrong for 782 files (12.0%): they are under ten
+    # lines, so maintainability and change_hotspot are excluded for them, while
+    # architecture_health -- which is graph-derived and needs no line count --
+    # still scores. files_na counts only files N/A on EVERY axis, which is a
+    # defensible definition and a misleading number on its own.
+    #
+    # Never display files_na without this beside it.
+    #
+    # NULLABLE on purpose: snapshots taken before this field existed were never
+    # measured for it, and a backfilled 0 would be indistinguishable from a
+    # genuine "no partially-scored files". That is exclude-don't-zero applied to
+    # a schema rather than to a score -- an unmeasured quantity is absent, not
+    # zero -- and it is the same error class as reading a finding count computed
+    # under one instrument as if computed under another.
+    files_partially_na: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=None)
     inputs_complete: Mapped[bool] = mapped_column(Boolean, default=False)
 
 

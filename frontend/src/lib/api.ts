@@ -416,7 +416,14 @@ export interface HealthSnapshotT {
   weights_version: number;
   computed_at: string;
   files_scored: number;
+  /** Files N/A on EVERY axis. Never render this without files_partially_na --
+   *  alone it reads as "everything else was scored", and on apache/superset it
+   *  is 0 while 782 files are scored on architecture only. */
   files_na: number;
+  /** Files scored on some axes but not all. NULL -- not 0 -- on snapshots
+   *  taken before this field existed: 0 means "measured, none found", null
+   *  means "never measured". Render them differently. */
+  files_partially_na: number | null;
   inputs_complete: boolean;
 }
 
@@ -485,6 +492,51 @@ export interface HealthResponseT {
   axes: Record<string, HealthAxisT>;
   trend: HealthTrendT;
   staleness: HealthStalenessT;
+}
+
+/** One row of the findings queue: a marker, an area, and the files in it.
+ *  Keyed on (marker x directory) rather than on files -- see
+ *  backend/app/services/codebase/findings_queue.py for why a per-file queue
+ *  cannot be ordered. */
+export interface FindingsRowT {
+  marker: string;
+  label: string;
+  directory: string;
+  /** Also the finding count: a marker fires at most once per file, so these
+   *  are identically equal and only one is served. */
+  file_count: number;
+  /** Sum over the row of severity x exposure x (1 + churn). Zero means every
+   *  file in the row has no exposure -- nothing depends on them and they do
+   *  not change -- which ranks last rather than being hidden. */
+  score: number;
+  peak_severity: number;
+  /** Mean churn severity, 0..1. Churn is the ordering weight, never a row of
+   *  its own; shown so the weighting is visible rather than folded in. */
+  churn_mean: number;
+  /** Every file in this row shares one directory, so no cap divides it. A
+   *  stated property, not a tuning failure. */
+  irreducible: boolean;
+}
+
+export interface FindingsResponseT {
+  snapshot_id: number;
+  floor: number;
+  max_files_per_row: number;
+  shown: number;
+  /** Findings below the floor. Served so the UI can say what it is hiding --
+   *  a filter a user cannot see is indistinguishable from a missed finding. */
+  hidden_below_floor: number;
+  churn_weighted_files: number;
+  rows: FindingsRowT[];
+  staleness: HealthStalenessT;
+}
+
+export interface FindingsFilesT {
+  snapshot_id: number;
+  marker: string;
+  directory: string;
+  file_count: number;
+  files: { file_id: number; path: string; severity: number }[];
 }
 
 export interface HealthMarkerT {

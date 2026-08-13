@@ -24,6 +24,8 @@ from app.api.repos import (
     get_health,
     get_health_directories,
     get_health_files,
+    get_findings,
+    get_findings_files,
     get_subsystem_members,
     get_subsystems,
     ingest_repo_endpoint,
@@ -1121,3 +1123,136 @@ class TestDirectoryRollupEndpoint:
         with pytest.raises(HTTPException) as e:
             get_health_directories(repo.id, max_depth=-1, user=None, db=db_session)
         assert e.value.status_code == 400
+
+
+class TestFindingsEndpoint:
+    """Phase L. The aggregation itself is covered by test_findings_queue.py --
+    these cover the endpoint contract: what it refuses, what it discloses, and
+    that members reproduce the row they came from."""
+
+    def _make_repo(self, tmp_path) -> Path:
+        root = tmp_path / "findings_repo"
+        _init_repo(root)
+        _write(root / "pkg" / "__init__.py", "")
+        # Deliberately over the large-function threshold so at least one marker
+        # fires -- a fixture that produces an empty queue would let every
+        # assertion below pass vacuously.
+        body = "\n".join(f"    x{i} = {i}" for i in range(120))
+        _write(root / "pkg" / "big.py", f"def enormous():\n{body}\n    return x0\n")
+        _write(root / "pkg" / "small.py", "def tiny():\n    return 1\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+        return root
+
+    def _analysed(self, db_session, tmp_path):
+        repo = register_from_path(db_session, str(self._make_repo(tmp_path)))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+        return repo
+
+    def test_404_before_any_snapshot_rather_than_an_empty_queue(self, db_session, tmp_path):
+        """An empty queue reads as "measured and nothing to fix". Same choice
+        as GET /health and /health/directories."""
+        repo = register_from_path(db_session, str(self._make_repo(tmp_path)))
+        ingest_repo(db_session, repo)
+        with pytest.raises(HTTPException) as e:
+            get_findings(repo.id, user=None, db=db_session)
+        assert e.value.status_code == 404
+
+    def test_LOADBEARING_hidden_below_floor_is_disclosed_with_the_list(self, db_session, tmp_path):
+        """A floor a user cannot see is indistinguishable from a tool that
+        missed something."""
+        repo = self._analysed(db_session, tmp_path)
+        payload = get_findings(repo.id, user=None, db=db_session)
+
+        assert "hidden_below_floor" in payload
+        assert "floor" in payload and "max_files_per_row" in payload
+        assert payload["shown"] == sum(r["file_count"] for r in payload["rows"])
+
+    def test_LOADBEARING_churn_is_never_a_row(self, db_session, tmp_path):
+        """It fires on 47.8% of evaluable files on apache/superset. As rows it
+        would be 41% of the queue while telling nobody which file to open."""
+        repo = self._analysed(db_session, tmp_path)
+        payload = get_findings(repo.id, user=None, db=db_session)
+
+        assert all(r["marker"] != "churn_volume" for r in payload["rows"])
+        assert "churn_weighted_files" in payload
+
+    def test_LOADBEARING_rows_carry_no_inline_file_list(self, db_session, tmp_path):
+        """296 KB on apache/superset if they did. Members are a second call."""
+        repo = self._analysed(db_session, tmp_path)
+        payload = get_findings(repo.id, user=None, db=db_session)
+
+        assert payload["rows"], "fixture produced no findings -- assertions would be vacuous"
+        assert all("files" not in r for r in payload["rows"])
+
+    def test_LOADBEARING_members_reproduce_the_row_they_came_from(self, db_session, tmp_path):
+        """The split is re-derived, not stored, so it must be a pure function of
+        (snapshot, floor, max_files). If it were not, expanding a row would show
+        the members of a row that was never displayed."""
+        repo = self._analysed(db_session, tmp_path)
+        payload = get_findings(repo.id, user=None, db=db_session)
+        row = payload["rows"][0]
+
+        members = get_findings_files(
+            repo.id, marker=row["marker"], directory=row["directory"],
+            floor=payload["floor"], max_files=payload["max_files_per_row"],
+            user=None, db=db_session)
+
+        assert members["file_count"] == row["file_count"]
+        assert len(members["files"]) == row["file_count"]
+        severities = [f["severity"] for f in members["files"]]
+        assert severities == sorted(severities, reverse=True), "worst first"
+
+    def test_unknown_row_is_404_not_an_empty_member_list(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        with pytest.raises(HTTPException) as e:
+            get_findings_files(repo.id, marker="no_such_marker", directory="nowhere",
+                               user=None, db=db_session)
+        assert e.value.status_code == 404
+
+    def test_parameters_are_validated(self, db_session, tmp_path):
+        repo = self._analysed(db_session, tmp_path)
+        for kwargs in ({"floor": -0.1}, {"floor": 1.5}, {"max_files": 0}):
+            with pytest.raises(HTTPException) as e:
+                get_findings(repo.id, user=None, db=db_session, **kwargs)
+            assert e.value.status_code == 400, kwargs
+
+    def test_LOADBEARING_files_partially_na_is_served_beside_files_na(self, db_session, tmp_path):
+        """files_na alone reads as "everything else was scored". On
+        apache/superset it is 0 while 782 files are scored on architecture
+        only."""
+        repo = self._analysed(db_session, tmp_path)
+        payload = get_health(repo.id, user=None, db=db_session)
+
+        assert "files_partially_na" in payload["snapshot"]
+        assert "files_na" in payload["snapshot"]
+
+    def test_LOADBEARING_a_fresh_snapshot_measures_partially_na_rather_than_leaving_it_null(
+            self, db_session, tmp_path):
+        """NULL is reserved for snapshots that never measured it. A snapshot
+        written by today's code must report a number, or the "not measured"
+        signal stops distinguishing anything."""
+        repo = self._analysed(db_session, tmp_path)
+        payload = get_health(repo.id, user=None, db=db_session)
+
+        assert payload["snapshot"]["files_partially_na"] is not None
+
+    def test_LOADBEARING_member_lookup_echoes_the_parameters_that_built_it(
+            self, db_session, tmp_path):
+        """The split is pure, so a caller passing a different floor or cap gets
+        a different, internally consistent split. Echoing the triple is what
+        makes that detectable instead of silent."""
+        repo = self._analysed(db_session, tmp_path)
+        payload = get_findings(repo.id, user=None, db=db_session)
+        row = payload["rows"][0]
+
+        members = get_findings_files(
+            repo.id, marker=row["marker"], directory=row["directory"],
+            floor=payload["floor"], max_files=payload["max_files_per_row"],
+            user=None, db=db_session)
+
+        assert members["floor"] == payload["floor"]
+        assert members["max_files_per_row"] == payload["max_files_per_row"]
+        assert members["snapshot_id"] == payload["snapshot_id"]

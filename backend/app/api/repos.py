@@ -13,7 +13,7 @@ from app.db.models import (
     CodeFile, CodeFileHealth, CodeFileRank, CodeHealthSnapshot, CodeImport,
     CodeSubsystem, Repo, RepoJob, User,
 )
-from app.services.codebase import edge_weights, jobs, registry
+from app.services.codebase import edge_weights, findings_queue, jobs, registry
 from app.services.codebase.dir_aggregation import DEFAULT_MAX_GROUPS, aggregate_to_directories
 from app.services.codebase.discovery import TooManyFilesError
 from app.services.codebase.git_ops import GitBinaryUnavailable
@@ -633,6 +633,10 @@ def _serialize_snapshot(db: Session, snapshot: CodeHealthSnapshot, repo: Repo) -
             "computed_at": snapshot.computed_at.isoformat(),
             "files_scored": snapshot.files_scored,
             "files_na": snapshot.files_na,
+            # Served WITH files_na, always. files_na alone reads as "everything
+            # else was scored"; on apache/superset it is 0 while 782 files are
+            # scored on architecture only. See the column comment on the model.
+            "files_partially_na": snapshot.files_partially_na,
             "inputs_complete": snapshot.inputs_complete,
         },
         "axes": snapshot.axis_summary,
@@ -769,6 +773,121 @@ def get_health_files(
             for r in rankable[:limit]
         ],
     }
+
+
+def _latest_snapshot_or_404(db: Session, repo_id: int) -> CodeHealthSnapshot:
+    snapshot = (
+        db.query(CodeHealthSnapshot)
+        .filter(CodeHealthSnapshot.repo_id == repo_id)
+        .order_by(CodeHealthSnapshot.computed_at.desc(), CodeHealthSnapshot.id.desc())
+        .first()
+    )
+    if not snapshot:
+        raise HTTPException(404, "No code-health snapshot for this repo yet.")
+    return snapshot
+
+
+def _findings_rows(db: Session, snapshot: CodeHealthSnapshot, floor: float, cap: int):
+    rows = db.query(CodeFileHealth).filter(CodeFileHealth.snapshot_id == snapshot.id).all()
+    findings, hidden, churn_files = findings_queue.extract_findings(
+        [(r.path, r.file_id, r.adjusted_exposure, r.explanation) for r in rows], floor=floor)
+    return findings_queue.build_rows(findings, max_files=cap), findings, hidden, churn_files
+
+
+@router.get("/{repo_id}/findings")
+def get_findings(
+    repo_id: int,
+    floor: float = findings_queue.SEVERITY_FLOOR,
+    max_files: int = findings_queue.MAX_FILES_PER_ROW,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Phase L: health markers grouped into pickable work -- see
+    findings_queue.py for why rows are (marker x directory) and why the
+    directory granularity is adaptive rather than a fixed depth.
+
+    Row SUMMARIES only; members come from /findings/files. Inline they cost
+    296 KB on apache/superset's 109 rows.
+
+    `hidden_below_floor` is served with the list, not left for the caller to
+    work out, because a floor a user cannot see is indistinguishable from a
+    tool that missed something. Same reasoning as the architecture coverage
+    disclosure travelling with the architecture score.
+
+    404 with no snapshot, matching every other health surface -- an empty queue
+    would read as "measured and nothing to fix"."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    if not 0.0 <= floor <= 1.0:
+        raise HTTPException(400, "floor must be between 0.0 and 1.0")
+    if max_files < 1:
+        raise HTTPException(400, "max_files must be at least 1")
+    snapshot = _latest_snapshot_or_404(db, repo_id)
+    rows, findings, hidden, churn_files = _findings_rows(db, snapshot, floor, max_files)
+    return {
+        "snapshot_id": snapshot.id,
+        "floor": floor,
+        "max_files_per_row": max_files,
+        "shown": len(findings),
+        "hidden_below_floor": hidden,
+        # Not a findings count: churn is the ordering weight, never a row.
+        "churn_weighted_files": churn_files,
+        "rows": [r.to_dict() for r in rows],
+        "staleness": snapshot_staleness(db, repo, snapshot),
+    }
+
+
+@router.get("/{repo_id}/findings/files")
+def get_findings_files(
+    repo_id: int, marker: str, directory: str,
+    floor: float = findings_queue.SEVERITY_FLOOR,
+    max_files: int = findings_queue.MAX_FILES_PER_ROW,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Members of one queue row, worst first.
+
+    Re-derives the same split rather than storing row ids: the aggregation is
+    a pure function of (snapshot, floor, max_files), all three of which the
+    caller passes back, so the same row is reproduced exactly. Costs ~280 ms,
+    nearly all of it reading the snapshot's rows.
+
+    Purity cuts both ways, which is why the parameters are ECHOED in the
+    response. A caller that passes a floor or cap other than the one that
+    produced the list it is looking at gets a different, internally consistent
+    split -- and would receive members for a row that was never displayed, with
+    nothing in the payload to say so. Serving the triple back makes the
+    mismatch detectable rather than silent. The same reasoning as the snapshot
+    id: a client that receives a result must receive the conditions that
+    produced it."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    if not 0.0 <= floor <= 1.0:
+        raise HTTPException(400, "floor must be between 0.0 and 1.0")
+    if max_files < 1:
+        raise HTTPException(400, "max_files must be at least 1")
+    snapshot = _latest_snapshot_or_404(db, repo_id)
+    rows, _, _, _ = _findings_rows(db, snapshot, floor, max_files)
+    for row in rows:
+        if row.marker == marker and row.directory == directory:
+            return {
+                "snapshot_id": snapshot.id,
+                "floor": floor,
+                "max_files_per_row": max_files,
+                "marker": row.marker,
+                "directory": row.directory,
+                "file_count": row.file_count,
+                "files": row.files_payload(),
+            }
+    # A row that does not exist under THESE parameters. Most likely the caller
+    # is holding a list built under different ones -- said explicitly, because
+    # "not found" alone would send someone looking for a missing file.
+    raise HTTPException(
+        404,
+        f"No queue row for marker {marker!r} in {directory!r} at "
+        f"floor={floor} max_files={max_files}. If these differ from the "
+        f"parameters that produced the list, the split differs too.",
+    )
 
 
 @router.get("/{repo_id}/overview")

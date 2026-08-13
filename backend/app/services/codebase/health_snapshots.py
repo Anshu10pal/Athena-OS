@@ -504,6 +504,13 @@ def create_snapshot(db: Session, repo: Repo, on_progress=None) -> CodeHealthSnap
         1 for _, s in scored
         if any(getattr(s, a).available and getattr(s, a).inputs_complete for a in AXES))
     files_na = len(scored) - files_scored
+    # Scored on some axes but not all -- see the column comment on
+    # CodeHealthSnapshot.files_partially_na for why this is stored rather than
+    # left to be inferred from files_na.
+    files_partially_na = sum(
+        1 for _, s in scored
+        if any(getattr(s, a).available for a in AXES)
+        and not all(getattr(s, a).available for a in AXES))
     inputs_complete = all(axis_summary[a]["inputs_complete"] for a in AXES)
 
     rows = []
@@ -533,6 +540,7 @@ def create_snapshot(db: Session, repo: Repo, on_progress=None) -> CodeHealthSnap
             axis_summary=axis_summary,
             files_scored=files_scored,
             files_na=files_na,
+            files_partially_na=files_partially_na,
             inputs_complete=inputs_complete,
         )
         db.add(snapshot)

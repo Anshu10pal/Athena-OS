@@ -12,7 +12,8 @@ function response(axes: Record<string, any>): HealthResponseT {
     snapshot: {
       id: 1, branch: "main", head_sha: "abc", working_tree_dirty: false,
       analyzer_version: 1, thresholds_version: 3, weights_version: 1,
-      computed_at: "", files_scored: 10, files_na: 0, inputs_complete: true,
+      computed_at: "", files_scored: 10, files_na: 0, files_partially_na: 0,
+      inputs_complete: true,
     },
     axes: axes as any,
     trend: { comparable: false, reason: null, deltas: {} },
