@@ -19,6 +19,7 @@ import {
   subsystemIdOf,
 } from "../lib/filters";
 import { shapeClusterChips, TOP_N as CLUSTER_CHIP_TOP_N } from "../lib/clusterChips";
+import { graphFilterParams, graphFiltersChanged } from "../lib/graphFilterParams";
 import { SlideOver } from "../components/SlideOver";
 import { ViewBoundary } from "../components/ViewBoundary";
 import { LayersView } from "../components/LayersView";
@@ -120,6 +121,10 @@ function isFileKeyed(view: ViewT): boolean {
 }
 
 const VALIDATION_THRESHOLD_RANK = 20;
+
+/** Delay before refetching the graph after a filter change. `query` is a text
+ * input, so without this every keystroke re-aggregates the repo server-side. */
+const GRAPH_FILTER_DEBOUNCE_MS = 300;
 const COLUMN_COUNT = 3 + COLUMNS.length; // Rank + Path + Language + COLUMNS
 
 const GLOSSARY: { term: string; desc: string }[] = [
@@ -463,8 +468,8 @@ export default function RepoDetail() {
   // file). &level=file pins this fetch to the file-level shape this view
   // was actually built against, so it keeps working unchanged through H2
   // and H3 -- a one-line stopgap until H5 relegates this view to "Raw".
-  const loadGraph = (activeScorer: ScorerT) => {
-    api<GraphResponseT>(`/api/repos/${id}/graph?scorer=${activeScorer}&level=file`)
+  const loadGraph = (activeScorer: ScorerT, state: FilterState = filters) => {
+    api<GraphResponseT>(`/api/repos/${id}/graph?${graphFilterParams(activeScorer, "file", state)}`)
       .then(setGraph)
       .catch(() => setGraph(null));
   };
@@ -474,8 +479,8 @@ export default function RepoDetail() {
   // level=file pin above, not a shared response reused across both, since
   // the two views need genuinely different payloads (directory nodes
   // carry no per-file id/rank; file nodes carry no kind/region/cycle info).
-  const loadDirGraph = (activeScorer: ScorerT) => {
-    api<DirGraphResponseT>(`/api/repos/${id}/graph?scorer=${activeScorer}&level=directory`)
+  const loadDirGraph = (activeScorer: ScorerT, state: FilterState = filters) => {
+    api<DirGraphResponseT>(`/api/repos/${id}/graph?${graphFilterParams(activeScorer, "directory", state)}`)
       .then(setDirGraph)
       .catch(() => setDirGraph(null));
   };
@@ -693,9 +698,58 @@ export default function RepoDetail() {
     () => shapeClusterChips(subsystemIds, clusterSizeById, filters.subsystemId, showAllClusterChips),
     [subsystemIds, clusterSizeById, filters.subsystemId, showAllClusterChips],
   );
+
+  // Architecture, Matrix and the Dependency Graph read a server-filtered graph,
+  // so a change to an HONOURED filter has to refetch. `graphFiltersChanged`
+  // decides which those are -- toggling hideZeroFanIn or picking a cluster
+  // changes `filters` but cannot change the endpoint's answer, and refetching
+  // on them would re-run a whole directory aggregation to produce the identical
+  // response.
+  //
+  // Debounced, because `query` is a text input and every keystroke would
+  // otherwise aggregate the repo again. The chip filters are discrete and would
+  // not need it; they share the delay rather than carry a second code path, and
+  // 300ms is imperceptible on a click.
+  const lastGraphFilters = useRef<FilterState>(filters);
+  useEffect(() => {
+    if (!graphFiltersChanged(lastGraphFilters.current, filters)) return;
+    const timer = setTimeout(() => {
+      lastGraphFilters.current = filters;
+      loadGraph(scorer, filters);
+      loadDirGraph(scorer, filters);
+    }, GRAPH_FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [filters, scorer]);
+
   const visible = useMemo(() => filterFiles(files, filters), [files, filters]);
   const visibleGraphNodes = useMemo(() => filterFiles(graphNodes, filters), [graphNodes, filters]);
   const filterActive = useMemo(() => isFilterActive(filters), [filters]);
+
+  // How many files the ACTIVE view is built from, post-filter.
+  //
+  // Not `visibleGraphNodes.length`, which is what this reported for every
+  // graph-backed tab. That array comes from a response the endpoint CAPS at 400
+  // nodes, so on apache/superset it read "Showing 400 of 6,523" and stayed at
+  // 400 when a filter was applied -- the cap masked the filter completely, and
+  // the counter looked broken at exactly the moment it was being used. A browser
+  // pass caught it while the map underneath was correctly redrawing.
+  //
+  // The server now reports its own post-filter total, so this counter describes
+  // the FILE SET a view is built from and the separate truncation notice
+  // describes how much of it is drawn. Two different facts, stated separately,
+  // rather than one number trying to be both.
+  const shownFileCount = useMemo(() => {
+    if (view === "reading" || view === "subsystems" || filters.subsystemId !== null) {
+      return visible.length;
+    }
+    if (view === "architecture" || view === "matrix") {
+      return dirGraph?.files_matched ?? visibleGraphNodes.length;
+    }
+    if (view === "depgraph" || view === "layers") {
+      return graph?.files_matched ?? visibleGraphNodes.length;
+    }
+    return visibleGraphNodes.length;
+  }, [view, filters.subsystemId, visible, visibleGraphNodes, dirGraph, graph]);
 
   // Dependency Clusters honours the file filter without a new endpoint: the
   // ranked file list already carries a subsystem id per algorithm (RankedFileT,
@@ -1017,12 +1071,30 @@ export default function RepoDetail() {
                 needs the /graph endpoint to accept the filter (see
                 decisions.md), and it is deliberately a separate pass -- the
                 endpoint is read by six other things. */}
-            Showing{" "}
-            {view === "reading" || view === "subsystems" || filters.subsystemId !== null
-              ? visible.length
-              : visibleGraphNodes.length}{" "}
-            of {files.length} files
+            Showing {shownFileCount.toLocaleString()} of {files.length.toLocaleString()} files
           </p>
+
+          {/* The graph endpoint caps what it returns, and until now nothing said
+              so: the Dependency Graph rendered 400 nodes of a 6,523-file repo
+              silently. The denominator is the POST-filter count, so the same
+              sentence is correct filtered and unfiltered -- "400 of 6,523" and
+              "400 of 2,547 matching" are the same number computed the same way.
+              Built that way from the start rather than retrofitted, which would
+              have been right in one case and wrong in the other. */}
+          {view === "depgraph" && graph?.truncated && (
+            <p className="font-mono text-[10px] text-warning">
+              Graph shows the top {graph.nodes.length.toLocaleString()} of{" "}
+              {graph.total_nodes_before_cap.toLocaleString()}
+              {graph.filters_active ? " matching files" : " files"} by rank — narrow the filters to
+              see more of the repo.
+            </p>
+          )}
+          {(view === "architecture" || view === "matrix") && dirGraph?.truncated && (
+            <p className="font-mono text-[10px] text-warning">
+              Map shows {dirGraph.nodes.length.toLocaleString()} of{" "}
+              {dirGraph.total_groups_before_limit.toLocaleString()} directories.
+            </p>
+          )}
         </div>
       )}
 

@@ -1256,3 +1256,151 @@ class TestFindingsEndpoint:
         assert members["floor"] == payload["floor"]
         assert members["max_files_per_row"] == payload["max_files_per_row"]
         assert members["snapshot_id"] == payload["snapshot_id"]
+
+
+class TestGraphFilterVocabulary:
+    """Phase L2. Architecture, Matrix and the Dependency Graph rendered the file
+    filter bar and ignored it; these cover the endpoint half of the fix."""
+
+    def _make_repo(self, tmp_path) -> Path:
+        root = tmp_path / "vocab_repo"
+        _init_repo(root)
+        # Three languages and three top-level segments, so multi-value tests
+        # have something to distinguish.
+        _write(root / "backend" / "app.py", "from backend.util import helper\n\n\ndef run():\n    return helper()\n")
+        _write(root / "backend" / "util.py", "def helper():\n    return 1\n")
+        _write(root / "frontend" / "main.ts", "export const a = 1;\n")
+        _write(root / "frontend" / "view.tsx", "export const V = () => null;\n")
+        _write(root / "scripts" / "build.py", "def build():\n    return 2\n")
+        # A file the noise filter must remove: setup.py is categorised config.
+        _write(root / "setup.py", "from setuptools import setup\n\nsetup(name='x')\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+        return root
+
+    def _ranked(self, db_session, tmp_path):
+        repo = register_from_path(db_session, str(self._make_repo(tmp_path)))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        return repo
+
+    def _paths(self, payload):
+        return sorted(n["path"] for n in payload["nodes"])
+
+    def test_LOADBEARING_languages_accepts_REPEATED_values(self, db_session, tmp_path):
+        """Three values, and the result must differ from EVERY single one of
+        them. A two-value test passes on an implementation that reads only the
+        last value, which is exactly the silent under-filtering this exists to
+        prevent."""
+        repo = self._ranked(db_session, tmp_path)
+        langs = ["python", "typescript", "tsx"]
+
+        multi = get_graph(repo.id, level="file", languages=langs, user=None, db=db_session)
+        multi_paths = set(self._paths(multi))
+
+        singles = {}
+        for lang in langs:
+            single = get_graph(repo.id, level="file", languages=[lang], user=None, db=db_session)
+            singles[lang] = set(self._paths(single))
+            assert single["nodes"], f"fixture produced no {lang} files"
+            assert multi_paths != singles[lang], (
+                f"three-language result equals the {lang}-only result -- "
+                "the endpoint is reading one value, not all three"
+            )
+
+        # And it is the union, not an arbitrary subset.
+        assert multi_paths == set().union(*singles.values())
+
+    def test_LOADBEARING_segments_accepts_repeated_values(self, db_session, tmp_path):
+        repo = self._ranked(db_session, tmp_path)
+        both = get_graph(repo.id, level="file", segments=["backend", "frontend"],
+                         user=None, db=db_session)
+        back = get_graph(repo.id, level="file", segments=["backend"], user=None, db=db_session)
+        front = get_graph(repo.id, level="file", segments=["frontend"], user=None, db=db_session)
+
+        assert set(self._paths(both)) == set(self._paths(back)) | set(self._paths(front))
+        assert set(self._paths(both)) != set(self._paths(back))
+
+    def test_root_level_files_are_reachable_through_the_root_segment(self, db_session, tmp_path):
+        """topLevelSegment maps a file with no "/" to "(root)". If the server
+        spelled that differently, root files would be unmatchable by a chip the
+        UI offers."""
+        repo = self._ranked(db_session, tmp_path)
+        payload = get_graph(repo.id, level="file", segments=["(root)"], user=None, db=db_session)
+        assert "setup.py" in self._paths(payload)
+
+    def test_query_is_a_case_insensitive_substring_of_the_path(self, db_session, tmp_path):
+        repo = self._ranked(db_session, tmp_path)
+        payload = get_graph(repo.id, level="file", query="UTIL", user=None, db=db_session)
+        assert self._paths(payload) == ["backend/util.py"]
+
+    def test_LOADBEARING_a_whitespace_query_narrows_nothing(self, db_session, tmp_path):
+        """filterFiles trims before matching, so a whitespace query removes no
+        files there. If it removed files here the two views would disagree over
+        a filter the user cannot see."""
+        repo = self._ranked(db_session, tmp_path)
+        blank = get_graph(repo.id, level="file", query="   ", user=None, db=db_session)
+        none = get_graph(repo.id, level="file", user=None, db=db_session)
+
+        assert self._paths(blank) == self._paths(none)
+        assert blank["filters_active"] is False
+
+    def test_hide_noise_removes_config_migration_generated(self, db_session, tmp_path):
+        repo = self._ranked(db_session, tmp_path)
+        unfiltered = get_graph(repo.id, level="file", user=None, db=db_session)
+        assert "setup.py" in self._paths(unfiltered), "fixture's config file was not ingested"
+
+        hidden = get_graph(repo.id, level="file", hide_noise=True, user=None, db=db_session)
+        assert "setup.py" not in self._paths(hidden)
+
+    def test_LOADBEARING_filters_apply_BEFORE_directory_aggregation(self, db_session, tmp_path):
+        """The whole reason this is server-side. A directory graph filtered
+        after aggregation would report file counts over files the user
+        excluded -- "50 files" beside a filter matching 3."""
+        repo = self._ranked(db_session, tmp_path)
+        payload = get_graph(repo.id, level="directory", segments=["backend"],
+                            user=None, db=db_session)
+
+        assert payload["nodes"], "no directories survived the filter"
+        for node in payload["nodes"]:
+            assert node["path"].startswith("backend"), f"unfiltered directory {node['path']}"
+        # Counts describe the filtered set, not the whole repo.
+        assert sum(n["file_count"] for n in payload["nodes"]) == payload["files_matched"]
+
+    def test_LOADBEARING_no_edge_survives_whose_endpoint_was_filtered_out(self, db_session, tmp_path):
+        """The dangling-edge condition, checked at the source. The client pins
+        this invariant too, but the server should not be emitting one."""
+        repo = self._ranked(db_session, tmp_path)
+        for kwargs in ({"segments": ["backend"]}, {"languages": ["python"]}, {"query": "util"}):
+            payload = get_graph(repo.id, level="file", user=None, db=db_session, **kwargs)
+            ids = {n["id"] for n in payload["nodes"]}
+            for e in payload["edges"]:
+                assert e["source"] in ids and e["target"] in ids, f"dangling edge under {kwargs}"
+
+    def test_totals_describe_the_POST_filter_population(self, db_session, tmp_path):
+        """The truncation notice reads "400 of N". N must be the matching
+        count once a filter is on, or the notice is right unfiltered and wrong
+        filtered with nothing to distinguish them."""
+        repo = self._ranked(db_session, tmp_path)
+        unfiltered = get_graph(repo.id, level="file", user=None, db=db_session)
+        filtered = get_graph(repo.id, level="file", segments=["backend"], user=None, db=db_session)
+
+        assert unfiltered["total_nodes_before_cap"] == len(unfiltered["nodes"])
+        assert filtered["total_nodes_before_cap"] == len(filtered["nodes"])
+        assert filtered["total_nodes_before_cap"] < unfiltered["total_nodes_before_cap"]
+
+    def test_the_applied_filters_are_echoed(self, db_session, tmp_path):
+        repo = self._ranked(db_session, tmp_path)
+        payload = get_graph(repo.id, level="file", languages=["python"], hide_noise=True,
+                            user=None, db=db_session)
+
+        assert payload["filters"]["languages"] == ["python"]
+        assert payload["filters"]["hide_noise"] is True
+        assert payload["filters_active"] is True
+
+    def test_directory_level_also_echoes_and_counts(self, db_session, tmp_path):
+        repo = self._ranked(db_session, tmp_path)
+        payload = get_graph(repo.id, level="directory", languages=["python"],
+                            user=None, db=db_session)
+        assert payload["filters_active"] is True
+        assert payload["files_matched"] > 0

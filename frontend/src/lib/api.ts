@@ -151,8 +151,13 @@ export interface GraphEdgeT {
 export interface GraphResponseT {
   scorer: ScorerT;
   level: "file";
+  /** POST-filter count. The cap applies to whatever survived filtering, so this
+   *  is the denominator the truncation notice must use in both cases. */
   total_nodes_before_cap: number;
   truncated: boolean;
+  files_matched: number;
+  filters: GraphFiltersT;
+  filters_active: boolean;
   nodes: GraphNodeT[];
   edges: GraphEdgeT[];
 }
@@ -193,6 +198,19 @@ export interface DirEdgeT {
   count: number;
 }
 
+/** Which filters the endpoint applied. Echoed so a client can tell WHICH
+ *  population a total describes — "400 of 6,523" and "400 of 6,523 matching"
+ *  are otherwise indistinguishable in the payload. */
+export interface GraphFiltersT {
+  segments: string[];
+  languages: string[];
+  query: string;
+  hide_noise: boolean;
+  language: string | null;
+  path_prefix: string | null;
+  min_score: number | null;
+}
+
 export interface DirGraphResponseT {
   scorer: ScorerT;
   level: "directory";
@@ -201,6 +219,11 @@ export interface DirGraphResponseT {
   group_rollups: number;
   total_groups_before_limit: number;
   truncated: boolean;
+  /** Files behind the aggregate, post-filter. Directory counts roll up from
+   *  these, and neither number can be derived from the other. */
+  files_matched: number;
+  filters: GraphFiltersT;
+  filters_active: boolean;
 }
 
 export interface NeighborT {

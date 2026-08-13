@@ -32,6 +32,19 @@ import yaml
 
 ALL_CATEGORIES = ("entry", "source", "barrel", "config", "migration", "generated")
 
+# Categories the UI's "hide config/migration/generated" control removes. Named
+# here rather than inline at the endpoint because it is the same set the
+# frontend hard-codes as NOISE_CATEGORIES in lib/filters.ts, and the two must
+# agree: the graph endpoint filters files server-side using THIS list while the
+# reading list filters the same files client-side using that one, so a
+# divergence would make the two views disagree about which files exist while
+# both looked correct.
+#
+# Cross-language, so it cannot be shared as code. What IS enforced here is that
+# every member is a real category (test_node_priors) -- a typo would otherwise
+# silently filter nothing.
+NOISE_CATEGORIES = ("config", "migration", "generated")
+
 DEFAULT_PRIOR_VALUES = {
     "entry": 1.4, "source": 1.0, "barrel": 0.4, "config": 0.2, "migration": 0.15, "generated": 0.05,
 }

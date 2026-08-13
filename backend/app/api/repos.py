@@ -2,7 +2,7 @@ import json
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -18,6 +18,7 @@ from app.services.codebase.dir_aggregation import DEFAULT_MAX_GROUPS, aggregate_
 from app.services.codebase.discovery import TooManyFilesError
 from app.services.codebase.git_ops import GitBinaryUnavailable
 from app.services.codebase.ingest import ingest_repo
+from app.services.codebase.node_priors import NOISE_CATEGORIES
 from app.services.codebase.ordering import compute_layers
 from app.services.codebase.graph_structure import persist_graph_structure
 from app.services.codebase.health_rollup import build_rollup
@@ -327,10 +328,42 @@ def _resolve_edges_by_neighbor(rows: list) -> dict:
     return agg
 
 
+def _as_list(value) -> Optional[list[str]]:
+    """Normalise a repeated query param to a list or None.
+
+    `Query(None)` is a MARKER object, not the value None. FastAPI replaces it
+    when it invokes the route, but this test suite calls route functions
+    directly (see this module's docstring in tests/test_repos_api.py), and a
+    direct call receives the marker -- which is truthy, so every "no filter"
+    call would take the filtering branch and then fail on `in` against a
+    non-iterable. Normalised here so the function behaves identically whether
+    FastAPI supplies the argument or a caller omits it.
+    """
+    return value if isinstance(value, list) else None
+
+
+def _top_level_segment(path: str) -> str:
+    """Mirrors lib/filters.ts::topLevelSegment, including "(root)" for a file
+    with no "/" at all -- a repo's own top-level files need a segment too, or
+    they are silently unmatchable by a segment filter that lists "(root)"."""
+    idx = path.find("/")
+    return "(root)" if idx == -1 else path[:idx]
+
+
 @router.get("/{repo_id}/graph")
 def get_graph(
     repo_id: int, scorer: str = "legacy", level: str = "directory", limit: int = GRAPH_NODE_LIMIT_DEFAULT,
     language: Optional[str] = None, path_prefix: Optional[str] = None, min_score: Optional[float] = None,
+    # --- the UI's own filter vocabulary (Phase L2) -------------------------
+    # Repeated values: ?languages=python&languages=tsx. Deliberately NOT a
+    # single value the client collapses a multi-select into -- sending the
+    # first of three selected languages would silently under-filter, and the
+    # user would read a plausible result computed from a third of what they
+    # asked for. Confidently wrong, which is worse than visibly broken.
+    segments: Optional[list[str]] = Query(None),
+    languages: Optional[list[str]] = Query(None),
+    query: Optional[str] = None,
+    hide_noise: bool = False,
     user: User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     """Nodes + edges for the graph, layer, and architecture-map views.
@@ -372,7 +405,31 @@ def get_graph(
     files, silently wrong at 5,000 (a plausible-looking architecture map
     built from an eighth of the repo). `truncated`/`total_nodes_before_cap`
     (file level) or `truncated`/`total_groups_before_limit` (directory
-    level) report what was cut either way."""
+    level) report what was cut either way.
+
+    Phase L2 -- the UI's filter vocabulary, so Architecture, Matrix and the
+    Dependency Graph can honour the file filter bar they had been rendering
+    and ignoring. `segments`, `languages`, `query` and `hide_noise` mirror
+    lib/filters.ts::filterFiles exactly. Two of the bar's controls are
+    deliberately NOT accepted here, and the reasons are recorded at the
+    endpoint so they are not "added for completeness" later:
+
+      hideZeroFanIn -- fan-in is a property of a FILE. Aggregating it to a
+        directory has three defensible answers (sum, max, distinct external
+        importers) and no obviously correct one. Picking one silently is worse
+        than not offering the filter, because the number would look
+        authoritative.
+
+      subsystemId -- DirNodeT carries a dominant cluster and a purity, not
+        membership, so it cannot answer "is this directory in cluster N".
+        Already recorded in lib/filters.ts's Filterable comment.
+
+    Filtering happens BEFORE aggregation for the same reason capping does not:
+    a directory graph computed from a filtered file set is a different, correct
+    graph, whereas one that filtered the aggregate afterwards would report
+    file counts and edge weights over files the user excluded. That is not
+    available client-side at all -- DirNodeT has no member list -- which is why
+    this lives here rather than in the browser."""
     repo = db.get(Repo, repo_id)
     if not repo:
         raise HTTPException(404, "Repo not found")
@@ -391,16 +448,40 @@ def get_graph(
     if not rows:
         raise HTTPException(404, f"No {scorer!r} ranking for this repo yet -- run rank first.")
 
+    segments = _as_list(segments)
+    languages = _as_list(languages)
+    # Trimmed and lower-cased once, not per file. Matches filterFiles, which
+    # trims before testing -- a whitespace-only query narrows nothing there and
+    # must narrow nothing here, or the two views disagree over a filter the
+    # user cannot see.
+    query_needle = (query or "").strip().lower()
+
     def matches(f: CodeFile, r: CodeFileRank) -> bool:
+        # Legacy single-value params, kept because they are a real lower-level
+        # API with their own tests. The UI uses the plural forms below.
         if language and f.language != language:
             return False
         if path_prefix and not f.path.startswith(path_prefix):
             return False
         if min_score is not None and r.score < min_score:
             return False
+        # --- the UI's vocabulary, mirroring filterFiles ---
+        if segments and _top_level_segment(f.path) not in segments:
+            return False
+        if languages and f.language not in languages:
+            return False
+        if hide_noise and f.prior_category in NOISE_CATEGORIES:
+            return False
+        if query_needle and query_needle not in f.path.lower():
+            return False
         return True
 
     filtered = [(r, f) for r, f in rows if matches(f, r)]
+    # Already the POST-filter denominator, which is what the truncation notice
+    # has to report: "400 of 6,523" unfiltered and "400 of N matching" once a
+    # filter is on are the same number computed the same way, and a notice built
+    # against the unfiltered total would be right in one case and wrong in the
+    # other with nothing to distinguish them.
     total_before_cap = len(filtered)
     # File-level cap only applies at level=file -- see the docstring above
     # for why directory level must see every filtered file uncapped.
@@ -452,15 +533,47 @@ def get_graph(
         for (from_id, to_id), info in edge_agg.items()
     ]
 
+    # Echoed so a client can tell WHICH population a total describes. Without
+    # it "400 of 6,523" and "400 of 6,523 matching" are indistinguishable in the
+    # payload, and a UI has to infer the answer from filter state it might not
+    # have sent -- the same reason the findings endpoint echoes its floor.
+    applied = {
+        "segments": segments or [],
+        "languages": languages or [],
+        "query": query_needle,
+        "hide_noise": hide_noise,
+        # Included so the legacy params cannot silently narrow a response that
+        # claims to be unfiltered.
+        "language": language,
+        "path_prefix": path_prefix,
+        "min_score": min_score,
+    }
+    filters_active = bool(
+        segments or languages or query_needle or hide_noise
+        or language or path_prefix or min_score is not None
+    )
+
     if level == "directory":
         agg = aggregate_to_directories(nodes, edges, max_groups=DEFAULT_MAX_GROUPS, limit=limit)
-        return {"scorer": scorer, "level": "directory", **agg}
+        return {
+            "scorer": scorer, "level": "directory",
+            # Files behind the aggregate, post-filter -- the directory counts
+            # are rolled up from these, so a client showing "N directories from
+            # M files" needs both and can derive neither from the other.
+            "files_matched": total_before_cap,
+            "filters": applied,
+            "filters_active": filters_active,
+            **agg,
+        }
 
     return {
         "scorer": scorer,
         "level": "file",
         "total_nodes_before_cap": total_before_cap,
         "truncated": truncated,
+        "files_matched": total_before_cap,
+        "filters": applied,
+        "filters_active": filters_active,
         "nodes": nodes,
         "edges": edges,
     }
