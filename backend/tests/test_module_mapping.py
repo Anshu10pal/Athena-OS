@@ -111,12 +111,16 @@ class TestOrdering:
         assert [r.path for r in m.topics[0].resources] == ["pkg/ranked.py", "pkg/unranked.py"]
 
     def test_topics_are_ordered_by_their_best_ranked_member(self):
+        # An explicit multi-topic strategy: the DEFAULT is single_topic, which
+        # has nothing to order. Topic ordering only means anything when a
+        # grouping produced more than one.
         ms = [
             {"path": "late/x.py", "file_id": 1, "rank": 90, "prior_category": "source"},
             {"path": "early/y.py", "file_id": 2, "rank": 3, "prior_category": "source"},
         ]
         m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
-                                       member_count=2, members=ms, min_files=1)
+                                       member_count=2, members=ms, min_files=1,
+                                       topic_strategy="parent_directory")
         assert [t.title for t in m.topics] == ["early", "late"]
         assert [t.order_index for t in m.topics] == [0, 1]
 
@@ -172,3 +176,203 @@ class TestSummary:
         s = mm.summarise([], topic_strategy="parent_directory")
         assert s["modules_produced"] == 0
         assert s["topics_per_module"] is None
+
+
+class TestCapAndPaginate:
+    """Cap and paginate rather than roll up.
+
+    §17.17's first two instances had a hierarchy to roll up INTO. Files inside a
+    module do not, so inventing intermediate groups would be manufacturing
+    structure the analysis never found -- the same objection as splitting a
+    122-file cycle by severity band. Reading rank orders them; the top N are
+    shown; the total always travels."""
+
+    def test_LOADBEARING_the_total_travels_with_a_truncated_list(self):
+        # A truncated list whose total is not stated is the graph endpoint's old
+        # "400 of 6,523" problem: a small module and a large one shown small are
+        # indistinguishable.
+        m = mm.map_subsystem_to_module(
+            repo_id=1, subsystem_id=1, subsystem_label="big",
+            member_count=151, members=members(151))
+        t = m.to_dict()["topics"][0]
+
+        assert t["resource_count"] == 151
+        assert t["resources_shown"] == mm.RESOURCE_PREVIEW_LIMIT
+        assert t["resources_truncated"] is True
+        assert len(t["resources"]) == mm.RESOURCE_PREVIEW_LIMIT
+
+    def test_a_short_list_is_not_marked_truncated(self):
+        m = mm.map_subsystem_to_module(
+            repo_id=1, subsystem_id=1, subsystem_label="small",
+            member_count=5, members=members(5))
+        t = m.to_dict()["topics"][0]
+        assert t["resource_count"] == 5 and t["resources_shown"] == 5
+        assert t["resources_truncated"] is False
+
+    def test_LOADBEARING_the_shown_resources_are_the_best_ranked_ones(self):
+        # "Read these first" is the whole point; a cap that showed an arbitrary
+        # 20 would defeat it.
+        ms = [{"path": f"p/f{i}.py", "file_id": i, "rank": 200 - i,
+               "prior_category": "source"} for i in range(50)]
+        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
+                                       member_count=50, members=ms)
+        shown = m.to_dict()["topics"][0]["resources"]
+        assert [r["rank"] for r in shown] == sorted(r["rank"] for r in shown)
+        assert shown[0]["rank"] == 151      # the best-ranked of the 50
+
+    def test_limit_none_returns_everything(self):
+        m = mm.map_subsystem_to_module(
+            repo_id=1, subsystem_id=1, subsystem_label="big",
+            member_count=151, members=members(151))
+        t = m.to_dict(resource_limit=None)["topics"][0]
+        assert t["resources_shown"] == 151 and t["resources_truncated"] is False
+
+    def test_the_full_model_always_keeps_every_resource(self):
+        """The cap is a PREVIEW concern. Truncating the model would make
+        resource_count a lie and lose files on the way to the database."""
+        m = mm.map_subsystem_to_module(
+            repo_id=1, subsystem_id=1, subsystem_label="big",
+            member_count=151, members=members(151))
+        assert m.resource_count == 151
+        assert len(m.topics[0].resources) == 151
+
+
+class TestSingleTopicDefault:
+    """A zero-topic module is not available: `resources.topic_id` is NOT NULL,
+    so a resource cannot exist without a topic. Given one must exist, the choice
+    is between inventing a grouping and declining to."""
+
+    def test_the_default_is_one_topic_holding_everything(self):
+        m = mm.map_subsystem_to_module(
+            repo_id=1, subsystem_id=1, subsystem_label="x",
+            member_count=40, members=members(40, prefix="a/b"))
+        assert len(m.topics) == 1
+        assert m.topics[0].title == "Files"
+        assert m.resource_count == 40
+
+    def test_LOADBEARING_single_topic_does_not_invent_groups_from_paths(self):
+        # parent_directory on this input finds three "concepts" that are three
+        # directories; single_topic reports one module with no sub-structure,
+        # which is what the analysis actually found.
+        ms = (members(3, prefix="a") + members(3, prefix="b") + members(3, prefix="c"))
+        single = mm.map_subsystem_to_module(
+            repo_id=1, subsystem_id=1, subsystem_label="x", member_count=9,
+            members=ms, topic_strategy="single_topic")
+        grouped = mm.map_subsystem_to_module(
+            repo_id=1, subsystem_id=1, subsystem_label="x", member_count=9,
+            members=ms, topic_strategy="parent_directory")
+
+        assert len(single.topics) == 1
+        assert len(grouped.topics) == 3
+        assert single.resource_count == grouped.resource_count == 9
+
+
+class TestUnclusteredModule:
+    """Files from below-floor subsystems are gathered, not dropped. A
+    skipped_reason keeps the COUNTS honest; it does not keep the FILES."""
+
+    def test_leftover_files_become_one_module(self):
+        m = mm.unclustered_module(repo_id=7, members=members(5))
+        assert m is not None
+        assert m.title == "Unclustered"
+        assert m.slug == "unclustered-7"
+        assert m.resource_count == 5
+        assert m.skipped_reason is None
+
+    def test_LOADBEARING_the_file_floor_does_not_apply_to_it(self):
+        # The floor is what put these files here; applying it again would drop
+        # them a second time.
+        m = mm.unclustered_module(repo_id=1, members=members(2))
+        assert m is not None and m.resource_count == 2
+
+    def test_nothing_left_over_produces_no_module(self):
+        assert mm.unclustered_module(repo_id=1, members=[]) is None
+
+
+class TestTitleDisambiguation:
+    """Three of eslint's eight modules are titled `lib/rules`. Slugs differ,
+    which prevents a collision and does nothing for a reader.
+
+    I3's labelling problem one level up: dominant-prefix is the title and the
+    centre file was already the SUBTITLE, so the ambiguous case is where the
+    subtitle earns its keep."""
+
+    def _module(self, sid, label, paths_and_ranks):
+        return mm.map_subsystem_to_module(
+            repo_id=1, subsystem_id=sid, subsystem_label=label,
+            member_count=len(paths_and_ranks),
+            members=[{"path": p, "file_id": i, "rank": r, "prior_category": "source"}
+                     for i, (p, r) in enumerate(paths_and_ranks)])
+
+    def test_LOADBEARING_shared_titles_gain_their_centre_file(self):
+        a = self._module(1, "lib/rules", [("lib/rules/index.js", 12),
+                                          ("lib/rules/eqeqeq.js", 90),
+                                          ("lib/rules/semi.js", 91)])
+        b = self._module(2, "lib/rules", [("lib/rules/utils/ast-utils.js", 30),
+                                          ("lib/rules/utils/keywords.js", 95),
+                                          ("lib/rules/utils/fix-tracker.js", 96)])
+
+        mm.disambiguate_titles([a, b])
+
+        assert a.title == "lib/rules · index"
+        assert b.title == "lib/rules · ast-utils"
+        assert a.title != b.title
+
+    def test_LOADBEARING_an_unambiguous_title_is_left_alone(self):
+        # Only where the prefix is not unique. A module whose name already
+        # identifies it does not get a suffix it did not need.
+        a = self._module(1, "lib/rules", [("lib/rules/index.js", 12),
+                                          ("lib/rules/a.js", 20), ("lib/rules/b.js", 21)])
+        b = self._module(2, "lib/shared", [("lib/shared/x.js", 30),
+                                           ("lib/shared/y.js", 31), ("lib/shared/z.js", 32)])
+
+        mm.disambiguate_titles([a, b])
+
+        assert a.title == "lib/rules"
+        assert b.title == "lib/shared"
+
+    def test_the_centre_file_is_the_best_RANKED_member(self):
+        m = self._module(1, "x", [("p/low.js", 400), ("p/best.js", 3), ("p/mid.js", 50)])
+        assert m.centre_file == "p/best.js"
+
+    def test_the_stem_drops_the_directory_and_the_extension(self):
+        a = self._module(1, "dup", [("deep/nested/path/thing.test.js", 5),
+                                    ("deep/a.js", 6), ("deep/b.js", 7)])
+        b = self._module(2, "dup", [("other/second.py", 8),
+                                    ("other/c.py", 9), ("other/d.py", 10)])
+        mm.disambiguate_titles([a, b])
+        assert a.title == "dup · thing.test"
+        assert b.title == "dup · second"
+
+    def test_slugs_stay_unique_and_within_the_column(self):
+        a = self._module(1, "lib/rules", [("lib/rules/index.js", 12),
+                                          ("lib/rules/a.js", 20), ("lib/rules/b.js", 21)])
+        b = self._module(2, "lib/rules", [("lib/rules/utils/ast-utils.js", 30),
+                                          ("lib/rules/utils/c.js", 31), ("lib/rules/utils/d.js", 32)])
+        mm.disambiguate_titles([a, b])
+        assert a.slug != b.slug
+        assert len(a.slug) <= 120 and len(b.slug) <= 120
+
+    def test_a_skipped_module_has_no_centre_and_is_not_renamed(self):
+        # Below the floor, so it has no resources to be centred on. Renaming it
+        # with an empty stem would produce a trailing separator.
+        skipped = mm.map_subsystem_to_module(
+            repo_id=1, subsystem_id=3, subsystem_label="dup",
+            member_count=2, members=members(2))
+        other = self._module(4, "dup", [("p/a.js", 1), ("p/b.js", 2), ("p/c.js", 3)])
+
+        mm.disambiguate_titles([skipped, other])
+
+        assert skipped.centre_file is None
+        assert skipped.title == "dup"
+
+    def test_three_way_collision_disambiguates_all_three(self):
+        mods = [
+            self._module(i, "lib/rules",
+                         [(f"lib/rules/{name}.js", rank), (f"lib/rules/{name}_b.js", rank + 1),
+                          (f"lib/rules/{name}_c.js", rank + 2)])
+            for i, (name, rank) in enumerate([("index", 12), ("eqeqeq", 40), ("semi", 70)])
+        ]
+        mm.disambiguate_titles(mods)
+        assert len({m.title for m in mods}) == 3
+        assert all(" · " in m.title for m in mods)

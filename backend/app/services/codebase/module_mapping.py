@@ -99,12 +99,43 @@ def _prior_category(path: str, category: Optional[str]) -> str:
 # Named, measured, and one argument away from each other. See the module
 # docstring for what each produced against a 3-8 target -- none of them hits it,
 # which is a finding about the data rather than a reason to pick quietly.
+#
+# `single_topic` is the DEFAULT, and it is the honest one.
+#
+# A zero-topic module is not available: `resources.topic_id` is NOT NULL, so a
+# resource cannot exist without a topic, and a module with no topics returns no
+# resources at all (modules.py fetches resources per topic). Making
+# module-level resources possible would mean altering an existing column from
+# NOT NULL to nullable.
+#
+# Given that a topic must exist, the choice is between INVENTING a grouping the
+# analysis never found -- all three alternatives below fail, and eslint's
+# largest subsystem splits 149/1/1 under the best of them -- and declining to
+# invent one. `single_topic` declines: one topic per module, holding every file
+# in reading-rank order. It says "this module has no sub-structure the analysis
+# can see", which is true, rather than asserting three concepts that are one
+# directory and two strays.
 TOPIC_STRATEGIES: dict[str, Callable[[str, Optional[str]], str]] = {
+    "single_topic": lambda path, cat: "Files",
     "parent_directory": lambda path, cat: _parent_directory(path),
     "second_segment": lambda path, cat: _second_segment(path),
     "prior_category": _prior_category,
 }
-DEFAULT_TOPIC_STRATEGY = "parent_directory"
+DEFAULT_TOPIC_STRATEGY = "single_topic"
+
+# How many resources a PREVIEW returns per topic before truncating. The full
+# count always travels alongside.
+#
+# Cap and paginate rather than roll up. §17.17's first two instances had a
+# hierarchy to roll up INTO -- a parent path that was itself meaningful. Files
+# inside a module do not: 151 files in eslint's largest module are not nested in
+# a way that yields meaningful groups, and inventing intermediate ones is the
+# same objection as splitting a 122-file cycle by severity band.
+#
+# Reading rank is the ordering the ranker exists to produce, and it is exactly
+# what a newcomer needs. A 151-resource module whose first 20 are the right 20
+# is usable; the same module split into invented sub-groups is not.
+RESOURCE_PREVIEW_LIMIT = 20
 
 
 @dataclass
@@ -139,11 +170,20 @@ class CandidateTopic:
     order_index: int
     resources: list[CandidateResource] = field(default_factory=list)
 
-    def to_dict(self) -> dict:
+    def to_dict(self, limit: Optional[int] = RESOURCE_PREVIEW_LIMIT) -> dict:
+        """Capped, with the TOTAL always present.
+
+        A truncated list whose total is not stated is the graph endpoint's old
+        "400 of 6,523" problem: the reader cannot tell a small module from a
+        large one shown small. `resource_count` is the full figure and
+        `resources_truncated` says plainly whether what follows is all of it."""
+        shown = self.resources if limit is None else self.resources[:limit]
         return {
             "slug": self.slug, "title": self.title, "order_index": self.order_index,
             "resource_count": len(self.resources),
-            "resources": [r.to_dict() for r in self.resources],
+            "resources_shown": len(shown),
+            "resources_truncated": len(shown) < len(self.resources),
+            "resources": [r.to_dict() for r in shown],
         }
 
 
@@ -164,7 +204,19 @@ class CandidateModule:
     def resource_count(self) -> int:
         return sum(len(t.resources) for t in self.topics)
 
-    def to_dict(self) -> dict:
+    @property
+    def centre_file(self) -> Optional[str]:
+        """The best-ranked member's path, or None for a module with no members.
+
+        Topics are ordered by their best-ranked member and resources within a
+        topic are rank-ordered, so the first resource of the first topic IS the
+        module's best-ranked file -- no second sort."""
+        for topic in self.topics:
+            if topic.resources:
+                return topic.resources[0].path
+        return None
+
+    def to_dict(self, resource_limit: Optional[int] = RESOURCE_PREVIEW_LIMIT) -> dict:
         return {
             "slug": self.slug, "title": self.title, "kind": self.kind,
             "source": self.source, "summary": self.summary,
@@ -172,7 +224,7 @@ class CandidateModule:
             "member_count": self.member_count,
             "topic_count": len(self.topics),
             "resource_count": self.resource_count,
-            "topics": [t.to_dict() for t in self.topics],
+            "topics": [t.to_dict(resource_limit) for t in self.topics],
             "skipped_reason": self.skipped_reason,
         }
 
@@ -274,6 +326,76 @@ def map_subsystem_to_module(
                 for r_index, m in enumerate(items)
             ],
         ))
+    return module
+
+
+def disambiguate_titles(modules: list[CandidateModule]) -> list[CandidateModule]:
+    """Where several modules share a title, append each one's centre file.
+
+    Mutates and returns the list.
+
+    Three of eslint's eight modules are titled `lib/rules`: three clusters
+    legitimately share a dominant prefix, so the label carries less information
+    than it appears to. Slugs differ, which prevents a collision and does
+    nothing for a reader looking at three modules with one name.
+
+    This is I3's labelling problem resurfacing one level up. Dominant-prefix was
+    chosen as the default title with the top-fan-in stem as a SUBTITLE, and the
+    ambiguous-prefix case is exactly where that subtitle earns its keep -- so the
+    fix is to promote it into the title, and only where the prefix is not
+    unique. An unambiguous title is left exactly as it was.
+
+    The centre file is the module's best-RANKED member rather than its
+    top-fan-in one: it is already computed here, and it is guaranteed distinct
+    because a file belongs to exactly one subsystem. The prefix says WHERE a
+    cluster lives; the centre file says what it is centred ON.
+    """
+    by_title: dict[str, list[CandidateModule]] = {}
+    for m in modules:
+        by_title.setdefault(m.title, []).append(m)
+
+    for title, group in by_title.items():
+        if len(group) < 2:
+            continue
+        for m in group:
+            centre = m.centre_file
+            if centre is None:
+                continue  # a skipped module has no members to be centred on
+            stem = centre.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            m.title = f"{title} · {stem}"
+            m.slug = slugify(f"{title}-{stem}-{m.repo_id}-{m.subsystem_id}")
+    return modules
+
+
+def unclustered_module(
+    *,
+    repo_id: int,
+    members: list[dict],
+    topic_strategy: str = DEFAULT_TOPIC_STRATEGY,
+) -> Optional[CandidateModule]:
+    """One module gathering every file that no real module claimed.
+
+    Subsystems below the file floor are reported with a `skipped_reason`, which
+    keeps the COUNTS honest -- but their files would still be absent from the
+    library, and a file that exists in the repo and appears nowhere is worse
+    than a file in an awkward module. The Dependency Clusters view already
+    solves this the same way, with one "Unclustered" row rather than silence.
+
+    Returns None when nothing was left over, so an empty module is never
+    emitted just to have one.
+    """
+    if not members:
+        return None
+    module = map_subsystem_to_module(
+        repo_id=repo_id,
+        subsystem_id=0,          # not a real subsystem; nothing points at it
+        subsystem_label="Unclustered",
+        member_count=len(members),
+        members=members,
+        min_files=1,             # the floor is what put these files here
+        topic_strategy=topic_strategy,
+    )
+    module.slug = slugify(f"unclustered-{repo_id}")
     return module
 
 

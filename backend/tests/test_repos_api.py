@@ -1463,10 +1463,32 @@ class TestModulePreviewEndpoint:
         payload = get_module_preview(repo.id, user=None, db=db_session)
 
         considered = payload["summary"]["subsystems_considered"]
-        assert considered == len(payload["modules"])
+        real = [m for m in payload["modules"] if m["title"] != "Unclustered"]
+        # One row per subsystem, plus at most one synthetic Unclustered module
+        # gathering the files that below-floor subsystems would otherwise take
+        # with them.
+        assert considered == len(real)
+        assert len(payload["modules"]) - len(real) <= 1
         for m in payload["modules"]:
             if m["skipped_reason"] is not None:
                 assert m["topics"] == []
+
+    def test_LOADBEARING_below_floor_files_are_gathered_not_dropped(self, db_session, tmp_path):
+        """A skipped_reason keeps the COUNTS honest; it does not keep the FILES.
+        A file that exists in the repo and appears nowhere in the library is
+        worse than one in an awkward module."""
+        repo = self._clustered(db_session, tmp_path)
+        payload = get_module_preview(repo.id, user=None, db=db_session)
+
+        skipped_files = sum(
+            m["member_count"] for m in payload["modules"] if m["skipped_reason"] is not None)
+        unclustered = [m for m in payload["modules"] if m["title"] == "Unclustered"]
+        if skipped_files:
+            assert unclustered, "below-floor files vanished instead of being gathered"
+            assert unclustered[0]["resource_count"] == skipped_files
+            assert unclustered[0]["skipped_reason"] is None
+        else:
+            assert not unclustered, "an empty Unclustered module was emitted"
 
     def test_LOADBEARING_files_are_resources_not_topics(self, db_session, tmp_path):
         """The correction: mapping files to TOPICS produced 932 topics in one

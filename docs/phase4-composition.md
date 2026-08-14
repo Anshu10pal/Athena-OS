@@ -137,6 +137,97 @@ rolling up to a **budget** rather than choosing a level, and the same answer
 presumably applies here: a subsystem whose resource count exceeds a budget is
 split rather than emitted whole. **Not implemented — that is a design decision.**
 
+### A zero-topic module is not available, and that decides the topic question
+
+Investigated because "a codebase module may not have topics at all" is the
+better reading of the evidence. It is not reachable:
+
+| Question | Answer |
+|---|---|
+| Can a resource exist without a topic? | **No.** `resources.topic_id` is `NOT NULL` with an FK to `topics.id` |
+| Is there a `resources.module_id`? | **No.** Resources reach a module only through a topic |
+| Does `module_progress` divide by zero? | **No** — it guards `total == 0` and returns `percent=0, state="not_started"` |
+| Can a review card attach to a resource? | **Yes** — `review_items.node_id` is free-text VARCHAR(40), so `repo:<id>:<file_id>` works and does not depend on topics |
+
+So the API fetching resources per topic (`modules.py:34` then `:48`) is
+downstream of a schema constraint, not a design choice. **A zero-topic module
+returns no resources — it is an empty module, not a module of resources.**
+
+Making module-level resources possible would need `resources.topic_id` changed
+from `NOT NULL` to nullable, which alters an existing column and **fails the
+risk gate**.
+
+### Given a topic must exist: decline to invent one
+
+`single_topic` is now the **default**. One topic per module, titled `Files`,
+holding every file in reading-rank order.
+
+The choice was never "topics or no topics" — it was **invent a grouping or
+decline to**. All three path-derived strategies fail, and eslint's largest
+subsystem splits 149/1/1 under the best of them. `single_topic` says "this
+module has no sub-structure the analysis can see", which is true, instead of
+asserting three concepts that are one directory and two strays.
+
+### Cap and paginate, not roll up
+
+§17.17's first two instances had a hierarchy to roll up *into* — a parent path
+that was itself meaningful. Files inside a module do not. Inventing intermediate
+groups is the same objection as splitting a 122-file cycle by severity band.
+
+So: rank-order, show the top 20, state the total. On eslint's largest module
+that is 151 files with the top 20 shown, led by `lib/rules/index.js` at rank 12.
+`resource_count`, `resources_shown` and `resources_truncated` all travel in the
+payload — a truncated list whose total is not stated is the graph endpoint's old
+"400 of 6,523" problem.
+
+**This also settles the `order_index` question.** Reading rank *is* the resource
+ordering, so nothing is lost by moving files from topics to resources — the
+earlier note about absolute rank stands only in the sense that the stored column
+holds position rather than rank.
+
+### Below-floor subsystems are gathered, not dropped
+
+A `skipped_reason` keeps the counts honest; it does not keep the files. Files
+from subsystems under the 3-file floor now land in a single **`Unclustered`**
+module — the pattern the Dependency Clusters view already uses. On eslint that
+is 4 files (`lib/shared/text-table.js`, `lib/config-api.js`, `eslint.config.js`,
+`lib/cli-engine/formatters/stylish.js`) that would otherwise appear nowhere.
+
+### The shipped default, on eslint
+
+```
+modules produced: 8 (7 subsystems + Unclustered)
+resources per module: min 4 / median 11 / max 151     curated: 10 / 14 / 17
+
+  lib/rules · index                         151 resources, showing 20  [capped]
+  lib/rules · ast-utils                     139 resources, showing 20  [capped]
+  lib/shared                                 56 resources, showing 20  [capped]
+  lib/languages/js/source-code/token-store   13 resources, showing 13
+  lib/rules/utils/unicode                    10 resources, showing 10
+  lib/linter/code-path-analysis               8 resources, showing 8
+  lib/rules · code-path-utils                 7 resources, showing 7
+  Unclustered                                 4 resources, showing 4
+```
+
+### Ambiguous titles are disambiguated by the centre file
+
+Three of these were titled `lib/rules` — three clusters legitimately sharing a
+dominant prefix, so the label carried less information than it appeared to.
+Slugs differed, which prevents a collision and does nothing for a reader looking
+at three modules with one name.
+
+**This is I3's labelling problem one level up.** Dominant-prefix was chosen as
+the title with the top-fan-in stem as a SUBTITLE, and the ambiguous-prefix case
+is exactly where that subtitle earns its keep — so it is promoted into the
+title, and **only where the prefix is not unique**. `lib/shared` above is
+untouched.
+
+The centre file is the module's best-**ranked** member: already computed, and
+guaranteed distinct because a file belongs to exactly one subsystem. The prefix
+says *where* a cluster lives; the centre file says what it is centred *on* —
+`lib/rules · index` and `lib/rules · ast-utils` are immediately different
+things, which `lib/rules` twice was not.
+
 ### The topic level does not exist in the data
 
 Three derivable candidates, measured for "groups per subsystem" against a 3–8

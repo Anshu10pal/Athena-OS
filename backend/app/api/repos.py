@@ -1138,6 +1138,29 @@ def get_module_preview(
         for s in subsystems
     ]
 
+    # Files from below-floor subsystems, gathered rather than dropped. Reporting
+    # a skipped_reason keeps the COUNTS honest; it does not keep the FILES, and
+    # a file that exists in the repo but appears nowhere in the library is worse
+    # than one in an awkward module. Same answer the Dependency Clusters view
+    # already gives with its single "Unclustered" row.
+    claimed = {m.subsystem_id for m in modules if m.skipped_reason is None}
+    leftovers = [
+        member
+        for sid, member_list in members_by_subsystem.items()
+        if sid not in claimed
+        for member in member_list
+    ]
+    unclustered = module_mapping.unclustered_module(
+        repo_id=repo_id, members=leftovers, topic_strategy=topic_strategy)
+    if unclustered is not None:
+        modules.append(unclustered)
+
+    # Several clusters can legitimately share a dominant prefix -- three of
+    # eslint's eight modules are titled `lib/rules` -- so a title is only
+    # unique after the fact. Applied here, over the whole set, because no
+    # single-subsystem mapping can know what the others are called.
+    module_mapping.disambiguate_titles(modules)
+
     return {
         "repo_id": repo_id,
         "algorithm": algorithm,
