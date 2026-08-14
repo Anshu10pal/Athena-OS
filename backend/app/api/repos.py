@@ -1,4 +1,4 @@
-import json
+﻿import json
 import time
 from typing import Optional
 
@@ -13,7 +13,9 @@ from app.db.models import (
     CodeFile, CodeFileHealth, CodeFileRank, CodeHealthSnapshot, CodeImport,
     CodeSubsystem, Repo, RepoJob, User,
 )
-from app.services.codebase import deletion, edge_weights, findings_queue, jobs, registry, repo_lock
+from app.services.codebase import (
+    deletion, edge_weights, findings_queue, jobs, module_mapping, registry, repo_lock,
+)
 from app.services.codebase.dir_aggregation import DEFAULT_MAX_GROUPS, aggregate_to_directories
 from app.services.codebase.discovery import TooManyFilesError
 from app.services.codebase.git_ops import GitBinaryUnavailable
@@ -889,7 +891,7 @@ def get_health_files(
 ):
     """Per-file results from the latest snapshot, with stored explanations.
 
-    Effort-aware ranking shows BOTH columns (contract §11): `exposure` and
+    Effort-aware ranking shows BOTH columns (contract Â§11): `exposure` and
     `adjusted_exposure`. Files whose axis was N/A are excluded from ranking
     and counted separately rather than sorted as if they scored zero."""
     repo = db.get(Repo, repo_id)
@@ -1052,6 +1054,101 @@ def get_findings_files(
     )
 
 
+@router.get("/{repo_id}/module-preview")
+def get_module_preview(
+    repo_id: int, algorithm: str = "modularity",
+    topic_strategy: str = module_mapping.DEFAULT_TOPIC_STRATEGY,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Phase 4 groundwork: what modules this repo's subsystems WOULD produce.
+
+    READ-ONLY. Computes and returns; writes nothing, inserts nothing, and no
+    other code path consumes it. It exists so the mapping can be seen and
+    argued with BEFORE a row is written into tables that hold hand-curated
+    content -- `modules`/`topics`/`resources` mix curated and derived rows
+    already, and getting that mixing wrong is the hard-to-unwind case.
+
+    Everything here is derived from rows that already exist: `code_subsystems`
+    for the groups, `code_files` for membership, `code_file_ranks` for the
+    ordering. Nothing is invented and no prose is generated -- see
+    module_mapping.py for why the summary is deliberately empty.
+
+    Subsystems too small to be a module are RETURNED with a `skipped_reason`
+    rather than filtered out, so the preview's counts can be checked against
+    the Dependency Clusters tab instead of silently disagreeing with it.
+
+    `topic_strategy` is exposed because the topic level is the part of this
+    mapping the data does NOT supply -- see module_mapping.py for the three
+    candidates and what each measured against a 3-8 target (none is close).
+    Selectable so the shape can be compared from real output rather than
+    argued from a docstring."""
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    if algorithm not in VALID_ALGORITHMS:
+        raise HTTPException(400, f"Unknown algorithm {algorithm!r} -- must be one of {VALID_ALGORITHMS}")
+    if topic_strategy not in module_mapping.TOPIC_STRATEGIES:
+        raise HTTPException(
+            400,
+            f"Unknown topic_strategy {topic_strategy!r} -- must be one of "
+            f"{sorted(module_mapping.TOPIC_STRATEGIES)}",
+        )
+
+    column = subsystem_column_for(algorithm)
+    subsystems = (
+        db.query(CodeSubsystem)
+        .filter(CodeSubsystem.repo_id == repo_id, CodeSubsystem.algorithm == algorithm)
+        .order_by(CodeSubsystem.member_count.desc(), CodeSubsystem.id.asc())
+        .all()
+    )
+    if not subsystems:
+        raise HTTPException(
+            404,
+            f"No {algorithm} clustering for this repo yet -- run clustering first. "
+            "An empty preview would read as 'this repo produces no modules'.",
+        )
+
+    # One pass for every member file, then grouped in memory: a query per
+    # subsystem would be 250+ round trips on apache/superset.
+    rank_by_file = dict(
+        db.query(CodeFileRank.file_id, CodeFileRank.rank)
+        .filter(CodeFileRank.repo_id == repo_id, CodeFileRank.scorer == "legacy")
+        .all()
+    )
+    members_by_subsystem: dict[int, list[dict]] = {}
+    for file_id, path, category, sid in (
+        db.query(CodeFile.id, CodeFile.path, CodeFile.prior_category, column)
+        .filter(CodeFile.repo_id == repo_id, column.isnot(None))
+        .all()
+    ):
+        members_by_subsystem.setdefault(sid, []).append(
+            {"path": path, "file_id": file_id, "rank": rank_by_file.get(file_id),
+             "prior_category": category}
+        )
+
+    modules = [
+        module_mapping.map_subsystem_to_module(
+            repo_id=repo_id,
+            subsystem_id=s.id,
+            subsystem_label=s.custom_label or s.dominant_prefix_label or s.top_fan_in_label,
+            member_count=s.member_count,
+            members=members_by_subsystem.get(s.id, []),
+            topic_strategy=topic_strategy,
+        )
+        for s in subsystems
+    ]
+
+    return {
+        "repo_id": repo_id,
+        "algorithm": algorithm,
+        "topic_strategy": topic_strategy,
+        "available_topic_strategies": sorted(module_mapping.TOPIC_STRATEGIES),
+        "writes_nothing": True,
+        "summary": module_mapping.summarise(modules, topic_strategy=topic_strategy),
+        "modules": [m.to_dict() for m in modules],
+    }
+
+
 @router.get("/{repo_id}/overview")
 def get_overview(repo_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Phase K1: aggregate stats, structural health, and change hotspots
@@ -1177,3 +1274,4 @@ def rename_subsystem(
     subsystem.active_label_rule = "custom"
     db.commit()
     return _serialize_subsystem(subsystem)
+

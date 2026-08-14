@@ -250,6 +250,22 @@ class Resource(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
+    # --- Phase 4 groundwork: a resource that points at code -----------------
+    # All nullable, nothing writes them yet, nothing reads them. See migration
+    # b7c2e4d9a015 for why these are separate from `file_path` (which means an
+    # UPLOADED file on this machine) and why `code_repo_id` carries no foreign
+    # key.
+    #
+    # `code_commit_sha` is the one that looks optional and is not: line numbers
+    # are only meaningful against the revision they were computed from, so a
+    # reference without a SHA points at a moving target and goes stale
+    # silently.
+    code_repo_id: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+    code_path: Mapped[str] = mapped_column(String(1000), nullable=True, default=None)
+    code_line_start: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+    code_line_end: Mapped[int] = mapped_column(Integer, nullable=True, default=None)
+    code_commit_sha: Mapped[str] = mapped_column(String(64), nullable=True, default=None)
+
     topic: Mapped["Topic"] = relationship(back_populates="resources")
 
 
@@ -334,6 +350,12 @@ class TopicProgress(Base):
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
     completed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Phase 4 groundwork: "read" and "understood" are different claims, and
+    # `completed_at` alone can only make the first. Nullable, nothing writes it
+    # yet, and every existing row keeps `completed_at` meaning exactly what it
+    # meant. NULL reads as "not claimed" rather than "not understood" -- the
+    # same exclude-don't-zero reasoning as `files_partially_na`.
+    understood_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)
 
 
 class ModuleAssessment(Base):

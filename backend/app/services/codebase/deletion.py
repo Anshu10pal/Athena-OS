@@ -236,16 +236,59 @@ def delete_repo(db: Session, repo: Repo, confirm: str) -> DeletionReport:
         raise RepoDeletionRefused(
             f"Confirmation did not match: expected {label!r}, got {confirm!r}. Nothing was deleted."
         )
+    return delete_repo_unconfirmed(db, repo, reason="user confirmed")
 
+
+def delete_repo_unconfirmed(db: Session, repo: Repo, *, reason: str) -> DeletionReport:
+    """The deletion itself, for callers where a typed confirmation is meaningless.
+
+    A SEPARATE ENTRY POINT, not a magic value passed to `delete_repo`. LRU cache
+    eviction has no user to confirm anything, and the alternatives were both
+    worse: a sentinel like `confirm="__internal__"` makes the guard look
+    bypassable to anyone reading the call site, and threading a `skip_confirm`
+    flag through means one boolean stands between an automated path and every
+    row of a repo.
+
+    Splitting the CONFIRMATION from the GUARDS is the point. This skips only the
+    typed check. It does not skip the two-condition directory guard, the delete
+    order, the cycle break, or the logging -- those are in the shared body below
+    and every caller gets them. Eviction is clones-only, but it must still be
+    unable to delete a directory outside the clone cache, and the guard that
+    enforces that is not the confirmation.
+
+    `reason` is required and appears in the log, so a deletion in the record can
+    be attributed to a user action or to eviction without guessing.
+    """
+    # Read off the instance BEFORE anything is deleted: once the row is gone,
+    # touching repo.id triggers a refresh of a row that no longer exists.
     repo_id = repo.id
+    label = repo_label(repo)
     source_kind = repo.source_kind
-    may_delete_dir, reason = clone_directory_verdict(repo)
+    may_delete_dir, dir_reason = clone_directory_verdict(repo)
     directory_path = str(Path(repo.local_path).resolve()) if repo.local_path else None
 
     counts = {
         name: db.execute(text(sql), {"rid": repo_id}).scalar() or 0
         for name, sql in _COUNT_PLAN
     }
+
+    # Logged BEFORE anything is removed, and again after.
+    #
+    # This function had no logging at all, which is why a repo that vanished
+    # completely across all eight tables could only be recorded as unexplained:
+    # the one code path capable of producing that outcome left no trace of
+    # having run, so "was delete_repo called?" was unanswerable rather than
+    # merely unanswered.
+    #
+    # The BEFORE line is the load-bearing one. An after-only log records
+    # successes and says nothing about a run that died midway -- which is
+    # exactly the case where the rows are gone and nobody knows why. Same
+    # reasoning as the job record's started_at existing separately from
+    # finished_at.
+    print(f"[deletion] repo {repo_id} ({label}): reason={reason!r}; "
+          f"deleting {sum(counts.values())} rows across {len(counts)} tables; "
+          f"source_kind={source_kind}; directory_will_be_removed={may_delete_dir} "
+          f"path={directory_path!r}")
 
     # Rows first. If the directory removal fails afterwards the rows are still
     # gone and the repo is unregistered, which is recoverable -- a leftover
@@ -262,7 +305,7 @@ def delete_repo(db: Session, repo: Repo, confirm: str) -> DeletionReport:
         source_kind=source_kind,
         rows_deleted=counts,
         directory_path=directory_path,
-        directory_reason=reason,
+        directory_reason=dir_reason,
     )
 
     if may_delete_dir and directory_path and Path(directory_path).exists():
@@ -271,7 +314,9 @@ def delete_repo(db: Session, repo: Repo, confirm: str) -> DeletionReport:
     elif may_delete_dir:
         report.directory_deleted = False
         report.directory_reason = (
-            f"{reason} The directory was already absent, so nothing was removed."
+            f"{dir_reason} The directory was already absent, so nothing was removed."
         )
 
+    print(f"[deletion] repo {repo_id} ({label}): done; reason={reason!r}; "
+          f"{report.rows_total} rows removed; directory_deleted={report.directory_deleted}")
     return report

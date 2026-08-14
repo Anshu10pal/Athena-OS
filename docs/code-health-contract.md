@@ -2066,6 +2066,20 @@ and had no equivalent for prose. The rule above is the prose equivalent.
 Same family as §17.5d: a caveat that exists somewhere and does not travel to
 where the number is read is not a caveat.
 
+**Extension, added after the fourth instance: this applies to INSTRUCTIONS
+derived from the record, not only to numbers quoted from it.** Four times in one
+session, work was specified against a stale reading of this repository's own
+documents -- a §17 batch listing an entry that had already been written, a
+"never run" validation that had run twice with the exact metrics being asked
+for, a finding count from a superseded instrument, and a deferred item whose
+recorded fix options no longer existed. Each instruction was internally
+coherent and pointed at a state the record had already moved past.
+
+A number carries its instrument. A plan carries the reading of the record it was
+built from, and that reading has the same provenance problem -- with the
+difference that nobody thinks to date a plan. **Before acting on a recorded
+to-do, check the artifact it describes rather than the entry describing it.**
+
 ### 17.17 Count and size are inversely coupled in any fixed-depth grouping
 
 > **At a fixed level of a hierarchy, group count and group size trade against
@@ -2211,3 +2225,221 @@ combination §17.0 warns about. Each says what would falsify it.
 **The rule this table encodes:** a §17 entry states whether it rests on a
 measurement or on a generalisation, and gives the path to re-check it. An entry
 that can state neither has not established anything yet.
+
+### 17.20 A change that alters nothing but reads as a fix
+
+**Three instances, and the third is a different sub-shape from the first two.**
+Distinct from §17.9 (the instrument misreports) and from cascade suppression (a
+correct value discarded downstream): here the CODE was already right, or already
+wrong in a way the change did not touch, and the change presents as a repair.
+
+The damage is not the wasted edit. It is that a fix-shaped commit is believed:
+it is written down, it is cited later, and the thing it claimed to fix is
+crossed off.
+
+| # | The change | What it actually did | How it was caught |
+|---|---|---|---|
+| 1 | Overrode uvicorn's access formatter to "add" the query string | Produced a **byte-identical** format string. uvicorn already logs the query via `get_path_with_query_string` | Printing the old and new `fmt` side by side and comparing them |
+| 2 | `sys.stdout.reconfigure(line_buffering=True)` in `run.py` to fix empty logs | Fixed a real defect that was **not the cause**. Logs stayed empty | The logs were still empty afterwards |
+| 3 | `PYTEST_CURRENT_TEST` guard on the port check | Correct variable, evaluated at the wrong moment — it is set per TEST, and the module is imported during COLLECTION | The tests failed identically to before |
+
+**No-op versus partial fix, which is the distinction instance 2 forces.**
+Instance 1 changed nothing at all. Instance 2 changed something real —
+block-buffered stdout genuinely does lose output on kill, and that would have
+bitten the moment the actual cause was fixed — but it was not why the logs were
+empty. A partial fix is more dangerous than a no-op precisely because it is
+defensible: every word written about it was true, and the conclusion drawn from
+it was wrong.
+
+Instance 2 was also **already relied upon**. It shipped in a commit describing
+the log as "the record for the open Dependency Graph crash". The crash's
+frontend instrumentation was verified by injected throw; the backend half was
+verified by reading the configuration. One layer was tested and one was
+asserted, and the untested one was the one that mattered.
+
+**Guard: a fix is verified by observing the SYMPTOM disappear, not by observing
+the change take effect.** "The formatter is now overridden", "stdout is now
+line-buffered" and "the guard now skips under pytest" were all true, and the log
+was still empty in the first two and the tests still failed in the third.
+
+### 17.21 A null observation is compatible with several mechanisms
+
+An empty file, a zero count, a silent log: absence of output is the observation
+that most easily supports the first explanation offered, because it looks
+identical under every cause.
+
+**The instance.** Every server log in a session was empty. First diagnosis:
+stdout buffering, which is real and demonstrable — a redirected process killed
+three seconds after printing produces a zero-byte file. It was accepted, fixed,
+committed, and the logs were still empty.
+
+The actual cause was `alembic/env.py` calling
+`fileConfig(config.config_file_name)` with `disable_existing_loggers` defaulting
+to **True**, from a migration run at startup — which switched off
+`uvicorn.access` and `uvicorn.error` for the life of every process.
+
+**The discriminating evidence was present the whole time and was not looked at:
+alembic's OWN log lines were in the file while uvicorn's were absent.** Logging
+was working; specific loggers had been disabled. Buffering cannot produce that —
+it loses everything or nothing. One line of the existing output separated the
+two hypotheses and it was read past, because the first explanation already
+accounted for "the file is empty".
+
+**The rule: when the observation is an absence, enumerate what ELSE produces the
+same absence before fixing the first candidate.** Then find the evidence that
+separates them — and it is usually the thing that is present rather than the
+thing that is missing, because an absence is uniform and a presence has
+structure.
+
+Related to §17.0b's third clause (check the mechanism against what the
+instrument measured) but distinguishable: there, a number was divided by the
+wrong denominator. Here there was no number at all, and the absence was treated
+as a measurement of one cause.
+
+### 17.22 A probe that cannot see the change reports "no change"
+
+Eleven-plus instances of §17.9 across this project, and this is the sub-shape
+worth naming separately, because its output is indistinguishable from a genuine
+negative result and is therefore *acted on*.
+
+**The instances, all from checking whether the Matrix honoured a filter:**
+
+| Probe | Why it could not see the change |
+|---|---|
+| Cell COUNT | The grid is capped at 24 groups: its size is constant while its contents change entirely |
+| `th`/`td` text containing `/` | Cells render `short_label` (the last path segment, no slash); the full path is in a `title` ATTRIBUTE |
+| `/algorithm agreement/i` for a suppressed value | Also matches the SUPPRESSION NOTICE, so the feature working and explaining itself read as the feature failing |
+
+The third is the sharpest: the probe could not distinguish the thing from the
+notice of its absence, so success produced text that the check scored as
+failure.
+
+**The rule, in three parts:**
+
+1. **Positive control first.** Before asserting a change, assert the probe can
+   see the pre-change state. The corrected Matrix probe checks that frontend
+   directories are present unfiltered; if they are not, it exits **2** and
+   reports nothing about filtering.
+2. **A distinct exit code for "blind".** Not a failure and not a pass. A probe
+   that cannot measure has produced no evidence, and collapsing that into
+   "pass" or "fail" is what makes it dangerous.
+3. **Never report a comparison you could not make.** Two of these probes said
+   "no change" about a view that was changing correctly underneath them.
+
+A probe that can only return "no change" is worse than no probe. No probe leaves
+a known gap; a blind probe fills it with a false negative carrying the same
+confidence as a real one.
+
+### 17.23 Data disappeared and the guarantee did not hold
+
+Recorded for what it MEANS, not for what happened: **the property that data
+cannot vanish without an identifiable cause does not currently hold in this
+system.** The missing rows are the evidence, not the finding.
+
+**What happened.** Repo 5 was present at the start of a session with 43 rows
+across five tables, present after a cleanup that deliberately did not target it,
+and absent afterwards — with **no orphaned rows**, meaning a complete removal
+across all eight tables.
+
+**What is ruled out.** LRU eviction targets `source_kind == "clone"` only (repo
+5 was `local`), and at the time it deleted the `Repo` row alone, which would
+have LEFT orphans — there were none. The cleanup script filtered
+`name like 'athena-owned-%'`; repo 5 was named `repo`.
+
+**What is left.** Either something invoked deletion in a way not identified, or
+the reasoning about what can produce a complete removal is incomplete. No
+evidence exists to distinguish those, because `delete_repo` had **no logging at
+all** — the one code path capable of that outcome left no trace of having run,
+so "was it called?" was unanswerable rather than merely unanswered. And the
+server access log that would have shown the request was empty for the whole
+session (§17.21).
+
+**Three things changed as a result**, none of which explains this occurrence:
+
+- `delete_repo` logs before and after every invocation, with a required
+  `reason`. The BEFORE line is the load-bearing one: an after-only log records
+  successes and says nothing about a run that died midway, which is precisely
+  the case where rows are gone and nobody knows why.
+- Logging works at all now (§17.21).
+- Eviction calls `delete_repo_unconfirmed` instead of a hand-rolled
+  `db.delete`, so the second destructive path is the same code as the first.
+
+**The general form: after a destructive operation exists, "can this data
+disappear without a trace?" is a question with a testable answer, and it should
+be asked before the operation ships rather than after something vanishes.** A
+43-row fixture is a cheap place to learn it. The same failure on a repository
+someone cares about is not.
+
+### 17.24 A check that silently detached from its subject
+
+Distinct from §17.9's eleven instances, and the distinction is the point.
+
+Those eleven were instruments that **could not perceive the variable** — a
+grep that could not see wrapped text, a cell count that could not see a content
+change, a probe that could not tell a value from the notice of its absence. The
+instrument was pointed at the right thing and lacked the resolution to see it.
+
+This one was pointed at the right thing and then **stopped being pointed at it**,
+while continuing to run, pass, and report.
+
+#### The instance
+
+Three helpers in `test_ranking.py` identified the `git log` call by POSITION:
+
+```python
+if args and args[0] == "log":   # inject a timeout / an OSError / capture argv
+```
+
+The K8 fix prepended two elements to the command — `-c core.quotepath=false` —
+so `args[0]` became `-c`. The helpers stopped matching. Nothing errored:
+
+- the injected `TimeoutExpired` was never raised
+- the injected `OSError` was never raised
+- the argv capture recorded nothing, and the assertion died on `KeyError: 'args'`
+
+Two of those three tests exist to prove that history collection **degrades
+gracefully** — that a slow or failing `git log` returns `None` and costs the repo
+its history signals rather than its entire ranking run. For the duration of the
+detachment, both were exercising the happy path and asserting nothing about
+degradation at all.
+
+#### Why it announced itself, and how easily it might not have
+
+It failed only because the happy path returned real history where `None` was
+asserted, and `{...} is None` is false. **A looser assertion would have passed
+green forever with those two guarantees unprotected.** `assert result is None or
+result` would have done it. So would asserting on a count that happens to match.
+
+That is the property that makes this worth its own entry: §17.9's instruments
+produce a wrong ANSWER, which is at least an answer. This produces a test that
+still passes while measuring nothing, and a passing test is not re-examined.
+
+#### The guard
+
+**Identify a subject by a PROPERTY of it, not by its position among its
+neighbours.**
+
+```python
+if args and "log" in args:      # survives any prefix
+```
+
+This is §17.15 — predicate-as-property versus predicate-as-list — arriving in a
+test helper rather than in product code. `args[0] == "log"` is a positional
+claim about a list whose shape someone else controls; `"log" in args` is a claim
+about the command itself. The list-shaped version was correct when written and
+was invalidated by a change two modules away that had no reason to know it
+existed.
+
+#### Two layers, and the cheap one catches drift
+
+The same fix produced the pattern worth keeping. K8 is now pinned twice:
+
+| Layer | Test | Cost | Catches |
+|---|---|---|---|
+| Command shape | `core.quotepath=false` is in the argv | Microseconds, no fixture, every platform | **Argv drift** — the flag being dropped, reordered, or overwritten |
+| Behaviour | CJK / accented / Cyrillic filenames come back matching `CodeFile.path` | A real git repo per run | The flag being present and not working |
+
+The cheap one is the one that would have caught this class of failure, and it is
+the one that would have been skipped as redundant. It is not redundant: it
+asserts on the interface between two modules, which is exactly where a change
+made elsewhere invalidates an assumption made here.

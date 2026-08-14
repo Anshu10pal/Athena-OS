@@ -403,10 +403,37 @@ export function DependencyGraph({
     layout.run();
     // ELK resolves asynchronously; fit after it settles, not before, or
     // the viewport is fitted to pre-layout positions.
-    cy.one("layoutstop", () => {
+    const onLayoutStop = () => {
       recordLayoutSettled();
       cy.fit(undefined, 40);
-    });
+    };
+    cy.one("layoutstop", onLayoutStop);
+
+    // Cancel an in-flight layout when `elements` change again.
+    //
+    // Without this, an effect that starts asynchronous work never stops it. The
+    // next run calls `cy.elements().remove()`, destroying the very nodes the
+    // previous ELK layout is still positioning, and that layout carries on
+    // against objects that no longer exist. Ordinary React hygiene -- an effect
+    // that starts async work owns cancelling it -- and it is the reason this
+    // needed no new state: `layout` and the handler are both already scoped to
+    // this run.
+    //
+    // NOTE, deliberately: this is NOT claimed as the fix for the reported
+    // `Cannot read properties of undefined (reading 'index')` crash. That crash
+    // has never been reproduced, its reported trigger (select a cluster chip,
+    // deselect it) is exactly a narrow-then-widen transition inside the ELK
+    // settling window, and this is the mechanism most consistent with it -- but
+    // "most consistent with" is not evidence. The defect stands on its own:
+    // uncancelled async work in an effect is wrong whether or not it is what
+    // was seen. See decisions.md, where the two are recorded separately for
+    // this reason.
+    return () => {
+      cy.removeListener("layoutstop", onLayoutStop);
+      // stop() is safe on a finished layout; cytoscape treats it as a no-op.
+      layout.stop();
+      recordLayoutSettled();
+    };
   }, [cy, elements, showFullGraph, focusIds]);
 
   const hasFocus = focusIds.length > 0 || showFullGraph;

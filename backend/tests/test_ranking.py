@@ -1,4 +1,4 @@
-"""Phase C: ranking. Graph signals are tested against small ingested repos;
+﻿"""Phase C: ranking. Graph signals are tested against small ingested repos;
 history signals against REAL local git repos created on disk (not mocked --
 these are local, no-network git operations, same as Phase A's register_from_path
 tests already do unmocked). The path-prefix-offset test reproduces the exact
@@ -1313,7 +1313,12 @@ class TestHistoryCollectionSurvivesSlowRepos:
         real = git_ops.run_git
 
         def side_effect(args, **kw):
-            if args and args[0] == "log":
+            # `"log" in args`, not `args[0]`: the command is prefixed with
+            # `-c core.quotepath=false` (K8), so the subcommand is no longer
+            # first. Detecting it by position made these stubs silently stop
+            # matching -- the exception was never raised and the tests failed
+            # asserting None against real history.
+            if args and "log" in args:
                 raise exc
             return real(args, **kw)
 
@@ -1375,7 +1380,12 @@ class TestHistoryCommandShape:
         real = git_ops.run_git
 
         def capture(args, **kw):
-            if args and args[0] == "log":
+            # `"log" in args`, not `args[0]`: the command is prefixed with
+            # `-c core.quotepath=false` (K8), so the subcommand is no longer
+            # first. Detecting it by position made these stubs silently stop
+            # matching -- the exception was never raised and the tests failed
+            # asserting None against real history.
+            if args and "log" in args:
                 seen["args"] = args
             return real(args, **kw)
 
@@ -1388,6 +1398,14 @@ class TestHistoryCommandShape:
         )
         assert "--name-only" in seen["args"]
         assert "--numstat" not in seen["args"], "the add/delete columns were never used"
+        # K8: without this git escapes non-ASCII bytes as octal inside quotes,
+        # so those paths match nothing in code_files and the file silently gets
+        # no churn. Asserted on the command as well as behaviourally (see
+        # TestNonAsciiPathHistory) because this is the cheap check that fails on
+        # every platform, including ones with no non-ASCII fixture handy.
+        assert "core.quotepath=false" in seen["args"], (
+            "non-ASCII paths come back octal-escaped without this and match nothing"
+        )
 
     def test_history_is_still_collected_correctly(self, db_session, tmp_path):
         """The command changed; the output it produces must not."""
@@ -1491,9 +1509,69 @@ class TestGitOutputDecoding:
         real = git_ops.run_git
 
         def none_stdout(args, **kw):
-            if args and args[0] == "log":
+            # `"log" in args`, not `args[0]`: the command is prefixed with
+            # `-c core.quotepath=false` (K8), so the subcommand is no longer
+            # first. Detecting it by position made these stubs silently stop
+            # matching -- the exception was never raised and the tests failed
+            # asserting None against real history.
+            if args and "log" in args:
                 return subprocess.CompletedProcess(args, 0, stdout=None, stderr="")
             return real(args, **kw)
 
         with patch("app.services.codebase.git_ops.run_git", side_effect=none_stdout):
             assert ranking._collect_git_history(repo) is None
+
+
+class TestNonAsciiPathHistory:
+    """K8. git's core.quotepath defaults to true and escapes non-ASCII bytes as
+    octal inside quotes, so `git log --name-only` reports the escaped form while
+    CodeFile.path holds the real UTF-8 string. Those lines match nothing, and the
+    file is not reported as missing -- it simply gets no churn, no author count
+    and no last-changed date, and scores as though nobody had ever touched it.
+
+    Measured on this fixture before the fix: 1 of 4 paths matched. After: 4 of 4.
+    """
+
+    NAMES = ["\u6587\u66f8.py", "caf\u00e9.py", "na\u00efve_\u043c\u043e\u0434\u0443\u043b\u044c.py", "plain.py"]
+
+    def _repo_with_unicode_names(self, tmp_path):
+        root = tmp_path / "unicode_repo"
+        root.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=root, check=True)
+        for n in self.NAMES:
+            (root / n).write_text("x = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=root, check=True)
+        return root
+
+    def test_LOADBEARING_history_is_keyed_by_real_paths_not_octal_escapes(self, tmp_path):
+        from app.db.models import Repo
+        from app.services.codebase.ranking import _collect_git_history
+
+        root = self._repo_with_unicode_names(tmp_path)
+        repo = Repo(host="local", owner="", name="k8", source_kind="local",
+                    local_path=str(root), default_branch="main")
+
+        history = _collect_git_history(repo)
+
+        assert history is not None, "git log produced nothing -- a fixture problem, not a result"
+        missing = [n for n in self.NAMES if n not in history]
+        assert not missing, f"paths absent from history (quotepath escaping?): {missing}"
+        for n in self.NAMES:
+            assert history[n]["commit_count"] == 1, f"{n} has no churn"
+
+    def test_DOCUMENTS_INTENT_the_ascii_control_cannot_detect_this(self, tmp_path):
+        """Stated so the test above is not read as proving more than it does: an
+        ASCII-only fixture passes with the bug fully present, which is why the
+        other three filenames are in it."""
+        from app.db.models import Repo
+        from app.services.codebase.ranking import _collect_git_history
+
+        root = self._repo_with_unicode_names(tmp_path)
+        repo = Repo(host="local", owner="", name="k8", source_kind="local",
+                    local_path=str(root), default_branch="main")
+        assert "plain.py" in _collect_git_history(repo)
+
+

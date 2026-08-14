@@ -9,6 +9,7 @@ for one endpoint.
 from pathlib import Path
 
 import pytest
+from sqlalchemy import text
 from fastapi import HTTPException
 
 from app.api.repos import (
@@ -24,6 +25,7 @@ from app.api.repos import (
     get_health,
     get_health_directories,
     get_health_files,
+    get_module_preview,
     get_findings,
     get_findings_files,
     get_subsystem_members,
@@ -1404,3 +1406,113 @@ class TestGraphFilterVocabulary:
                             user=None, db=db_session)
         assert payload["filters_active"] is True
         assert payload["files_matched"] > 0
+
+
+class TestModulePreviewEndpoint:
+    """Phase 4 groundwork. READ-ONLY by contract, so the tests check that
+    contract by counting rows rather than by reading the handler."""
+
+    def _make_repo(self, tmp_path) -> Path:
+        root = tmp_path / "preview_repo"
+        _init_repo(root)
+        _write(root / "pkg" / "__init__.py", "")
+        _write(root / "pkg" / "core.py", "def run():\n    return 1\n")
+        _write(root / "pkg" / "util.py", "from pkg.core import run\n\n\ndef helper():\n    return run()\n")
+        _write(root / "pkg" / "api.py", "from pkg.util import helper\n\n\ndef go():\n    return helper()\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+        return root
+
+    def _clustered(self, db_session, tmp_path):
+        repo = register_from_path(db_session, str(self._make_repo(tmp_path)))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        compute_subsystems_endpoint(repo.id, user=None, db=db_session)
+        return repo
+
+    def test_404_before_clustering_rather_than_an_empty_preview(self, db_session, tmp_path):
+        """An empty list would read as "this repo produces no modules", which is
+        a different claim from "clustering has not run"."""
+        repo = register_from_path(db_session, str(self._make_repo(tmp_path)))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        with pytest.raises(HTTPException) as e:
+            get_module_preview(repo.id, user=None, db=db_session)
+        assert e.value.status_code == 404
+
+    def test_LOADBEARING_the_preview_writes_nothing(self, db_session, tmp_path):
+        """The whole point of the endpoint: it exists so the mapping can be
+        approved BEFORE anything is written into tables holding curated
+        content. Checked by counting, not by inspecting the handler."""
+        repo = self._clustered(db_session, tmp_path)
+        watch = ["modules", "topics", "resources", "topic_progress",
+                 "code_subsystems", "code_files"]
+        before = {t: db_session.execute(text(f"select count(*) from {t}")).scalar() for t in watch}
+
+        payload = get_module_preview(repo.id, user=None, db=db_session)
+
+        after = {t: db_session.execute(text(f"select count(*) from {t}")).scalar() for t in watch}
+        assert after == before, f"the preview wrote rows: {before} -> {after}"
+        assert payload["writes_nothing"] is True
+
+    def test_skipped_subsystems_are_returned_with_a_reason_not_filtered_out(
+            self, db_session, tmp_path):
+        """Filtered silently, the preview's counts could not be checked against
+        the Dependency Clusters tab -- they would simply disagree."""
+        repo = self._clustered(db_session, tmp_path)
+        payload = get_module_preview(repo.id, user=None, db=db_session)
+
+        considered = payload["summary"]["subsystems_considered"]
+        assert considered == len(payload["modules"])
+        for m in payload["modules"]:
+            if m["skipped_reason"] is not None:
+                assert m["topics"] == []
+
+    def test_LOADBEARING_files_are_resources_not_topics(self, db_session, tmp_path):
+        """The correction: mapping files to TOPICS produced 932 topics in one
+        module on superset, against a curated median of 7. Files are things you
+        go and read, which is what a resource is."""
+        repo = self._clustered(db_session, tmp_path)
+        payload = get_module_preview(repo.id, user=None, db=db_session)
+
+        produced = [m for m in payload["modules"] if m["skipped_reason"] is None]
+        assert produced, "fixture produced no modules"
+        for m in produced:
+            assert m["resource_count"] >= m["topic_count"], (
+                "a module with more topics than resources means files became topics again"
+            )
+            for t in m["topics"]:
+                for r in t["resources"]:
+                    assert r["kind"] == "code_ref"
+
+    def test_the_topic_strategy_is_selectable_and_echoed(self, db_session, tmp_path):
+        """The topic level is the part the data does not supply, so which
+        grouping produced a shape has to travel with the shape."""
+        repo = self._clustered(db_session, tmp_path)
+        payload = get_module_preview(repo.id, topic_strategy="prior_category",
+                                     user=None, db=db_session)
+        assert payload["topic_strategy"] == "prior_category"
+        assert payload["summary"]["topic_strategy"] == "prior_category"
+        assert "parent_directory" in payload["available_topic_strategies"]
+
+    def test_an_unknown_topic_strategy_is_rejected_rather_than_defaulted(
+            self, db_session, tmp_path):
+        repo = self._clustered(db_session, tmp_path)
+        with pytest.raises(HTTPException) as e:
+            get_module_preview(repo.id, topic_strategy="vibes", user=None, db=db_session)
+        assert e.value.status_code == 400
+
+    def test_the_summary_carries_the_curated_reference_for_comparison(
+            self, db_session, tmp_path):
+        """Whether this shape is right is a comparison, so the numbers being
+        compared against travel in the payload rather than being looked up."""
+        repo = self._clustered(db_session, tmp_path)
+        s = get_module_preview(repo.id, user=None, db=db_session)["summary"]
+        assert s["curated_reference"]["topics_per_module"]["median"] == 7
+        assert s["curated_reference"]["resources_per_topic"]["median"] == 2
+
+    def test_an_unknown_algorithm_is_rejected(self, db_session, tmp_path):
+        repo = self._clustered(db_session, tmp_path)
+        with pytest.raises(HTTPException) as e:
+            get_module_preview(repo.id, algorithm="nonsense", user=None, db=db_session)
+        assert e.value.status_code == 400

@@ -215,7 +215,33 @@ def evict_lru_if_needed(db: Session) -> list[str]:
     """Evicts the least-recently-ingested `clone` repos (falling back to added_at
     for ones never ingested, so a freshly-cloned repo isn't evicted before Phase B
     even gets to it) until the cache is back under the configured byte cap.
+
+    Delegates to deletion.delete_repo_unconfirmed rather than deleting the Repo
+    row itself. It used to call `db.delete(r)` alone -- and `Repo` declares no
+    ORM relationships to its eight child tables while every foreign key is
+    `ON DELETE NO ACTION`, so NOTHING cascaded. An eviction left the entire
+    analysis behind (files, symbols, imports, ranks, subsystems, snapshots,
+    per-file health, job history) pointing at a repo id that no longer existed,
+    invisible to any query that starts from `repos`.
+
+    That is the same class as the deletion work itself: a destructive path that
+    predated the correct implementation and was never pointed at it once one
+    existed, which is how two ways to destroy the same data end up in one
+    codebase with only one of them right.
+
+    The unconfirmed entry point skips ONLY the typed confirmation, which has no
+    meaning here -- there is no user. The two-condition directory guard, the
+    delete order, the cycle break and the logging all still apply, and the
+    directory removal it performs is the same one this function used to do by
+    hand.
     """
+    # Imported here, not at module scope: deletion.py imports THIS module for
+    # clone_cache_root(), so a top-level import either way is a cycle. The
+    # dependency is real in both directions -- eviction needs the deletion
+    # logic, deletion needs to know where the cache lives -- and a local import
+    # is the honest resolution rather than duplicating either.
+    from app.services.codebase import deletion
+
     cap = settings.REPO_CLONE_CACHE_MAX_BYTES
     order_col = func.coalesce(Repo.last_ingested_at, Repo.added_at)
     clones = db.query(Repo).filter(Repo.source_kind == "clone").order_by(order_col.asc()).all()
@@ -227,10 +253,10 @@ def evict_lru_if_needed(db: Session) -> list[str]:
     for r in clones:
         if total <= cap:
             break
-        _remove_repo_dir(r.local_path)
-        total -= sizes[r.id]
-        evicted.append(f"{r.host}/{r.owner}/{r.name}")
-        db.delete(r)
-    if evicted:
-        db.commit()
+        label = f"{r.host}/{r.owner}/{r.name}"
+        size = sizes[r.id]
+        deletion.delete_repo_unconfirmed(
+            db, r, reason=f"LRU cache eviction: {total:,} bytes over a {cap:,} byte cap")
+        total -= size
+        evicted.append(label)
     return evicted

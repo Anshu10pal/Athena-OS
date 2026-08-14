@@ -18,6 +18,7 @@ the test would pass for the wrong reason.
 import os
 import stat
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,7 @@ from app.db.models import (
     Repo,
     RepoJob,
 )
-from app.services.codebase import deletion
+from app.services.codebase import deletion, registry
 
 
 @pytest.fixture()
@@ -315,3 +316,125 @@ class TestReport:
         assert payload["rows_total"] == sum(payload["rows_deleted"].values())
         assert payload["source_kind"] == "local"
         assert payload["directory_reason"], "a reason is always reported, not only on refusal"
+
+
+class TestEvictionDeletesEverything:
+    """Item 2. `evict_lru_if_needed` used to call `db.delete(r)` on the Repo row
+    alone, and nothing cascades -- so an eviction left the whole analysis behind
+    pointing at a repo id that no longer existed. Fixtures only; this never runs
+    against the live database."""
+
+    def _clone_with_rows(self, db, tmp_path, name: str, *, mb: int = 1) -> Repo:
+        """A `clone` repo whose directory is inside a fake cache root, with at
+        least one row in every table deletion has to clear."""
+        cache = tmp_path / "cache"
+        clone_dir = cache / name
+        clone_dir.mkdir(parents=True)
+        # Real bytes, so the size-based eviction loop has something to measure.
+        (clone_dir / "blob.bin").write_bytes(b"x" * (mb * 1024 * 1024))
+
+        repo = Repo(host="github.com", owner="acme", name=name, source_kind="clone",
+                    local_path=str(clone_dir), default_branch="main")
+        db.add(repo)
+        db.flush()
+
+        f = CodeFile(repo_id=repo.id, path=f"{name}/a.py", language="python",
+                     content_sha256="a" * 64)
+        db.add(f)
+        db.flush()
+        sub = CodeSubsystem(repo_id=repo.id, cluster_index=0, algorithm="modularity",
+                            member_count=1, top_fan_in_file_id=f.id)
+        db.add(sub)
+        db.flush()
+        f.subsystem_modularity_id = sub.id
+        sym = CodeSymbol(file_id=f.id, name="run", kind="function", line_start=1, line_end=2)
+        db.add(sym)
+        db.flush()
+        db.add(CodeImport(repo_id=repo.id, from_file_id=f.id, raw_specifier="x",
+                          kind="internal", to_symbol_id=sym.id))
+        db.add(CodeFileRank(repo_id=repo.id, file_id=f.id, scorer="legacy", rank=1, score=1.0))
+        snap = CodeHealthSnapshot(repo_id=repo.id, branch="main", analyzer_version=1,
+                                  thresholds_version=1, weights_version=1)
+        db.add(snap)
+        db.flush()
+        db.add(CodeFileHealth(snapshot_id=snap.id, file_id=f.id, path=f.path, nloc=10))
+        db.add(RepoJob(repo_id=repo.id, status="done", stage="done"))
+        db.commit()
+        return repo
+
+    def test_LOADBEARING_eviction_leaves_zero_rows_in_all_eight_tables(
+            self, fk_session, tmp_path, monkeypatch):
+        cache = tmp_path / "cache"
+        old = self._clone_with_rows(fk_session, tmp_path, "old", mb=2)
+        old_id = old.id
+        # Ingested long ago, so it is the LRU victim.
+        old.last_ingested_at = datetime(2020, 1, 1)
+        keep = self._clone_with_rows(fk_session, tmp_path, "keep", mb=2)
+        keep_id = keep.id
+        keep.last_ingested_at = datetime(2030, 1, 1)
+        fk_session.commit()
+
+        monkeypatch.setattr(deletion.registry, "clone_cache_root", lambda: cache)
+        # Cap below the pair's total, above one of them: exactly one eviction.
+        monkeypatch.setattr(registry.settings, "REPO_CLONE_CACHE_MAX_BYTES", 3 * 1024 * 1024)
+
+        evicted = registry.evict_lru_if_needed(fk_session)
+
+        assert evicted, "nothing was evicted; the cap did not bite"
+        after = {name: fk_session.execute(text(sql), {"rid": old_id}).scalar()
+                 for name, sql in deletion._COUNT_PLAN}
+        assert all(n == 0 for n in after.values()), f"eviction orphaned rows: {after}"
+        assert fk_session.get(Repo, old_id) is None
+        # The survivor is untouched.
+        assert fk_session.get(Repo, keep_id) is not None
+        assert fk_session.execute(
+            text("select count(*) from code_files where repo_id = :rid"),
+            {"rid": keep_id}).scalar() == 1
+
+    def test_LOADBEARING_eviction_still_refuses_a_directory_outside_the_cache(
+            self, fk_session, tmp_path, monkeypatch):
+        """Eviction is clones-only, but the two-condition guard must still hold:
+        skipping the CONFIRMATION must not skip the GUARDS. A repo marked
+        `clone` whose path is elsewhere keeps its directory."""
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        elsewhere = tmp_path / "not_the_cache"
+        elsewhere.mkdir()
+        (elsewhere / "keep.txt").write_bytes(b"y" * (2 * 1024 * 1024))
+
+        repo = Repo(host="github.com", owner="acme", name="stray", source_kind="clone",
+                    local_path=str(elsewhere), default_branch="main")
+        fk_session.add(repo)
+        fk_session.commit()
+
+        monkeypatch.setattr(deletion.registry, "clone_cache_root", lambda: cache)
+        monkeypatch.setattr(registry.settings, "REPO_CLONE_CACHE_MAX_BYTES", 1)
+
+        registry.evict_lru_if_needed(fk_session)
+
+        assert elsewhere.exists(), "eviction deleted a directory outside the clone cache"
+        assert (elsewhere / "keep.txt").exists()
+
+    def test_eviction_removes_the_clone_directory_it_is_allowed_to(
+            self, fk_session, tmp_path, monkeypatch):
+        cache = tmp_path / "cache"
+        repo = self._clone_with_rows(fk_session, tmp_path, "doomed", mb=2)
+        path = Path(repo.local_path)
+        assert path.exists()
+
+        monkeypatch.setattr(deletion.registry, "clone_cache_root", lambda: cache)
+        monkeypatch.setattr(registry.settings, "REPO_CLONE_CACHE_MAX_BYTES", 1)
+
+        registry.evict_lru_if_needed(fk_session)
+
+        assert not path.exists()
+
+    def test_nothing_is_evicted_under_the_cap(self, fk_session, tmp_path, monkeypatch):
+        cache = tmp_path / "cache"
+        repo = self._clone_with_rows(fk_session, tmp_path, "small", mb=1)
+        repo_id = repo.id
+        monkeypatch.setattr(deletion.registry, "clone_cache_root", lambda: cache)
+        monkeypatch.setattr(registry.settings, "REPO_CLONE_CACHE_MAX_BYTES", 100 * 1024 * 1024)
+
+        assert registry.evict_lru_if_needed(fk_session) == []
+        assert fk_session.get(Repo, repo_id) is not None

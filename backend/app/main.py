@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import socket
 from pathlib import Path
 
@@ -43,7 +44,22 @@ def _fail_loudly_if_port_already_bound(port: int) -> None:
             )
 
 
-_fail_loudly_if_port_already_bound(int(os.environ.get("PORT", "8000")))
+# Not under pytest. The guard answers "am I about to become a SECOND dev server
+# on this port"; importing the app to drive it with TestClient binds nothing, so
+# the question does not apply -- and answering it anyway made every
+# TestClient-based test fail whenever a dev server happened to be running, which
+# is most of the time on this machine.
+#
+# Narrowed rather than removed: the failure it catches is real (two overlapping
+# `--reload` workers produced minutes of hanging requests with no error anywhere)
+# and it still runs for every non-test start.
+#
+# `sys.modules`, not PYTEST_CURRENT_TEST: that variable is set per TEST, and this
+# module is imported during COLLECTION, before any test runs. Using it failed
+# exactly the same way as no guard change at all -- which is the sort of check
+# that looks right and is evaluated at the wrong moment.
+if "pytest" not in sys.modules:
+    _fail_loudly_if_port_already_bound(int(os.environ.get("PORT", "8000")))
 
 # Codebase agent: refuse to start rather than silently ingest the clone cache
 # as part of a registered repo's own code. Must run after the migration above

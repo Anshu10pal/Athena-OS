@@ -2,6 +2,10 @@ __pycache__/
 *.pyc
 .env
 athena.db
+# Timestamped safety copies (athena.backup-YYYYmmdd-HHMMSS.db). Ignored because
+# the commit flow here uses `git add -A`, and a 232MB database would otherwise
+# be committed by an unrelated change.
+athena.backup-*.db
 qdrant_data/
 voices/
 backend/data/

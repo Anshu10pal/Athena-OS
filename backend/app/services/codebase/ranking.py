@@ -624,9 +624,25 @@ def _collect_git_history(repo: Repo) -> Optional[dict]:
     #
     # --no-renames makes the known-large case fast; this makes every OTHER
     # large case survivable. Both are needed and this is the general one.
+    #
+    # `-c core.quotepath=false` (K8): git's default escapes every byte outside
+    # ASCII as octal inside double quotes, so `git log --name-only` reports
+    #
+    #     "superset/\346\226\207\346\233\270.py"
+    #
+    # while CodeFile.path holds the real UTF-8 string. Those lines match
+    # nothing, and the file is not reported as missing -- it simply gets no
+    # churn, no author count and no last-changed date, and scores as though it
+    # had never been touched. Silent, and worse than an error.
+    #
+    # Measured on a fixture with CJK, accented-Latin and Cyrillic filenames:
+    # 1 of 4 paths matched with the default, 4 of 4 with the flag. `-c` is used
+    # rather than a repo config write because this must not modify a user's
+    # repository to read from it.
     try:
         result = git_ops.run_git(
-            ["log", "--format=@@%an|%aI", "--name-only", "--no-renames", "--", "."],
+            ["-c", "core.quotepath=false",
+             "log", "--format=@@%an|%aI", "--name-only", "--no-renames", "--", "."],
             cwd=repo.local_path, timeout=HISTORY_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:

@@ -19,9 +19,23 @@ if database_url.startswith("postgres://"):
 config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging.
-# This line sets up loggers basically.
+#
+# disable_existing_loggers=False is LOAD-BEARING, not tidiness. fileConfig
+# defaults it to True, and app/main.py runs `command.upgrade(..., "head")` at
+# startup -- which imports this module and, with the default, disabled every
+# logger that already existed, including `uvicorn.access` and `uvicorn.error`.
+#
+# The effect was that the server produced no access log and not even its own
+# startup banner, for the entire life of the process. It was mistaken for output
+# buffering (a real but secondary problem, fixed separately in run.py) because
+# both look identical from outside: an empty file. The tell was that alembic's
+# OWN log lines appeared while uvicorn's did not -- logging was working, and
+# specific loggers had been switched off.
+#
+# This is why an unexplained repo deletion could not be investigated: the record
+# that would have answered it was never written.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # add your model's MetaData object here
 # for 'autogenerate' support
