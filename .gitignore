@@ -17,9 +17,13 @@ venv/
 
 # Dev-server logs -- these have floated untracked across several sessions and
 # are one `git add .` away from being committed.
-server.out.log
-server.err.log
+#
+# A PATTERN, not the four filenames that used to be listed here. The
+# enumeration said server.out.log / server.err.log / vite.out.log /
+# vite.err.log, and `backend.log` was not among them, so a `git add -A` swept it
+# into a commit -- exactly the failure §17.15 describes, arriving in a gitignore.
+# The property is "a log file", and *.log expresses it; a list of names cannot
+# be consulted about the next one.
+*.log
 # Chat-history export dropped into the tree while working; not repo content.
 athena-docs/
-vite.out.log
-vite.err.log
