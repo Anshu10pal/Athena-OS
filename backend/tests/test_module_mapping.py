@@ -158,6 +158,162 @@ class TestSkipping:
         assert m.source == "codebase" and m.kind == "codebase"
 
 
+class TestMigrationExclusion:
+    """Migrations are code nobody sits down to read -- node_priors.py already
+    weights them at 0.15 for that reason. A module should not be built out of
+    them at all, not merely rank them last."""
+
+    def test_LOADBEARING_migration_files_produce_no_resources(self):
+        mixed = members(4, category="source") + members(3, prefix="alembic/versions",
+                                                         start_rank=100, category="migration")
+        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
+                                       member_count=7, members=mixed)
+        assert m.resource_count == 4
+        assert all(r.path.startswith("pkg/") for t in m.topics for r in t.resources)
+
+    def test_excluded_migration_count_is_reported(self):
+        mixed = members(4, category="source") + members(3, prefix="alembic/versions",
+                                                         start_rank=100, category="migration")
+        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
+                                       member_count=7, members=mixed)
+        assert m.excluded_migration_count == 3
+
+    def test_a_group_that_is_entirely_migrations_is_skipped_with_a_reason(self):
+        # This is superset's migrations/versions subsystem: 900 files, all
+        # migrations. member_count alone (>= min_files) must not be enough to
+        # produce a module out of files nobody reads.
+        migrations = members(10, category="migration")
+        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="migrations",
+                                       member_count=10, members=migrations)
+        assert m.topics == [] and m.resource_count == 0
+        assert m.skipped_reason and "migration" in m.skipped_reason
+
+    def test_a_mostly_migration_group_below_the_floor_after_exclusion_is_skipped(self):
+        # 5 total clears MIN_FILES_FOR_MODULE, but only 2 are usable.
+        mixed = members(2, category="source") + members(3, prefix="alembic/versions",
+                                                         start_rank=100, category="migration")
+        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
+                                       member_count=5, members=mixed)
+        assert m.skipped_reason and "2 non-migration files" in m.skipped_reason
+        assert m.excluded_migration_count == 3
+
+    def test_member_count_still_reports_the_full_subsystem_size(self):
+        # member_count must keep matching the Subsystems view's count for this
+        # same group -- excluded_migration_count is what makes the gap honest,
+        # not a silent change to what member_count means.
+        mixed = members(4, category="source") + members(3, prefix="alembic/versions",
+                                                         start_rank=100, category="migration")
+        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
+                                       member_count=7, members=mixed)
+        assert m.member_count == 7
+
+    def test_a_group_with_no_migrations_is_unaffected(self):
+        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
+                                       member_count=4, members=members(4))
+        assert m.excluded_migration_count == 0
+        assert m.resource_count == 4
+
+    def test_unclustered_module_also_excludes_migrations(self):
+        leftovers = members(2, category="source") + members(5, prefix="alembic/versions",
+                                                             start_rank=100, category="migration")
+        m = mm.unclustered_module(repo_id=1, members=leftovers, topic_strategy="single_topic")
+        assert m is not None
+        assert m.resource_count == 2
+        assert m.excluded_migration_count == 5
+
+    def test_to_dict_reports_the_excluded_count(self):
+        mixed = members(4, category="source") + members(3, prefix="alembic/versions",
+                                                         start_rank=100, category="migration")
+        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
+                                       member_count=7, members=mixed)
+        assert m.to_dict()["excluded_migration_count"] == 3
+
+    def test_summary_totals_migration_files_excluded_across_modules(self):
+        mods = [
+            mm.map_subsystem_to_module(
+                repo_id=1, subsystem_id=i, subsystem_label=f"c{i}", member_count=7,
+                members=members(4, category="source") + members(
+                    3, prefix=f"alembic{i}/versions", start_rank=100, category="migration"),
+            )
+            for i in range(2)
+        ]
+        s = mm.summarise(mods, topic_strategy="single_topic")
+        assert s["migration_files_excluded"] == 6
+
+
+def _star(hub, spokes):
+    """A barrel/shared-util pattern: one hub file, edges to every spoke, no
+    edges between spokes -- the shape found in eslint's two bad lib/rules
+    subsystems."""
+    return [(hub, s) for s in spokes]
+
+
+class TestCatalogueClassification:
+    """eslint's two largest subsystems (repo 3, modularity clustering) are
+    ~300 sibling rule files with no structure between them. Simple edge
+    density does not separate them from good modules (both land near 1.0-1.7
+    edges/member); hub-excluded density does. See module_mapping.py's
+    CATALOGUE section for the measured numbers this calibrates against."""
+
+    def test_LOADBEARING_a_pure_barrel_is_a_catalogue(self):
+        # lib/rules -- index.js requires all 149 others; 0 edges remain once
+        # the hub is excluded.
+        edges = _star(hub=0, spokes=list(range(1, 151)))
+        assert mm.classify_catalogue(151, edges) is True
+
+    def test_LOADBEARING_a_shared_util_with_a_few_real_edges_is_still_a_catalogue(self):
+        # lib/rules/utils/ast-utils -- most rules import the shared util, but
+        # a handful of rules also import each other. A couple of extra edges
+        # between spokes still leave hub-excluded density near zero.
+        edges = _star(hub=0, spokes=list(range(1, 139))) + [(1, 2), (3, 4)]
+        assert mm.classify_catalogue(139, edges) is True
+
+    def test_LOADBEARING_real_interconnection_is_not_a_catalogue(self):
+        # lib/shared -- 56 members, 96 edges, no single dominant hub; most
+        # edges are between ordinary members.
+        edges = _star(hub=0, spokes=list(range(1, 6)))  # a small hub exists too
+        edges += [(i, i + 1) for i in range(1, 56)]      # but most members link to each other
+        assert mm.classify_catalogue(56, edges) is False
+
+    def test_a_small_subsystem_is_never_a_catalogue_regardless_of_shape(self):
+        # unicode -- 10 members, star-shaped (hub-excluded density 0.67), but
+        # far below CATALOGUE_MIN_MEMBERS. A 10-file module built around one
+        # shared helper is an ordinary module, not a catalogue.
+        edges = _star(hub=0, spokes=list(range(1, 10)))
+        assert mm.classify_catalogue(10, edges) is False
+
+    def test_a_large_subsystem_with_no_internal_edges_at_all_is_a_catalogue(self):
+        assert mm.classify_catalogue(100, []) is True
+
+    def test_the_floor_is_exclusive_at_CATALOGUE_MIN_MEMBERS(self):
+        edges = _star(hub=0, spokes=list(range(1, mm.CATALOGUE_MIN_MEMBERS)))
+        assert mm.classify_catalogue(mm.CATALOGUE_MIN_MEMBERS - 1, edges) is False
+        assert mm.classify_catalogue(mm.CATALOGUE_MIN_MEMBERS, edges) is True
+
+    def test_is_catalogue_defaults_to_false_until_a_caller_sets_it(self):
+        # classify_catalogue needs edges, which map_subsystem_to_module does
+        # not have (it is pure, no DB) -- so the field starts false and only
+        # the caller who queried edges can set it.
+        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
+                                       member_count=40, members=members(40))
+        assert m.is_catalogue is False
+
+    def test_to_dict_reports_is_catalogue(self):
+        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
+                                       member_count=4, members=members(4))
+        m.is_catalogue = True
+        assert m.to_dict()["is_catalogue"] is True
+
+    def test_summary_counts_flagged_modules(self):
+        a = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="a",
+                                       member_count=4, members=members(4))
+        b = mm.map_subsystem_to_module(repo_id=1, subsystem_id=2, subsystem_label="b",
+                                       member_count=4, members=members(4))
+        b.is_catalogue = True
+        s = mm.summarise([a, b], topic_strategy="single_topic")
+        assert s["modules_flagged_catalogue"] == 1
+
+
 class TestSummary:
     def test_reports_distributions_against_the_curated_reference(self):
         mods = [

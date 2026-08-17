@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import cytoscape, { Core, ElementDefinition } from "cytoscape";
-import elk from "cytoscape-elk";
 import { GraphEdgeT, GraphNodeT } from "../lib/api";
 import { clusterColor } from "./ArchitectureMap";
 import { buildGraphElements, CyNodeData, expandableDirs } from "../lib/dependencyGraphElements";
 import { GraphDirectionT, MAX_NODES_ADVISORY, scopeGraph } from "../lib/dependencyGraphScope";
+import { computeElkLayout } from "../lib/elkWorkerLayout";
 import { recordGraphElements, recordLayoutSettled, recordLayoutStarted } from "../lib/viewDiagnostics";
 
 // Phase J1: the file-level dependency graph, rebuilt as a scoped explorer.
@@ -22,19 +22,20 @@ import { recordGraphElements, recordLayoutSettled, recordLayoutStarted } from ".
 // settle. Same reasoning that replaced force with a computed layout at the
 // directory level in H2 -- position should mean something.
 //
+// The algorithm runs in a Web Worker (lib/elkWorkerLayout.ts), not via
+// cytoscape-elk's own `cy.layout({name: 'elk'})`. Measured on this view at
+// the 400-node default: the layered algorithm's crossing-minimisation is
+// superlinear (t ~ n^2.25 against payload growth of n^1) and cytoscape-elk
+// runs it synchronously on the main thread regardless -- a single blocked
+// frame of 6.9s at 400 nodes, 82s at 1200. elkjs ships a worker build
+// (elk-worker.min.js) already on disk in the same package; the positions
+// just have to be read back differently, because a worker-based ELK returns
+// a cloned result graph instead of mutating cytoscape-elk's input objects in
+// place (see elkPositions.ts and elkWorkerLayout.ts).
+//
 // All the real logic lives in lib/dependencyGraphScope.ts and
 // lib/dependencyGraphElements.ts, unit-tested without a DOM. This file is
 // the cytoscape shell and the controls.
-
-// cytoscape.use() throws a warning if the same extension is registered
-// twice, and React StrictMode mounts every effect twice in dev -- so this
-// is module-level and guarded rather than living in an effect.
-let elkRegistered = false;
-function ensureElkRegistered() {
-  if (elkRegistered) return;
-  cytoscape.use(elk);
-  elkRegistered = true;
-}
 
 // Canvas rendering needs literal color strings, not Tailwind classes --
 // the same constraint (and the same values) as ArchitectureMap's
@@ -311,7 +312,6 @@ export function DependencyGraph({
   // orphaned canvas rendering underneath the live one.
   useEffect(() => {
     if (!container) return;
-    ensureElkRegistered();
     const instance = cytoscape({
       container,
       style: cyStyle(),
@@ -382,42 +382,16 @@ export function DependencyGraph({
     cy.elements().remove();
     cy.add(elements);
     recordLayoutStarted();
-    const layout = cy.layout({
-      name: "elk",
-      // @ts-expect-error -- cytoscape-elk's options are not part of
-      // cytoscape's own LayoutOptions union, and the package ships no
-      // types of its own (see src/types/cytoscape-elk.d.ts).
-      nodeDimensionsIncludeLabels: true,
-      elk: {
-        algorithm: "layered",
-        // Left-to-right so horizontal position encodes dependency
-        // direction: importers on the left, imports on the right. This is
-        // the property a force layout cannot give you.
-        "elk.direction": "RIGHT",
-        "elk.spacing.nodeNode": 32,
-        "elk.layered.spacing.nodeNodeBetweenLayers": 72,
-        "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
-        "elk.padding": "[top=24,left=24,bottom=24,right=24]",
-      },
-    });
-    layout.run();
-    // ELK resolves asynchronously; fit after it settles, not before, or
-    // the viewport is fitted to pre-layout positions.
-    const onLayoutStop = () => {
-      recordLayoutSettled();
-      cy.fit(undefined, 40);
-    };
-    cy.one("layoutstop", onLayoutStop);
 
     // Cancel an in-flight layout when `elements` change again.
     //
     // Without this, an effect that starts asynchronous work never stops it. The
     // next run calls `cy.elements().remove()`, destroying the very nodes the
-    // previous ELK layout is still positioning, and that layout carries on
-    // against objects that no longer exist. Ordinary React hygiene -- an effect
-    // that starts async work owns cancelling it -- and it is the reason this
-    // needed no new state: `layout` and the handler are both already scoped to
-    // this run.
+    // previous ELK layout is still positioning, and applying stale positions to
+    // objects that no longer exist (or worse, to the WRONG generation of
+    // elements, since ids can repeat across scope changes) would be a visible
+    // flash of the previous graph's layout. Ordinary React hygiene -- an effect
+    // that starts async work owns cancelling it.
     //
     // NOTE, deliberately: this is NOT claimed as the fix for the reported
     // `Cannot read properties of undefined (reading 'index')` crash. That crash
@@ -428,10 +402,40 @@ export function DependencyGraph({
     // uncancelled async work in an effect is wrong whether or not it is what
     // was seen. See decisions.md, where the two are recorded separately for
     // this reason.
+    let cancelled = false;
+
+    computeElkLayout(cy.nodes().toArray(), cy.edges().toArray(), {
+      algorithm: "layered",
+      // Left-to-right so horizontal position encodes dependency
+      // direction: importers on the left, imports on the right. This is
+      // the property a force layout cannot give you.
+      "elk.direction": "RIGHT",
+      "elk.spacing.nodeNode": "32",
+      "elk.layered.spacing.nodeNodeBetweenLayers": "72",
+      "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
+      "elk.padding": "[top=24,left=24,bottom=24,right=24]",
+    }).then((positions) => {
+      if (cancelled) return;
+      cy.nodes()
+        .filter((n) => !n.isParent())
+        .positions((n) => positions.get(n.id()) ?? n.position());
+      recordLayoutSettled();
+      // Fit after positions are applied, not before, or the viewport is
+      // fitted to pre-layout positions.
+      cy.fit(undefined, 40);
+    }).catch((err) => {
+      // A rejected layout must not fail silently: without this, ELK erroring
+      // on some graph shape leaves every node stacked at its cytoscape
+      // default position with no error surfaced anywhere -- indistinguishable
+      // from "still loading" to whoever is looking at it.
+      if (cancelled) return;
+      recordLayoutSettled();
+      // eslint-disable-next-line no-console
+      console.error("[DependencyGraph] ELK layout failed", err);
+    });
+
     return () => {
-      cy.removeListener("layoutstop", onLayoutStop);
-      // stop() is safe on a finished layout; cytoscape treats it as a no-op.
-      layout.stop();
+      cancelled = true;
       recordLayoutSettled();
     };
   }, [cy, elements, showFullGraph, focusIds]);

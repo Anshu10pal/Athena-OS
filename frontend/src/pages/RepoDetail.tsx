@@ -18,7 +18,6 @@ import {
   NOISE_CATEGORIES,
   subsystemIdOf,
 } from "../lib/filters";
-import { shapeClusterChips, TOP_N as CLUSTER_CHIP_TOP_N } from "../lib/clusterChips";
 import { graphFilterParams, graphFiltersChanged } from "../lib/graphFilterParams";
 import { SlideOver } from "../components/SlideOver";
 import { ViewBoundary } from "../components/ViewBoundary";
@@ -34,6 +33,7 @@ import { FindingsView } from "../components/FindingsView";
 import { OverviewView } from "../components/OverviewView";
 
 import { dirnameOfPath } from "../lib/layeredLayout";
+import { computePageInfo, computePageWindow } from "../lib/tablePagination";
 
 // Phase J1: cytoscape + ELK are heavy and needed only by whoever actually
 // opens the Dependency Graph tab -- so this is lazy, exactly like
@@ -126,6 +126,15 @@ const VALIDATION_THRESHOLD_RANK = 20;
  * input, so without this every keystroke re-aggregates the repo server-side. */
 const GRAPH_FILTER_DEBOUNCE_MS = 300;
 const COLUMN_COUNT = 3 + COLUMNS.length; // Rank + Path + Language + COLUMNS
+
+// The reading list's actual failure mode: 6,523 rows all in the DOM at once
+// measured at 85,072 elements and an 8,990 ms render tail on a repo that
+// size, almost none of it spent on rows anyone scrolls to. A fixed-height
+// virtual scroller fixed that once (547 elements) but numbered pages get the
+// same DOM reduction more simply -- 20 rows mounted, full page grows with
+// content instead of an inner scrollbar, and a page number is a URL a user
+// can actually share.
+const READING_LIST_PAGE_SIZE = 20;
 
 const GLOSSARY: { term: string; desc: string }[] = [
   {
@@ -550,14 +559,32 @@ export default function RepoDetail() {
   // round-trip through the URL, so a filtered/selected view is reloadable
   // and shareable -- replace, not push, so every keystroke or tab switch
   // doesn't pollute browser history.
+  //
+  // The reading list's page number is folded into this SAME effect rather
+  // than a second one keyed on the same dependencies. Two effects both
+  // calling setSearchParams off their own `searchParams` closure race: the
+  // first writes (say) `subsystem=123`, the second reads the PRE-write
+  // snapshot that doesn't have it yet and overwrites the params wholesale,
+  // silently dropping the first effect's change. Found by the cluster
+  // dropdown's selection vanishing from the URL the instant it was set.
+  const prevSortAndFilters = useRef({ sortKey, sortDesc, filters });
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
     next.set("scorer", scorer);
     next.set("view", view);
     applyFilterStateToSearchParams(next, filters);
+
+    // A sort or a filter change is a new subject for the page number -- page
+    // 3 of the PREVIOUS sorted set may not even exist in the new one.
+    const prev = prevSortAndFilters.current;
+    if (prev.sortKey !== sortKey || prev.sortDesc !== sortDesc || prev.filters !== filters) {
+      next.delete("page");
+    }
+    prevSortAndFilters.current = { sortKey, sortDesc, filters };
+
     setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scorer, view, filters]);
+  }, [scorer, view, filters, sortKey, sortDesc]);
 
   // Phase G4: selection sync -- switching to the reading list while a
   // file is selected (e.g. clicked in Layers) scrolls it into view and
@@ -680,13 +707,9 @@ export default function RepoDetail() {
   );
   const subsystemIds = useMemo(() => deriveSubsystemIds(files, subsystemAlgorithm), [files, subsystemAlgorithm]);
 
-  // Cluster chips are capped and ordered by size. Sizes come from the fetched
-  // subsystems response rather than being recounted here -- one source for
-  // "how big is this cluster", the same one the Dependency Clusters view reads.
-  //
-  // Expanded state lives in the URL like the other filters: a row that
-  // re-collapses on every tab switch is a default, not a state.
-  const showAllClusterChips = searchParams.get("clusterChips") === "all";
+  // Sizes come from the fetched subsystems response rather than being
+  // recounted here -- one source for "how big is this cluster", the same
+  // one the Dependency Clusters view reads.
   const clusterSizeById = useMemo(() => {
     const map = new Map<number, number>();
     for (const s of subsystemsResponseFor(subsystemAlgorithm)?.subsystems ?? []) {
@@ -694,9 +717,21 @@ export default function RepoDetail() {
     }
     return map;
   }, [subsystemAlgorithm, subsystemsModularity, subsystemsLouvain, subsystemsHdbscan]);
-  const clusterChips = useMemo(
-    () => shapeClusterChips(subsystemIds, clusterSizeById, filters.subsystemId, showAllClusterChips),
-    [subsystemIds, clusterSizeById, filters.subsystemId, showAllClusterChips],
+
+  // A single dropdown, not a chip row -- chips don't scale (254 of them on
+  // apache/superset consumed the whole viewport; see git history for the
+  // capped-chip-row version this replaced). One control, sorted by size
+  // descending so the clusters worth picking are at the top of the list
+  // rather than requiring the count to already be known.
+  const clusterOptions = useMemo(
+    () => [...subsystemIds]
+      .sort((a, b) => (clusterSizeById.get(b) ?? 0) - (clusterSizeById.get(a) ?? 0) || a - b)
+      .map((sid) => ({
+        id: sid,
+        label: activeSubsystemLabelById.get(sid) ?? `Cluster ${sid}`,
+        count: clusterSizeById.get(sid) ?? 0,
+      })),
+    [subsystemIds, clusterSizeById, activeSubsystemLabelById],
   );
 
   // Architecture, Matrix and the Dependency Graph read a server-filtered graph,
@@ -821,6 +856,20 @@ export default function RepoDetail() {
     });
     return copy;
   }, [visible, sortKey, sortDesc]);
+
+  // The page number lives in the URL, like the other filters -- reloadable,
+  // shareable, and the same idiom `clusterChips`/`subsystem` already use.
+  const requestedReadingListPage = Number(searchParams.get("page")) || 1;
+  const pageInfo = useMemo(
+    () => computePageInfo(requestedReadingListPage, sorted.length, READING_LIST_PAGE_SIZE),
+    [requestedReadingListPage, sorted.length],
+  );
+  const setReadingListPage = (page: number) => {
+    const p = new URLSearchParams(searchParams);
+    if (page <= 1) p.delete("page");
+    else p.set("page", String(page));
+    setSearchParams(p, { replace: true });
+  };
 
   const toggleSort = (key: SortKey) => {
     if (key === sortKey) setSortDesc((d) => !d);
@@ -978,50 +1027,42 @@ export default function RepoDetail() {
               </Chip>
             ))}
           </div>
-          {/* Capped, unlike Path and Language. Those are bounded by the repo's
-              shape (12 and 4 chips here); this one renders 254 on
-              apache/superset and consumed the whole viewport, pushing every
-              file-keyed view's content below the fold. The cluster LIST already
-              solved this with a top-N slice; the cluster FILTER never did. */}
+          {/* A dropdown, not a chip row -- chips don't scale (254 of them on
+              apache/superset consumed the whole viewport, pushing every
+              file-keyed view's content below the fold). Path and Language
+              stay as chip rows: they're bounded by the repo's own shape (4
+              and 4 here) and a cap would be a control that never does
+              anything. Cluster has no such bound -- Athena-OS has 6,
+              apache/superset has 254 -- so it gets its own control shape
+              rather than a bigger cap number. */}
           {subsystemIds.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-[10px] uppercase tracking-widest text-fog w-24 shrink-0">Cluster</span>
-              {clusterChips.visible.map((sid) => (
-                <Chip
-                  key={sid}
-                  active={filters.subsystemId === sid && filters.subsystemAlgorithm === subsystemAlgorithm}
-                  onClick={() =>
+              <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-fog">
+                <span className="w-24 shrink-0">Cluster</span>
+                <select
+                  value={
+                    filters.subsystemId !== null && filters.subsystemAlgorithm === subsystemAlgorithm
+                      ? String(filters.subsystemId)
+                      : ""
+                  }
+                  onChange={(e) => {
+                    const raw = e.target.value;
                     setFilters((f) => ({
                       ...f,
-                      subsystemId: f.subsystemId === sid && f.subsystemAlgorithm === subsystemAlgorithm ? null : sid,
+                      subsystemId: raw === "" ? null : Number(raw),
                       subsystemAlgorithm,
-                    }))
-                  }
-                >
-                  {activeSubsystemLabelById.get(sid) ?? `Cluster ${sid}`}
-                </Chip>
-              ))}
-              {(clusterChips.hiddenCount > 0 || showAllClusterChips) && (
-                <button
-                  onClick={() => {
-                    const p = new URLSearchParams(searchParams);
-                    if (showAllClusterChips) p.delete("clusterChips");
-                    else p.set("clusterChips", "all");
-                    setSearchParams(p, { replace: true });
+                    }));
                   }}
-                  className="font-mono text-[10px] text-fog hover:text-accent underline decoration-dotted"
+                  className="bg-transparent border border-line rounded px-2 py-1 text-snow text-xs font-mono normal-case tracking-normal"
                 >
-                  {showAllClusterChips
-                    ? `show top ${CLUSTER_CHIP_TOP_N}`
-                    : `show all ${subsystemIds.length} (${clusterChips.hiddenCount} more)`}
-                </button>
-              )}
-              {clusterChips.selectedPinned && (
-                // Explains a chip sitting out of size order. Without this it
-                // reads as a sort bug rather than as the selection being kept
-                // reachable.
-                <span className="font-mono text-[10px] text-fog/70">selected cluster pinned</span>
-              )}
+                  <option value="" className="bg-ink">All clusters</option>
+                  {clusterOptions.map((c) => (
+                    <option key={c.id} value={c.id} className="bg-ink">
+                      {c.label} ({c.count})
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
           )}
           <div className="flex flex-wrap items-center gap-5">
@@ -1180,7 +1221,8 @@ export default function RepoDetail() {
                     </td>
                   </tr>
                 )}
-                {sorted.map((f, i) => {
+                {sorted.slice(pageInfo.start, pageInfo.end).map((f, sliceIndex) => {
+                  const i = pageInfo.start + sliceIndex;
                   const next = sorted[i + 1];
                   const showDividerAfter =
                     f.rank <= VALIDATION_THRESHOLD_RANK && next && next.rank > VALIDATION_THRESHOLD_RANK;
@@ -1244,6 +1286,52 @@ export default function RepoDetail() {
                 })}
               </tbody>
             </table>
+            {sorted.length > 0 && (
+              <div className="flex items-center justify-between gap-4 flex-wrap px-4 py-3 border-t border-line">
+                <span className="font-mono text-[10px] text-fog">
+                  Page {pageInfo.page} of {pageInfo.totalPages} · {sorted.length.toLocaleString()} files
+                </span>
+                {pageInfo.totalPages > 1 && (
+                  <div className="flex items-center gap-1 font-mono text-[10px]">
+                    <button
+                      onClick={() => setReadingListPage(pageInfo.page - 1)}
+                      disabled={pageInfo.page <= 1}
+                      className="px-2 py-1 rounded text-fog hover:text-accent disabled:opacity-30 disabled:hover:text-fog"
+                    >
+                      ‹ prev
+                    </button>
+                    {computePageWindow(pageInfo.page, pageInfo.totalPages).map((item, idx) =>
+                      item === "ellipsis" ? (
+                        <span key={`e${idx}`} className="px-1.5 text-fog/60">
+                          …
+                        </span>
+                      ) : (
+                        <button
+                          key={item}
+                          onClick={() => setReadingListPage(item)}
+                          aria-current={item === pageInfo.page ? "page" : undefined}
+                          className={
+                            "px-2 py-1 rounded " +
+                            (item === pageInfo.page
+                              ? "bg-accent/15 text-accent"
+                              : "text-fog hover:text-accent")
+                          }
+                        >
+                          {item}
+                        </button>
+                      )
+                    )}
+                    <button
+                      onClick={() => setReadingListPage(pageInfo.page + 1)}
+                      disabled={pageInfo.page >= pageInfo.totalPages}
+                      className="px-2 py-1 rounded text-fog hover:text-accent disabled:opacity-30 disabled:hover:text-fog"
+                    >
+                      next ›
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </ViewBoundary>
       )}

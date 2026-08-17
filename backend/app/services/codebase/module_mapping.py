@@ -81,6 +81,83 @@ RESOURCE_KIND = "code_ref"
 # list, which already treats singletons as a separate category.
 MIN_FILES_FOR_MODULE = 3
 
+# node_priors.py already marks "migration" as generated-and-forgotten -- code
+# that exists, but that nobody sits down to read (weighted 0.15 in ranking,
+# against 1.0 for source). A subsystem built mostly of migrations does not
+# become a better module by down-weighting them further; it becomes a module
+# whose real content is buried under hundreds of files that were never meant
+# to be studied. So they are excluded from module generation entirely, the
+# same way the ranking prior already excludes them from mattering -- one
+# category, not the full NOISE_CATEGORIES set in node_priors.py, because
+# "config" and "generated" files are still things a person plausibly reads.
+EXCLUDED_PRIOR_CATEGORIES = frozenset({"migration"})
+
+# ## Catalogue vs module
+#
+# eslint's two largest subsystems (`lib/rules · index`, 151 members;
+# `lib/rules · ast-utils`, 139) are ~300 sibling rule files implementing a
+# common interface. No topic strategy can find structure in them because there
+# is none to find -- any split is arbitrary. That is not a labelling problem;
+# it is the wrong abstraction for this shape of subsystem, and the fix is to
+# say so rather than to keep trying titles.
+#
+# The plain guess -- "near-zero internal edge density" -- does NOT separate
+# them from good modules when measured. Simple density (internal edges /
+# member_count) on eslint, repo 3, modularity clustering:
+#
+#     lib/rules · index        151 members   density 1.00   (BAD)
+#     lib/rules · ast-utils    139 members   density 1.09   (BAD)
+#     lib/shared                56 members   density 1.71   (GOOD)
+#     lib/rules/utils/unicode   10 members   density 0.90   (GOOD)
+#
+# Bad is lower but not "near zero", and the ranges overlap. The reason: both
+# bad subsystems DO have ~1 edge per file -- but essentially all of them are
+# to or from ONE file. `index.js` has out-degree 149 of 151 edges (it
+# require()s every rule as a barrel); `ast-utils.js` has in-degree 136 of 151
+# (every rule imports the shared helper). Remove that single hub's edges and
+# what is left is the SIBLING structure the label is claiming to have found:
+#
+#     lib/rules · index        2 edges among the other 150 members    density 0.01
+#     lib/rules · ast-utils    15 edges among the other 138 members   density 0.11
+#     lib/shared                91 edges among the other 55 members   density 1.65
+#     lib/rules/utils/unicode   6 edges among the other 9 members     density 0.67
+#
+# That separates cleanly. A barrel file's fan-out and a shared util's fan-in
+# are not "this subsystem has internal structure" -- they are one file's
+# relationship to everything else, present in nearly every subsystem, and
+# subtracting the single highest-degree member's edges is what isolates the
+# question this classification is actually asking: do the OTHER members
+# relate to each other at all.
+CATALOGUE_MIN_MEMBERS = 30
+CATALOGUE_MAX_HUB_EXCLUDED_DENSITY = 0.2
+
+
+def classify_catalogue(member_count: int, internal_edges: list[tuple[int, int]]) -> bool:
+    """True if this subsystem is a catalogue -- many structurally homogeneous
+    members with no sibling relationships once the single dominant hub (a
+    barrel or a shared util) is excluded -- rather than a module a reader
+    would go through in order.
+
+    `internal_edges` are (from_file_id, to_file_id) pairs where BOTH ends are
+    members of this subsystem; the caller queries those, this function stays
+    pure. Below `CATALOGUE_MIN_MEMBERS` this never fires: a small subsystem
+    with no internal edges is just a small subsystem (see `unicode`, 10
+    members, called GOOD above at hub-excluded density 0.67 -- there is no
+    member count at which near-zero-after-hub-removal alone would be safe to
+    act on)."""
+    if member_count < CATALOGUE_MIN_MEMBERS:
+        return False
+    if not internal_edges:
+        return True
+    degree: dict[int, int] = {}
+    for a, b in internal_edges:
+        degree[a] = degree.get(a, 0) + 1
+        degree[b] = degree.get(b, 0) + 1
+    hub = max(degree, key=degree.get)
+    remaining = sum(1 for a, b in internal_edges if a != hub and b != hub)
+    return (remaining / member_count) < CATALOGUE_MAX_HUB_EXCLUDED_DENSITY
+
+
 _SLUG_UNSAFE = re.compile(r"[^a-z0-9]+")
 
 
@@ -199,6 +276,17 @@ class CandidateModule:
     member_count: int
     topics: list[CandidateTopic] = field(default_factory=list)
     skipped_reason: Optional[str] = None
+    # How many of `member_count` were excluded as migrations. `member_count`
+    # deliberately still counts them -- it is the figure the Subsystems view
+    # shows for this same group, and disagreeing with it silently would be the
+    # exact honesty problem `skipped_reason` already exists to avoid.
+    excluded_migration_count: int = 0
+    # Set by the caller via `classify_catalogue` -- edges are not data this
+    # dataclass or `map_subsystem_to_module` has, so this is never computed
+    # here, only carried. A reference to look things up in, not a reading
+    # list: the UI is expected to branch on this rather than render it as an
+    # ordinary module, once anything renders these at all.
+    is_catalogue: bool = False
 
     @property
     def resource_count(self) -> int:
@@ -222,6 +310,8 @@ class CandidateModule:
             "source": self.source, "summary": self.summary,
             "subsystem_id": self.subsystem_id, "repo_id": self.repo_id,
             "member_count": self.member_count,
+            "excluded_migration_count": self.excluded_migration_count,
+            "is_catalogue": self.is_catalogue,
             "topic_count": len(self.topics),
             "resource_count": self.resource_count,
             "topics": [t.to_dict(resource_limit) for t in self.topics],
@@ -290,11 +380,22 @@ def map_subsystem_to_module(
         )
         return module
 
+    usable_members = [m for m in members if m.get("prior_category") not in EXCLUDED_PRIOR_CATEGORIES]
+    module.excluded_migration_count = len(members) - len(usable_members)
+
+    if len(usable_members) < min_files:
+        module.skipped_reason = (
+            f"{len(usable_members)} non-migration files remain after excluding "
+            f"{module.excluded_migration_count} migration file"
+            f"{'s' if module.excluded_migration_count != 1 else ''}, below the {min_files}-file minimum"
+        )
+        return module
+
     # Rank order first, so it survives into each topic's resource ordering.
     # Unranked files sort LAST: "unranked" is not "rank 0", and sorting them
     # first would put the least-known files at the top of the reading order.
     ranked = sorted(
-        members,
+        usable_members,
         key=lambda m: (m.get("rank") is None, m.get("rank") or 0, m.get("path") or ""),
     )
 
@@ -417,6 +518,8 @@ def summarise(modules: list[CandidateModule], *, topic_strategy: str) -> dict:
         "subsystems_considered": len(modules),
         "modules_produced": len(produced),
         "subsystems_skipped": len(skipped),
+        "modules_flagged_catalogue": sum(1 for m in produced if m.is_catalogue),
+        "migration_files_excluded": sum(m.excluded_migration_count for m in modules),
         "topics_per_module": stat(topics_per),
         "resources_per_module": stat(res_per_module),
         "resources_per_topic": stat(res_per_topic),

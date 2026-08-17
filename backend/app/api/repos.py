@@ -280,7 +280,7 @@ def get_ranking(
     repo_id alone and sorted by score across all three scorers' rows mixed
     together, which is both duplicate rows per file AND a meaningless sort
     order (three incompatible scales sorted as one). Ordered by the stored
-    `rank` (assigned once, at rank-run time, over the whole repo) rather
+    `rank` (assigned once, at rank-run time over the whole repo) rather
     than re-sorting by score here -- a file's rank must never be
     recomputed from whatever subset a caller happens to be looking at."""
     repo = db.get(Repo, repo_id)
@@ -887,6 +887,12 @@ def get_health_directories(
 @router.get("/{repo_id}/health/files")
 def get_health_files(
     repo_id: int, sort: str = "adjusted_exposure", limit: int = 50,
+    # Optional lookup for ONE file. Additive: absent, the response is exactly
+    # what it was. The Focus view needs this file's health, and a ranked slice
+    # cannot answer that -- the file being looked at is usually not in the top
+    # 50 by exposure, so filtering the list client-side would silently show
+    # nothing for most files.
+    file_id: Optional[int] = None,
     user: User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     """Per-file results from the latest snapshot, with stored explanations.
@@ -909,6 +915,27 @@ def get_health_files(
         raise HTTPException(400, f"Unknown sort {sort!r}")
 
     rows = db.query(CodeFileHealth).filter(CodeFileHealth.snapshot_id == snapshot.id).all()
+
+    if file_id is not None:
+        # One file, and it is returned whether or not it is RANKABLE by `sort`.
+        # A file whose hotspot axis is N/A still has maintainability, an
+        # architecture score and its stored explanations, and dropping it here
+        # because it cannot be sorted would hide health data that exists --
+        # exclude-don't-zero applies to the ranking, not to a direct lookup.
+        row = next((r for r in rows if r.file_id == file_id), None)
+        if row is None:
+            raise HTTPException(
+                404,
+                f"No health record for file {file_id} in snapshot {snapshot.id} -- the file "
+                "may post-date the snapshot, or have been excluded from analysis.",
+            )
+        return {
+            "snapshot_id": snapshot.id,
+            "sort": sort,
+            "excluded_na": 0,
+            "files": [_serialize_file_health(row)],
+        }
+
     column = {
         "adjusted_exposure": lambda r: r.adjusted_exposure,
         "exposure": lambda r: r.change_hotspot_points,
@@ -925,17 +952,21 @@ def get_health_files(
         "snapshot_id": snapshot.id,
         "sort": sort,
         "excluded_na": excluded,
-        "files": [
-            {
-                "file_id": r.file_id, "path": r.path, "nloc": r.nloc,
-                "maintainability": r.maintainability,
-                "architecture_health": r.architecture_health,
-                "exposure": r.change_hotspot_points,
-                "adjusted_exposure": r.adjusted_exposure,
-                "explanation": r.explanation,
-            }
-            for r in rankable[:limit]
-        ],
+        "files": [_serialize_file_health(r) for r in rankable[:limit]],
+    }
+
+
+def _serialize_file_health(r: CodeFileHealth) -> dict:
+    """One shape, used by both the ranked list and the single-file lookup --
+    the two must not drift, or a client would need to know which path produced
+    the row it is holding."""
+    return {
+        "file_id": r.file_id, "path": r.path, "nloc": r.nloc,
+        "maintainability": r.maintainability,
+        "architecture_health": r.architecture_health,
+        "exposure": r.change_hotspot_points,
+        "adjusted_exposure": r.adjusted_exposure,
+        "explanation": r.explanation,
     }
 
 
@@ -1116,6 +1147,7 @@ def get_module_preview(
         .all()
     )
     members_by_subsystem: dict[int, list[dict]] = {}
+    subsystem_by_file: dict[int, int] = {}
     for file_id, path, category, sid in (
         db.query(CodeFile.id, CodeFile.path, CodeFile.prior_category, column)
         .filter(CodeFile.repo_id == repo_id, column.isnot(None))
@@ -1125,6 +1157,23 @@ def get_module_preview(
             {"path": path, "file_id": file_id, "rank": rank_by_file.get(file_id),
              "prior_category": category}
         )
+        subsystem_by_file[file_id] = sid
+
+    # For classify_catalogue: is a large subsystem's edges concentrated on one
+    # hub (a barrel/shared-util file) with nothing between the other members,
+    # or does it have real internal structure? One query for the whole repo,
+    # bucketed by subsystem -- the same "no per-subsystem round trip" reason
+    # members_by_subsystem is built this way above.
+    all_edges = (
+        db.query(CodeImport.from_file_id, CodeImport.to_file_id)
+        .filter(CodeImport.repo_id == repo_id, CodeImport.to_file_id.isnot(None))
+        .all()
+    )
+    internal_edges_by_subsystem: dict[int, list[tuple[int, int]]] = {}
+    for from_id, to_id in all_edges:
+        sid = subsystem_by_file.get(from_id)
+        if sid is not None and subsystem_by_file.get(to_id) == sid:
+            internal_edges_by_subsystem.setdefault(sid, []).append((from_id, to_id))
 
     modules = [
         module_mapping.map_subsystem_to_module(
@@ -1137,6 +1186,9 @@ def get_module_preview(
         )
         for s in subsystems
     ]
+    for m in modules:
+        m.is_catalogue = module_mapping.classify_catalogue(
+            m.member_count, internal_edges_by_subsystem.get(m.subsystem_id, []))
 
     # Files from below-floor subsystems, gathered rather than dropped. Reporting
     # a skipped_reason keeps the COUNTS honest; it does not keep the FILES, and
@@ -1153,6 +1205,16 @@ def get_module_preview(
     unclustered = module_mapping.unclustered_module(
         repo_id=repo_id, members=leftovers, topic_strategy=topic_strategy)
     if unclustered is not None:
+        # Unclustered draws from many original subsystems, so its internal
+        # edges are not any single bucket above -- recomputed over exactly its
+        # own member set. Superset's is 270 files (its 8th-largest module);
+        # this is the group most likely to need the same flag.
+        leftover_ids = {m["file_id"] for m in leftovers if m.get("file_id") is not None}
+        unclustered_edges = [
+            (f, t) for f, t in all_edges if f in leftover_ids and t in leftover_ids
+        ]
+        unclustered.is_catalogue = module_mapping.classify_catalogue(
+            unclustered.member_count, unclustered_edges)
         modules.append(unclustered)
 
     # Several clusters can legitimately share a dominant prefix -- three of

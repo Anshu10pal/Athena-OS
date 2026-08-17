@@ -171,58 +171,75 @@ def _is_boolean_operator(node, rules: LanguageRules) -> bool:
     return operator.type in rules.boolean_operators
 
 
-def _cyclomatic_and_operands(func_node, rules: LanguageRules) -> tuple:
-    """Cyclomatic complexity = 1 + decision points, counting nested functions
-    separately (their nodes are not traversed here). Also returns the largest
-    number of operands in any single boolean expression, which is the
-    `complex_conditional` input.
+def _function_metrics(func_node, rules: LanguageRules) -> tuple:
+    """(cyclomatic, max_boolean_operands, max_nesting_depth) in ONE traversal.
 
-    Operand counting walks each *maximal* boolean expression once: a nested
-    `a and b and c` parses as nested boolean_operator nodes, so counting every
-    node independently would report 2 separate 2-operand conditions instead of
-    one 3-operand condition."""
+    Was two separate walks of the same subtree -- `_cyclomatic_and_operands`
+    and `_nesting_depth` -- which is half of why `_iter_subtree` was called 35.8
+    million times for one health run on apache/superset. They are merged rather
+    than optimised individually: neither needs a different traversal ORDER, only
+    a different accumulator, and depth is the only one that needs context from
+    the path down.
+
+    So this uses an explicit `(node, depth)` stack, which is what `_nesting_depth`
+    already did, and computes the decision-point and boolean counts on the same
+    visit. `_iter_subtree` is not used here because it carries no depth.
+
+    Semantics preserved exactly, including the three easy ones to lose:
+
+      * the function node ITSELF contributes no decision point and no boolean
+        (the old code skipped `node is func_node`);
+      * nested functions are not descended into, and are measured on their own;
+      * depth counts BLOCK-OPENING nodes only, and the function is depth 0.
+
+    Cyclomatic complexity = 1 + decision points. Boolean operands are counted
+    per MAXIMAL expression: `a and b and c` parses as nested boolean_operator
+    nodes, so counting each independently would report two 2-operand conditions
+    instead of one 3-operand condition.
+    """
     complexity = 1
     max_operands = 0
+    max_depth = 0
     counted_boolean_nodes = set()
 
-    for node in _iter_subtree(func_node, stop_types=rules.function_nodes):
-        if node is func_node:
-            continue
-        if node.type in rules.decision_nodes:
-            complexity += 1
-        if _is_boolean_operator(node, rules):
-            complexity += 1
-            if node.id in counted_boolean_nodes:
-                continue
-            # Walk this maximal boolean expression, marking its descendants so
-            # they are not re-counted as roots of their own expression.
-            operands = 1
-            for inner in _iter_subtree(node, stop_types=rules.function_nodes):
-                if inner is node:
-                    continue
-                if _is_boolean_operator(inner, rules):
-                    counted_boolean_nodes.add(inner.id)
-                    operands += 1
-            operands += 1  # n operators join n+1 operands
-            max_operands = max(max_operands, operands)
-
-    return complexity, max_operands
-
-
-def _nesting_depth(func_node, rules: LanguageRules) -> int:
-    """Maximum nesting of block-opening statements inside a function. The
-    function itself is depth 0, so a single top-level `if` is depth 1."""
-    max_depth = 0
+    # (node, depth_of_node). The function root is depth 0 and is not itself
+    # counted as a decision point or a boolean.
     stack = [(func_node, 0)]
     while stack:
         node, depth = stack.pop()
+
+        if node is not func_node:
+            if node.type in rules.decision_nodes:
+                complexity += 1
+            if _is_boolean_operator(node, rules):
+                complexity += 1
+                if node.id not in counted_boolean_nodes:
+                    # Walk this maximal boolean expression once, marking its
+                    # descendants so they are not re-counted as roots of their
+                    # own. Kept as a nested walk deliberately: it has different
+                    # semantics from the outer traversal (it marks rather than
+                    # measures) and it is bounded by one expression's size, so
+                    # folding it in would risk the counting rule for no
+                    # meaningful saving.
+                    operands = 1
+                    for inner in _iter_subtree(node, stop_types=rules.function_nodes):
+                        if inner is node:
+                            continue
+                        if _is_boolean_operator(inner, rules):
+                            counted_boolean_nodes.add(inner.id)
+                            operands += 1
+                    operands += 1  # n operators join n+1 operands
+                    max_operands = max(max_operands, operands)
+
         for child in node.children:
             if child.type in rules.function_nodes:
                 continue  # nested function measured on its own
             child_depth = depth + 1 if child.type in rules.nesting_nodes else depth
-            max_depth = max(max_depth, child_depth)
+            if child_depth > max_depth:
+                max_depth = child_depth
             stack.append((child, child_depth))
-    return max_depth
+
+    return complexity, max_operands, max_depth
 
 
 def _comment_lines(root, rules: LanguageRules) -> set:
@@ -255,64 +272,58 @@ def _symbol_name(func_node) -> str:
     return "<anonymous>"
 
 
-def _python_broad_handlers(root) -> int:
-    """Bare `except:`, or `except Exception`/`except BaseException` whose body
-    is only `pass`. Both are the "swallow everything silently" shape; a broad
-    except that actually handles or re-raises is not counted."""
-    count = 0
-    for node in _iter_subtree(root):
-        if node.type != "except_clause":
-            continue
-        value = node.child_by_field_name("value")
-        if value is None:
-            # `except:` with no exception type at all.
-            has_type = any(
-                child.type not in ("except", ":", "block", "comment")
-                for child in node.children
-            )
-            if not has_type:
-                count += 1
+def _is_python_broad_handler(node) -> bool:
+    """One `except_clause`: is it the swallow-everything shape?
+
+    Bare `except:`, or `except Exception`/`except BaseException` whose body is
+    only `pass`. A broad except that actually handles or re-raises is not
+    counted.
+
+    Split out of the old `_python_broad_handlers(root)` so the decision can be
+    made during the single whole-tree pass. The RULE is unchanged -- only the
+    traversal moved -- and the metric snapshot over 7,236 files proves it.
+    """
+    value = node.child_by_field_name("value")
+    if value is None:
+        # `except:` with no exception type at all.
+        has_type = any(
+            child.type not in ("except", ":", "block", "comment")
+            for child in node.children
+        )
+        if not has_type:
+            return True
+        caught = None
+    else:
+        caught = value.text.decode("utf-8", errors="replace") if value.text else None
+
+    if caught is None:
+        caught_text = ""
+        for child in node.children:
+            if child.type in ("except", ":", "block", "comment"):
                 continue
-            caught = None
-        else:
-            caught = value.text.decode("utf-8", errors="replace") if value.text else None
+            if child.text:
+                caught_text = child.text.decode("utf-8", errors="replace")
+                break
+    else:
+        caught_text = caught
 
-        if caught is None:
-            caught_text = ""
-            for child in node.children:
-                if child.type in ("except", ":", "block", "comment"):
-                    continue
-                if child.text:
-                    caught_text = child.text.decode("utf-8", errors="replace")
-                    break
-        else:
-            caught_text = caught
-
-        if caught_text.strip() not in ("Exception", "BaseException"):
-            continue
-        block = next((c for c in node.children if c.type == "block"), None)
-        if block is None:
-            continue
-        statements = [c for c in block.children if c.type not in ("comment",)]
-        if len(statements) == 1 and statements[0].type == "pass_statement":
-            count += 1
-    return count
+    if caught_text.strip() not in ("Exception", "BaseException"):
+        return False
+    block = next((c for c in node.children if c.type == "block"), None)
+    if block is None:
+        return False
+    statements = [c for c in block.children if c.type not in ("comment",)]
+    return len(statements) == 1 and statements[0].type == "pass_statement"
 
 
-def _js_broad_handlers(root) -> int:
+def _is_js_broad_handler(node) -> bool:
     """`catch` with an empty block. An empty catch discards the error with no
     record that it happened, which is the JS equivalent of `except: pass`."""
-    count = 0
-    for node in _iter_subtree(root):
-        if node.type != "catch_clause":
-            continue
-        body = node.child_by_field_name("body")
-        if body is None:
-            continue
-        statements = [c for c in body.children if c.type not in ("{", "}", "comment")]
-        if not statements:
-            count += 1
-    return count
+    body = node.child_by_field_name("body")
+    if body is None:
+        return False
+    statements = [c for c in body.children if c.type not in ("{", "}", "comment")]
+    return not statements
 
 
 def metrics_for(source_bytes: bytes, language: str) -> Optional[FileMetrics]:
@@ -332,16 +343,39 @@ def metrics_for(source_bytes: bytes, language: str) -> Optional[FileMetrics]:
     if root is None:
         return None
 
-    comment_lines = _comment_lines(root, rules)
-    file_nloc = _nloc(source_bytes, comment_lines)
-
-    metrics = FileMetrics(language=language, nloc=file_nloc, function_count=0)
+    # ONE whole-tree walk for three things that used to take three.
+    #
+    # `_comment_lines`, the function-node scan, and the broad-handler scan each
+    # walked the entire tree independently. None of them needs a different
+    # traversal order -- each is "find every node of these types, anywhere" --
+    # so they are collected on a single visit. Measured on apache/superset,
+    # `_iter_subtree` was yielding 35.8 million nodes for one health run, and
+    # this is two thirds of the whole-tree share of that.
+    #
+    # Comments must be complete BEFORE any nloc is computed, which is why this
+    # gathers first and measures afterwards rather than doing both in one loop:
+    # `_nloc` subtracts comment lines, and a function encountered before a
+    # comment inside it would otherwise be measured against an incomplete set.
+    comment_lines: set = set()
+    function_nodes = []
+    broad_handler_count = 0
+    handler_type = "except_clause" if language == "python" else "catch_clause"
+    is_broad_handler = _is_python_broad_handler if language == "python" else _is_js_broad_handler
 
     for node in _iter_subtree(root):
-        if node.type not in rules.function_nodes:
-            continue
-        complexity, operands = _cyclomatic_and_operands(node, rules)
-        depth = _nesting_depth(node, rules)
+        node_type = node.type
+        if node_type in rules.comment_nodes:
+            comment_lines.update(range(node.start_point[0], node.end_point[0] + 1))
+        elif node_type in rules.function_nodes:
+            function_nodes.append(node)
+        elif node_type == handler_type and is_broad_handler(node):
+            broad_handler_count += 1
+
+    file_nloc = _nloc(source_bytes, comment_lines)
+    metrics = FileMetrics(language=language, nloc=file_nloc, function_count=0)
+
+    for node in function_nodes:
+        complexity, operands, depth = _function_metrics(node, rules)
         func_nloc = _nloc(source_bytes, comment_lines, node.start_point[0], node.end_point[0])
         name = _symbol_name(node)
         line = node.start_point[0] + 1
@@ -367,7 +401,5 @@ def metrics_for(source_bytes: bytes, language: str) -> Optional[FileMetrics]:
         if func_nloc > FUNCTION_NLOC_REPORT_THRESHOLD:
             metrics.functions_over_nloc_threshold += 1
 
-    metrics.broad_handler_count = (
-        _python_broad_handlers(root) if language == "python" else _js_broad_handlers(root)
-    )
+    metrics.broad_handler_count = broad_handler_count
     return metrics

@@ -1,4 +1,4 @@
-"""Phase G1: GET /api/repos/{id}/ranking. Calls the route function directly
+﻿"""Phase G1: GET /api/repos/{id}/ranking. Calls the route function directly
 with a real db_session, same convention this test suite already uses for
 service-layer functions -- this app has no existing TestClient-based API
 tests to follow instead, and route functions here don't use their `user`
@@ -34,6 +34,7 @@ from app.api.repos import (
     rank_repo_endpoint,
     rename_subsystem,
 )
+from app.db.models import CodeFile, CodeFileHealth, CodeImport, CodeSubsystem, Repo
 from app.services.codebase.git_ops import run_git
 from app.services.codebase.repo_lock import repo_lock
 from app.services.codebase.ingest import ingest_repo
@@ -1538,3 +1539,179 @@ class TestModulePreviewEndpoint:
         with pytest.raises(HTTPException) as e:
             get_module_preview(repo.id, algorithm="nonsense", user=None, db=db_session)
         assert e.value.status_code == 400
+
+
+class TestModulePreviewCatalogueWiring:
+    """classify_catalogue itself is pure and covered in test_module_mapping.py.
+    This is the endpoint wiring around it: the CodeImport query, bucketing
+    edges by which subsystem both endpoints belong to, and setting
+    is_catalogue on the resulting module -- built directly against the DB
+    rather than through git ingest, so the subsystem/edge shape (a 30-file
+    barrel) is exact rather than whatever real clustering happens to produce."""
+
+    def _repo_with_barrel_subsystem(self, db_session):
+        repo = Repo(host="local", owner="", name="catalogue-fixture",
+                    local_path="/nonexistent", source_kind="local")
+        db_session.add(repo)
+        db_session.flush()
+
+        subsystem = CodeSubsystem(repo_id=repo.id, algorithm="modularity",
+                                  cluster_index=0, member_count=31,
+                                  dominant_prefix_label="pkg")
+        db_session.add(subsystem)
+        db_session.flush()  # need subsystem.id before files can reference it
+
+        # 31 files: one hub (barrel) + 30 spokes, all in this subsystem.
+        files = [CodeFile(repo_id=repo.id, path=f"pkg/f{i}.py", language="python",
+                          content_sha256=f"sha{i}", subsystem_modularity_id=subsystem.id)
+                 for i in range(31)]
+        db_session.add_all(files)
+        db_session.flush()
+        hub, spokes = files[0], files[1:]
+
+        # The hub imports every spoke; spokes never import each other -- the
+        # exact shape measured on eslint's lib/rules · index.
+        db_session.add_all([
+            CodeImport(repo_id=repo.id, from_file_id=hub.id, to_file_id=s.id,
+                      raw_specifier=s.path)
+            for s in spokes
+        ])
+        db_session.commit()
+        return repo
+
+    def test_LOADBEARING_a_barrel_subsystem_is_flagged_a_catalogue(self, db_session):
+        repo = self._repo_with_barrel_subsystem(db_session)
+        payload = get_module_preview(repo.id, user=None, db=db_session)
+        modules = [m for m in payload["modules"] if m["skipped_reason"] is None]
+        assert len(modules) == 1
+        assert modules[0]["is_catalogue"] is True
+        assert payload["summary"]["modules_flagged_catalogue"] == 1
+
+    def test_a_subsystem_with_real_interconnection_is_not_flagged(self, db_session):
+        repo = self._repo_with_barrel_subsystem(db_session)
+        # Rewire: replace the barrel with a chain among the spokes -- real
+        # sibling structure, no dominant hub.
+        db_session.query(CodeImport).filter(CodeImport.repo_id == repo.id).delete()
+        spokes = (db_session.query(CodeFile)
+                  .filter(CodeFile.repo_id == repo.id).order_by(CodeFile.id).all()[1:])
+        db_session.add_all([
+            CodeImport(repo_id=repo.id, from_file_id=a.id, to_file_id=b.id, raw_specifier=b.path)
+            for a, b in zip(spokes, spokes[1:])
+        ])
+        db_session.commit()
+
+        payload = get_module_preview(repo.id, user=None, db=db_session)
+        modules = [m for m in payload["modules"] if m["skipped_reason"] is None]
+        assert len(modules) == 1
+        assert modules[0]["is_catalogue"] is False
+
+    def test_edges_to_a_different_subsystem_are_not_counted_as_internal(self, db_session):
+        """An edge crossing subsystem boundaries says nothing about whether
+        THIS subsystem has internal structure -- counting it would let an
+        unrelated import make a catalogue look interconnected."""
+        repo = self._repo_with_barrel_subsystem(db_session)
+        outsider = CodeFile(repo_id=repo.id, path="pkg/outsider.py", language="python",
+                            content_sha256="sha_outsider", subsystem_modularity_id=2)
+        db_session.add(outsider)
+        db_session.flush()
+        spoke = (db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id)
+                 .order_by(CodeFile.id).all()[1])
+        db_session.add(CodeImport(repo_id=repo.id, from_file_id=spoke.id, to_file_id=outsider.id,
+                                  raw_specifier="outsider"))
+        db_session.commit()
+
+        payload = get_module_preview(repo.id, user=None, db=db_session)
+        modules = [m for m in payload["modules"] if m["skipped_reason"] is None
+                   and m["title"] != "Unclustered"]
+        assert len(modules) == 1
+        assert modules[0]["is_catalogue"] is True  # unaffected by the cross-subsystem edge
+
+
+class TestHealthFilesSingleLookup:
+    """Item 3a. The endpoint returned a ranked SLICE, so the Focus view could not
+    ask about the file it was showing -- that file is usually not in the top 50
+    by exposure, and filtering client-side would have silently shown nothing for
+    most files."""
+
+    def _with_health(self, db_session, tmp_path):
+        root = tmp_path / "health_repo"
+        _init_repo(root)
+        _write(root / "pkg" / "__init__.py", "")
+        _write(root / "pkg" / "core.py", "def run():\n    return 1\n")
+        _write(root / "pkg" / "util.py", "from pkg.core import run\n\n\ndef helper():\n    return run()\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+        repo = register_from_path(db_session, str(root))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        compute_health_endpoint(repo.id, user=None, db=db_session)
+        return repo
+
+    def test_LOADBEARING_a_single_file_can_be_looked_up_by_id(self, db_session, tmp_path):
+        repo = self._with_health(db_session, tmp_path)
+        # From the stored rows, NOT from the ranked list -- see the test below
+        # for why the ranked list cannot be used as a source of file ids here.
+        rows = db_session.query(CodeFileHealth).all()
+        assert rows, "fixture produced no health rows at all"
+        target = rows[-1].file_id
+
+        one = get_health_files(repo.id, file_id=target, user=None, db=db_session)
+
+        assert len(one["files"]) == 1
+        assert one["files"][0]["file_id"] == target
+        assert "explanation" in one["files"][0]
+
+    def test_LOADBEARING_the_lookup_reaches_files_the_ranking_cannot(
+            self, db_session, tmp_path):
+        """The gap this fixes, demonstrated rather than described.
+
+        This fixture is one commit old, so every file's churn axis is N/A and
+        `adjusted_exposure` is null for all of them -- which makes the RANKED
+        list completely EMPTY. Every file still has a maintainability score, an
+        architecture score and its stored explanations. Without a direct lookup
+        the Focus view would show nothing for any file in a repo like this, and
+        "no data" would be indistinguishable from "healthy"."""
+        repo = self._with_health(db_session, tmp_path)
+        rows = db_session.query(CodeFileHealth).all()
+        assert rows, "fixture produced no health rows at all"
+
+        ranked = get_health_files(repo.id, limit=500, user=None, db=db_session)
+        unrankable = [r for r in rows if r.adjusted_exposure is None]
+        assert unrankable, "fixture has churn data; it cannot demonstrate the gap"
+        assert ranked["excluded_na"] == len(unrankable)
+
+        for row in unrankable:
+            assert row.file_id not in [f["file_id"] for f in ranked["files"]]
+            one = get_health_files(repo.id, file_id=row.file_id, user=None, db=db_session)
+            assert one["files"][0]["file_id"] == row.file_id
+            assert one["files"][0]["explanation"], "the explanations came back empty"
+
+    def test_an_unknown_file_id_is_404_not_an_empty_list(self, db_session, tmp_path):
+        # An empty list would read as "this file is healthy".
+        repo = self._with_health(db_session, tmp_path)
+        with pytest.raises(HTTPException) as e:
+            get_health_files(repo.id, file_id=999999, user=None, db=db_session)
+        assert e.value.status_code == 404
+
+    def test_DOCUMENTS_INTENT_the_default_response_is_unchanged(self, db_session, tmp_path):
+        """The param is additive: absent, the payload is exactly what it was."""
+        repo = self._with_health(db_session, tmp_path)
+        payload = get_health_files(repo.id, user=None, db=db_session)
+        assert set(payload) == {"snapshot_id", "sort", "excluded_na", "files"}
+        assert payload["sort"] == "adjusted_exposure"
+
+    def test_both_paths_return_the_same_shape(self, db_session, tmp_path):
+        """One serializer, used by both -- a client must not need to know which
+        path produced the row it is holding.
+
+        Compared against the SERIALIZER's own output rather than against the
+        ranked list, which is empty for this fixture."""
+        from app.api.repos import _serialize_file_health
+
+        repo = self._with_health(db_session, tmp_path)
+        row = db_session.query(CodeFileHealth).first()
+        one = get_health_files(repo.id, file_id=row.file_id, user=None, db=db_session)
+
+        assert set(one["files"][0]) == set(_serialize_file_health(row))
+        assert one["files"][0] == _serialize_file_health(row)
+

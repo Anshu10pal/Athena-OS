@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import Toggle from "../components/Toggle";
-import { api } from "../lib/api";
+import { api, getToken } from "../lib/api";
 import { DecryptText } from "../lib/fx";
+import { resourceLink } from "../lib/resourceLink";
 
 interface Resource {
   id: number;
@@ -35,21 +36,39 @@ interface ModuleT {
   topics: TopicT[];
 }
 
-function searchUrl(r: Resource): string {
-  const q = encodeURIComponent(r.search_query || "");
-  return r.kind === "video"
-    ? `https://www.youtube.com/results?search_query=${q}`
-    : `https://www.google.com/search?q=${q}`;
+// An uploaded resource has no `url` -- its bytes live behind an authenticated
+// endpoint, GET /api/resources/{id}/file. A plain <a href> to that path 404s
+// the auth check (the token lives in localStorage, not a cookie), so the
+// click has to fetch with the bearer header and save the blob itself.
+async function downloadFile(resource: Resource, onError: (message: string) => void) {
+  try {
+    const token = getToken();
+    const res = await fetch(`/api/resources/${resource.id}/file`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`Download failed (${res.status})`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = resource.title;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e: any) {
+    onError(e.message || "Download failed");
+  }
 }
 
 function ResourceRow({
   resource,
   onSave,
   onDelete,
+  onError,
 }: {
   resource: Resource;
   onSave: (url: string, title: string) => Promise<void>;
   onDelete: () => Promise<void>;
+  onError: (message: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [url, setUrl] = useState(resource.url || "");
@@ -103,23 +122,27 @@ function ResourceRow({
     );
   }
 
+  const link = resourceLink(resource);
+  const linkClassName = `flex-1 min-w-0 flex items-center gap-2.5 rounded-lg px-3 py-2 text-xs transition-colors ${
+    link.action === "search"
+      ? "border border-dashed border-line text-fog hover:text-accent hover:border-accent/40"
+      : "bg-panel2 border border-accent/40 text-snow hover:border-accent"
+  }`;
+  const label = link.action === "search" ? `search: ${resource.title || resource.search_query}` : resource.title;
+
   return (
     <div className="flex items-center gap-1.5 group">
-      <a
-        href={resource.status === "saved" && resource.url ? resource.url : searchUrl(resource)}
-        target="_blank"
-        rel="noreferrer"
-        className={`flex-1 min-w-0 flex items-center gap-2.5 rounded-lg px-3 py-2 text-xs transition-colors ${
-          resource.status === "saved"
-            ? "bg-panel2 border border-accent/40 text-snow hover:border-accent"
-            : "border border-dashed border-line text-fog hover:text-accent hover:border-accent/40"
-        }`}
-      >
-        <span className="font-mono text-[8px] uppercase shrink-0">{resource.kind}</span>
-        <span className="flex-1 truncate">
-          {resource.status === "saved" ? resource.title : `search: ${resource.title || resource.search_query}`}
-        </span>
-      </a>
+      {link.action === "download" ? (
+        <button onClick={() => downloadFile(resource, onError)} className={linkClassName}>
+          <span className="font-mono text-[8px] uppercase shrink-0">{resource.kind}</span>
+          <span className="flex-1 truncate text-left">{label}</span>
+        </button>
+      ) : (
+        <a href={link.href} target="_blank" rel="noreferrer" className={linkClassName}>
+          <span className="font-mono text-[8px] uppercase shrink-0">{resource.kind}</span>
+          <span className="flex-1 truncate">{label}</span>
+        </a>
+      )}
       <button
         onClick={() => setEditing(true)}
         className="text-fog hover:text-accent text-[10px] font-mono shrink-0 px-1 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
@@ -146,6 +169,7 @@ function TopicCard({
   onUpload,
   onUndo,
   onDeleteTopic,
+  onResourceError,
 }: {
   topic: TopicT;
   onToggleDone: (topicId: number, done: boolean) => void;
@@ -155,6 +179,7 @@ function TopicCard({
   onUpload: (topicId: number, file: File) => Promise<void>;
   onUndo: (topicId: number) => Promise<void>;
   onDeleteTopic: (topicId: number) => Promise<void>;
+  onResourceError: (message: string) => void;
 }) {
   const [addingOpen, setAddingOpen] = useState(false);
   const [newKind, setNewKind] = useState("article");
@@ -193,6 +218,7 @@ function TopicCard({
                 resource={r}
                 onSave={(url, title) => onResourceSave(r.id, url, title)}
                 onDelete={() => onResourceDelete(r.id)}
+                onError={onResourceError}
               />
             ))}
           </div>
@@ -451,6 +477,7 @@ export default function ModuleDetail() {
               onUpload={uploadFile}
               onUndo={undoTopic}
               onDeleteTopic={deleteTopic}
+              onResourceError={setError}
             />
           ))}
         </div>
