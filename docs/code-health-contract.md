@@ -2996,10 +2996,11 @@ never truncate the output of a run whose purpose is diagnosis. Write it whole
 to a file and read the file. An intermittent failure that does not reproduce
 leaves nothing to re-read, so the first capture is the only capture.
 
-### 17.30 (PREVIEW) A browser-automation instrument that cannot see its own precondition
+### 17.30 An instrument that cannot see its own precondition
 
-**Short-form entry, written mid-session to prevent a fourth instance. The full
-write-up is pending; the number may move.**
+Five times in one session, an instrument reported something about product code
+that was not true, and each time the product code was fine. Four were browser
+probes; the fifth was a text-editing tool. They are one pattern.
 
 Four times in one investigation, a scripted browser instrument reported a
 defect in product code that was working correctly. Each time the instrument had
@@ -3038,3 +3039,94 @@ A corollary worth stating separately, because it is what makes these
 expensive: **a reported defect is not evidence a defect exists.** Planning work
 around one — as a whole checkpoint was — inherits whatever the instrument got
 wrong. Verify the instrument first, then the finding, then plan.
+
+#### The fifth costume: a tool that returns success without doing the work
+
+The four above are probes that could not perceive a precondition. The fifth is
+the same failure in an editing tool. A documentation fix applied three
+`str.replace` calls; one anchor did not match because of a line wrap, and
+Python's `str.replace` **returns the unmodified string rather than raising**.
+The script printed its success message. Only one of the three replacements had
+an assertion guarding it, so two could have silently no-opped and one did.
+
+It was caught solely because the operator had required re-reading each edit
+after applying it. Without that step the contract would carry a sentence
+everybody believed was there.
+
+The rule generalises past text editing: **an operation that can partially fail
+must be checked against its result, not its return.** `str.replace`, a bulk
+UPDATE that matches no rows, a mock that was never called, a config key written
+to a file nobody reloads — all report success by saying nothing. Where a
+replacement is expected to change something, assert that it did.
+
+#### The discipline in one line
+
+Canary the instrument before trusting its findings; and when the instrument is
+a tool rather than a probe, verify by reading the artefact back rather than by
+believing the exit code.
+
+### 17.31 An identity that is reused, and a test keyed to it
+
+Two of the four patterns pending write-up collapse into this one, and saying so
+is more useful than padding the contract with both.
+
+**SQLite reuses the rowid you just freed.** A test deleted a row and inserted a
+replacement, then asserted on the new row's id — and got the old one. It bit
+twice in one session, in unrelated tests: a re-cluster fixture where every new
+`CodeSubsystem` was handed the id of the row it replaced, so nothing appeared to
+rename and the test passed while proving nothing; and a deletion-audit test that
+asserted "one audit row for this repo id" after two deletions, where both repos
+had been id 1. The fixture had to set explicit ids (`9000 + index`) before the
+rename it was testing could even occur.
+
+**Python salts string hashing per process.** `hash("x")` differs between runs
+unless `PYTHONHASHSEED` is fixed, so anything reproducible must not be seeded
+from it. Caught before shipping in card generation's distractor rotation, where
+it would have made two runs over identical input produce different cards —
+silently defeating the conservation check that compares a regeneration against
+its predecessor. `zlib.crc32` is the fix.
+
+The shared shape: **an identifier that looks stable and is not.** A rowid is
+unique only among live rows; a hash is stable only within a process. Both are
+fine until something keys on them across the boundary where they are reused —
+a delete, or a process restart. The rule: *before keying anything on an
+identifier, ask what makes it unique and over what scope*. If the answer is
+"unique among what currently exists" or "stable within this run", it cannot key
+a comparison that spans a deletion or a restart.
+
+Related to §17.29's distinction between unrecoverable and unresolved: an
+assertion keyed to a reused id does not fail, it silently checks the wrong
+object, which is the harder failure to notice.
+
+### 17.32 A distractor set that answers the question
+
+Two card-quality defects, both invisible to every test and both found by reading
+generated output rather than counts.
+
+**Repetition across cards.** Distractors were drawn as the first N of a sorted
+pool, so every question in a module offered the same three wrong answers — on
+eslint, `['bin/eslint.js', 'conf/ecma-version.js', 'conf/globals.js']` under
+nearly every card. A learner does not need to know anything; they learn which
+options are never correct.
+
+**The odd one out.** Rotating the pool fixed the repetition and created a worse
+defect: three *consecutive* paths, so a question whose answer was `lib/cli.js`
+offered three `rules/prefer-*.js` distractors and the answer was identifiable as
+the only option of a different kind. Fixed by drawing distractors that RESEMBLE
+the answer.
+
+**An answer compared against itself.** A separate instance of the same family:
+the quality filter was passed `subject_path` as the question's subject, but for
+three templates that field holds the ANSWER (it is the code link). The filter
+therefore compared the answer to itself, scored maximum similarity, and rejected
+every such card as "answerable from the identifier alone". Cost: 6 legitimate
+cards on Athena-OS, 11 on eslint, 24 on Superset — all discarded for resembling
+themselves. Fixed by a separate `filter_subject`.
+
+The shared shape: **a question can be answerable without being answered.** Every
+one of these produced cards a learner could score on with no knowledge, or
+discarded cards that required it, and no test caught any of them because every
+test asserted on counts and shapes rather than on whether the question was a
+question. The rule: *for anything generated to be judged by a human, read a
+sample of the output before trusting the metrics over it.* A rejection rate is
+not a quality measure; it is a count of rejections.
