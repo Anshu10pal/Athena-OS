@@ -4,6 +4,7 @@ import { GraphEdgeT, GraphNodeT } from "../lib/api";
 import { clusterColor } from "./ArchitectureMap";
 import { buildGraphElements, CyNodeData, expandableDirs } from "../lib/dependencyGraphElements";
 import { GraphDirectionT, MAX_NODES_ADVISORY, scopeGraph } from "../lib/dependencyGraphScope";
+import { LayoutTargetT, RunElkLayoutDepsT, runElkLayout } from "../lib/elkLayoutRun";
 import { computeElkLayout } from "../lib/elkWorkerLayout";
 import { recordGraphElements, recordLayoutSettled, recordLayoutStarted } from "../lib/viewDiagnostics";
 
@@ -385,59 +386,32 @@ export function DependencyGraph({
 
     // Cancel an in-flight layout when `elements` change again.
     //
-    // Without this, an effect that starts asynchronous work never stops it. The
-    // next run calls `cy.elements().remove()`, destroying the very nodes the
-    // previous ELK layout is still positioning, and applying stale positions to
-    // objects that no longer exist (or worse, to the WRONG generation of
-    // elements, since ids can repeat across scope changes) would be a visible
-    // flash of the previous graph's layout. Ordinary React hygiene -- an effect
-    // that starts async work owns cancelling it.
-    //
-    // NOTE, deliberately: this is NOT claimed as the fix for the reported
-    // `Cannot read properties of undefined (reading 'index')` crash. That crash
-    // has never been reproduced, its reported trigger (select a cluster chip,
-    // deselect it) is exactly a narrow-then-widen transition inside the ELK
-    // settling window, and this is the mechanism most consistent with it -- but
-    // "most consistent with" is not evidence. The defect stands on its own:
-    // uncancelled async work in an effect is wrong whether or not it is what
-    // was seen. See decisions.md, where the two are recorded separately for
-    // this reason.
-    let cancelled = false;
-
-    computeElkLayout(cy.nodes().toArray(), cy.edges().toArray(), {
-      algorithm: "layered",
-      // Left-to-right so horizontal position encodes dependency
-      // direction: importers on the left, imports on the right. This is
-      // the property a force layout cannot give you.
-      "elk.direction": "RIGHT",
-      "elk.spacing.nodeNode": "32",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "72",
-      "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
-      "elk.padding": "[top=24,left=24,bottom=24,right=24]",
-    }).then((positions) => {
-      if (cancelled) return;
-      cy.nodes()
-        .filter((n) => !n.isParent())
-        .positions((n) => positions.get(n.id()) ?? n.position());
-      recordLayoutSettled();
-      // Fit after positions are applied, not before, or the viewport is
-      // fitted to pre-layout positions.
-      cy.fit(undefined, 40);
-    }).catch((err) => {
-      // A rejected layout must not fail silently: without this, ELK erroring
-      // on some graph shape leaves every node stacked at its cytoscape
-      // default position with no error surfaced anywhere -- indistinguishable
-      // from "still loading" to whoever is looking at it.
-      if (cancelled) return;
-      recordLayoutSettled();
-      // eslint-disable-next-line no-console
-      console.error("[DependencyGraph] ELK layout failed", err);
-    });
-
-    return () => {
-      cancelled = true;
-      recordLayoutSettled();
-    };
+    // The lifecycle itself lives in lib/elkLayoutRun.ts, which is where it can
+    // be tested without a DOM -- `runElkLayout` returns the cancel function and
+    // this effect returns it unchanged, so the cleanup React calls on the next
+    // run IS the discard. Its module comment carries the full reasoning,
+    // including why this is deliberately not claimed as the fix for the
+    // reported `Cannot read properties of undefined (reading 'index')` crash.
+    return runElkLayout(
+      cy as unknown as LayoutTargetT,
+      {
+        algorithm: "layered",
+        // Left-to-right so horizontal position encodes dependency
+        // direction: importers on the left, imports on the right. This is
+        // the property a force layout cannot give you.
+        "elk.direction": "RIGHT",
+        "elk.spacing.nodeNode": "32",
+        "elk.layered.spacing.nodeNodeBetweenLayers": "72",
+        "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
+        "elk.padding": "[top=24,left=24,bottom=24,right=24]",
+      },
+      {
+        compute: computeElkLayout as unknown as RunElkLayoutDepsT["compute"],
+        onSettled: recordLayoutSettled,
+        // eslint-disable-next-line no-console
+        onError: (err) => console.error("[DependencyGraph] ELK layout failed", err),
+      },
+    );
   }, [cy, elements, showFullGraph, focusIds]);
 
   const hasFocus = focusIds.length > 0 || showFullGraph;
