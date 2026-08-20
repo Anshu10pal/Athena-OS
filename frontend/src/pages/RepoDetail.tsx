@@ -477,22 +477,20 @@ export default function RepoDetail() {
   // file). &level=file pins this fetch to the file-level shape this view
   // was actually built against, so it keeps working unchanged through H2
   // and H3 -- a one-line stopgap until H5 relegates this view to "Raw".
-  const loadGraph = (activeScorer: ScorerT, state: FilterState = filters) => {
+  const loadGraph = (activeScorer: ScorerT, state: FilterState = filters) =>
     api<GraphResponseT>(`/api/repos/${id}/graph?${graphFilterParams(activeScorer, "file", state)}`)
       .then(setGraph)
       .catch(() => setGraph(null));
-  };
 
   // Phase H3: the Architecture tab's own fetch, at the (now-default)
   // level=directory shape -- deliberately separate from loadGraph's
   // level=file pin above, not a shared response reused across both, since
   // the two views need genuinely different payloads (directory nodes
   // carry no per-file id/rank; file nodes carry no kind/region/cycle info).
-  const loadDirGraph = (activeScorer: ScorerT, state: FilterState = filters) => {
+  const loadDirGraph = (activeScorer: ScorerT, state: FilterState = filters) =>
     api<DirGraphResponseT>(`/api/repos/${id}/graph?${graphFilterParams(activeScorer, "directory", state)}`)
       .then(setDirGraph)
       .catch(() => setDirGraph(null));
-  };
 
   // Phase I1: reads ONLY what a prior POST /subsystems already persisted --
   // same "GET must never recompute" discipline H1.5 established for
@@ -745,13 +743,29 @@ export default function RepoDetail() {
   // otherwise aggregate the repo again. The chip filters are discrete and would
   // not need it; they share the delay rather than carry a second code path, and
   // 300ms is imperceptible on a click.
+  // True while a FILTER-DRIVEN graph refetch is in flight.
+  //
+  // Not a general "is anything loading" flag: the initial page load already has
+  // its own empty states, and flagging that too would put a spinner on a view
+  // that has never shown anything. This covers the specific window a user
+  // cannot otherwise account for -- they changed a filter and the picture did
+  // not move yet. On apache/superset that window is 10-11.5s (measured), which
+  // reads as "the filter is broken" with no signal.
+  const [graphRefiltering, setGraphRefiltering] = useState(false);
+
   const lastGraphFilters = useRef<FilterState>(filters);
   useEffect(() => {
     if (!graphFiltersChanged(lastGraphFilters.current, filters)) return;
     const timer = setTimeout(() => {
       lastGraphFilters.current = filters;
-      loadGraph(scorer, filters);
-      loadDirGraph(scorer, filters);
+      setGraphRefiltering(true);
+      // Cleared when BOTH land: clearing on the first would drop the indicator
+      // while the other view's payload is still coming, and Architecture and
+      // Matrix read different responses.
+      void Promise.allSettled([
+        loadGraph(scorer, filters),
+        loadDirGraph(scorer, filters),
+      ]).then(() => setGraphRefiltering(false));
     }, GRAPH_FILTER_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [filters, scorer]);
@@ -1130,6 +1144,14 @@ export default function RepoDetail() {
                 decisions.md), and it is deliberately a separate pass -- the
                 endpoint is read by six other things. */}
             Showing {shownFileCount.toLocaleString()} of {files.length.toLocaleString()} files
+            {graphRefiltering && (
+              /* The measured re-layout window on apache/superset is 10-11.5s.
+                 Without this the graph simply sits there and the filter reads as
+                 broken -- the counter has already moved, so the two disagree for
+                 ten seconds. Text rather than a spinner: it says WHAT is
+                 happening, and it sits beside the number that already changed. */
+              <span className="ml-2 text-accent">· redrawing the graph…</span>
+            )}
           </p>
 
           {/* The graph endpoint caps what it returns, and until now nothing said
