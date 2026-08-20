@@ -1121,8 +1121,23 @@ export default function RepoDetail() {
               sentence is correct filtered and unfiltered -- "400 of 6,523" and
               "400 of 2,547 matching" are the same number computed the same way.
               Built that way from the start rather than retrofitted, which would
-              have been right in one case and wrong in the other. */}
-          {view === "depgraph" && graph?.truncated && (
+              have been right in one case and wrong in the other.
+
+              LAYERS included 2026-08-20. It renders from `visibleGraphNodes`,
+              which is derived from this same capped `/graph` response, so on
+              apache/superset it drew at most 400 of 6,523 files under a counter
+              correctly reading 6,523 -- the cap was stated on one consumer of
+              the response and silent on the other. Verified by browser probe
+              before and after: notice absent on Layers, present on Dependency
+              Graph, from an identical payload.
+
+              The wording still says "Graph shows the top N" on Layers. That is
+              deliberate rather than overlooked: the layer assignment IS computed
+              over these graph nodes, and giving the two views separate sentences
+              would mean two strings to keep true instead of one. If Layers-
+              specific wording is wanted later, that is a copy decision, not a
+              correctness one. */}
+          {(view === "depgraph" || view === "layers") && graph?.truncated && (
             <p className="font-mono text-[10px] text-warning">
               Graph shows the top {graph.nodes.length.toLocaleString()} of{" "}
               {graph.total_nodes_before_cap.toLocaleString()}
