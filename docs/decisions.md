@@ -1058,6 +1058,8 @@ them.
 
 | item | status |
 |---|---|
+| **comprehension-cards UI** | **OPEN — a build, not a decision.** 661 live cards (564 superset / 70 eslint / 27 Athena-OS) have no frontend surface; `grep` over `frontend/src/` finds zero references, and they are reachable only through `GET/POST /api/repos/{id}/cards`. **Blocked on nothing** — every dependency exists: `card_grading.grade_card` is written and tested (and uncalled), `ComprehensionCard.module_id` points at modules already rendered at `/modules/:slug`, and `ModuleAssessment` has the right shape for attempts with zero code referencing it. **Blocks everything card-related**: the LLM-card tier would add generation capacity to a feature nobody can open, and card quality cannot be judged by anyone who cannot see a card. **Size: multi-checkpoint, comparable to `:682`** — a queue component, grading wiring, an attempt record, and browser verification |
+| **codebase-roadmap creation has no UI** | **OPEN — small.** `POST /api/repos/{id}/roadmap` has no frontend caller; the three roadmaps that exist were made by script during this session, so a new user would never get one. Distinct from the card gap in severity: the OUTPUT is visible (all three appear in `GET /api/roadmaps` beside the seed tiles, with modules, topics and progress working) — only the creation action is missing. Roughly one button on the repo page plus its verification |
 | **repo 5 disappearance** | occurrence **permanently unexplained** (§17.29-shaped); recurrence now traceable via `repo_deletion_audits` |
 | **size-aware topic budget** | **deferred by decision** — needs a real user hitting a too-coarse module, not a guessed number |
 | **health 30.6s / resync 22.0s** | **gates Phase 8**, no work started, measurement only |
