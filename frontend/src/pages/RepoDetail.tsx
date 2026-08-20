@@ -780,7 +780,24 @@ export default function RepoDetail() {
     if (view === "architecture" || view === "matrix") {
       return dirGraph?.files_matched ?? visibleGraphNodes.length;
     }
-    if (view === "depgraph" || view === "layers") {
+    // Focus joins this branch even though FocusView fetches its own data by
+    // fileId and does not render this file set. Without it, Focus fell through
+    // to `visibleGraphNodes.length` -- the array `/graph` CAPS at 400 -- so the
+    // bar read "Showing 400 of 6,523 files" on apache/superset no matter what
+    // the filter was. That is the same defect already fixed for every other
+    // view here, surviving on the one view nobody had put in a branch.
+    //
+    // The bar cannot simply be hidden on Focus: `filters` persists across view
+    // changes (it is never reset, and is synced to the URL above), so removing
+    // the control would strand a set filter with no way to see or clear it.
+    //
+    // DESIGN DEBT, stated rather than hidden: on Focus this number describes
+    // the file set the filter SELECTS, not what the view draws. That is true
+    // and consistent with the other views, but it is a filter bar sitting above
+    // a view it does not filter. Resolving that properly means either scoping
+    // filters per view or giving Focus its own filtered fetch; both are larger
+    // than a counter fix.
+    if (view === "depgraph" || view === "layers" || view === "focus") {
       return graph?.files_matched ?? visibleGraphNodes.length;
     }
     return visibleGraphNodes.length;
