@@ -9,6 +9,34 @@ verified against the repo, not assumed — results in §8.
 > rather than just this contract. Where the two overlap, this file is
 > normative and the log is the reasoning behind it.
 
+> ## ⚠ Provenance, 2026-08-17: graph-derived figures for repos 3 and 6 predate two instrument fixes
+>
+> This banner covers the **§8 evidence tables and every §17 entry that quotes a
+> graph-derived number** for `eslint` (repo 3) or `apache/superset` (repo 6):
+> cluster/subsystem counts and sizes, algorithm agreement, unclustered rates,
+> SCC and `cycle_participation` counts, `fan_in`/`fan_out`, reachability and
+> layer coverage, edge counts and graph weights.
+>
+> - **§17.26** — repo 3 was a 398-file stripped fixture, not `eslint/eslint`
+>   (1,447 files). eslint figures only. Note this also makes eslint's
+>   `commit_count`, Change-Hotspot and corpus-size rows ("eslint 398",
+>   "596 files / 8,002 functions", "599 files") figures about the fixture.
+> - **§17.28** — `is_test_file` never matched a top-level `tests/` directory:
+>   **58.8% of eslint's and 9.8% of Superset's resolved edges** were weighted
+>   as production coupling instead of `test_edge`'s 0.05. Both repos.
+>   Modularity on eslint moved from 120 clusters to 21 after the fix.
+>
+> The **rules and guards** in this document are unaffected — they are the
+> reasoning, and none of them turned on a specific value that moved. What is
+> affected is the **illustrative evidence** beneath them. Where a specific
+> number is load-bearing to a rule it has been re-measured and updated in
+> place with a dated note (§17.0's third row, §17.5c); everywhere else, read
+> the figure as "measured on the corpus and instrument of its date."
+>
+> **Not affected:** timing measurements, row counts, schema facts, and
+> anything derived from git history or the filesystem rather than the
+> resolved import graph.
+
 > **Amendment 2026-08-09 — a blended aggregate now ships on Overview.**
 > §0.1 below said no combined number would be added without §9's evidence.
 > One was added anyway, as an explicit product decision, before that evidence
@@ -996,6 +1024,74 @@ costume:**
 |---|---|
 | *"This marker does not discriminate"* | **one** repository above roughly 2,000 files with several years of history. One counter-example refutes an inertness claim outright |
 | *"This marker fires at rate X"* / any threshold set from that rate | **several** repositories, across **different language ecosystems and architectural styles** |
+| *"This is a real, distinct cluster/subsystem boundary"* | a resolution check (γ sweep or equivalent) at the corpus size actually measured, or an explicit note that the boundary is provisional to that size |
+
+The third row runs the same lesson as the first two, from a different
+direction. Rows one and two are about small corpora hiding signal. This
+one is about a cluster BOUNDARY not being a stable fact at all: modularity
+optimization cannot resolve a community whose internal edge weight sits
+below roughly √(2m), where m is the whole graph's total edge weight
+(Fortunato & Barthélemy, PNAS 2007). Because m is a property of the corpus
+and not of the community, the same subgraph can resolve as its own cluster
+in one measurement and be absorbed in another, with nothing about it having
+changed.
+
+Measured on this project's own data rather than taken from the paper:
+`external-validation-eslint.md`'s Round 7 swept γ over eslint/eslint's real
+1,447-file graph and found `code-path-analysis` -- a subsystem eslint's own
+architecture docs name -- absorbed at the shipped default γ=1 and
+reappearing as a near-pure 10-11 member community (its 7 production files,
+its own test files, one shared dependency) from γ=8 through γ=20. The
+structure was real; the default resolution was under-resolving it.
+
+How common is this? Measured on the corrected graphs, clusters sitting at
+or below √(2m) -- i.e. whose boundary modularity may not have been able to
+resolve at all:
+
+| repo | clusters | √(2m) | at or below |
+|---|---:|---:|---:|
+| Athena-OS | 6 | 23.6 | 2 / 6 |
+| eslint | 21 | 32.6 | 19 / 21 |
+| Superset | 255 | 106.3 | **247 / 255** |
+
+So on a large sparse graph this is the normal case, not a corner case.
+
+**But √(2m) turns out to be a poor predictor of whether a boundary actually
+moves**, which was not expected and matters for what the cheap diagnostic is
+worth. Re-clustering each repo at γ=2 and asking how many γ=1 clusters
+survive intact:
+
+| repo | flagged at risk by √(2m) | actually dissolved at γ=2 |
+|---|---:|---:|
+| Athena-OS | 2 / 6 (33%) | **4 / 6 (67%)** |
+| eslint | 19 / 21 (90%) | 3 / 21 (14%) |
+| Superset | 247 / 255 (97%) | 16 / 255 (6%) |
+
+It errs in **both** directions: wildly over-flagging on the two large repos,
+and under-flagging on the small one, where two thirds of the boundaries move
+but only a third were flagged. √(2m) is a statement about what modularity
+*could* fail to resolve, not about what it *did*. It is worth reporting --
+it costs one pass over the edges and it is the right theoretical bound --
+but it does not discharge the third row's requirement on its own. A
+perturbation check does, and is the thing to build.
+
+> **Correction, same day.** An earlier version of this row cited Round 5's
+> finding that `code-path-analysis` split off cleanly at 398 files and
+> merged into a 119-member cluster at 1,447 as the evidence. That
+> comparison was confounded and has been withdrawn (Round 8): the 1,447-file
+> graph had 59% of its edges misweighted by an `is_test_file` bug, while the
+> 398-file fixture had no `tests/` in scope and so was accidentally clean.
+> The row stands on Round 7's γ sweep, which was re-run on the corrected
+> graph and reproduced. The withdrawn item is a nice illustration of the
+> rule that happened not to be true; the rule itself was never resting on it.
+
+**The generalization is uncomfortable but load-bearing: a cluster boundary
+observed at one corpus size, at one resolution, is provisional until
+re-checked at another.** The cheap discharge is not a full sweep -- it is
+reporting √(2m) next to the cluster sizes and each cluster's internal
+weight, which `subsystems.resolution_report` now does on every run, so a
+reader can see which boundaries were resolvable without re-running
+anything.
 
 Superset establishes that `cycle_participation` fires. It does **not** establish
 that 12.7% is typical. Superset is a Python monolith with Django-style import
@@ -1368,6 +1464,32 @@ already said "not meaningful" for n=2 and n=3, and the Overlap@20 column beside
 it did not. The caveat existed, on the neighbouring statistic, and was not
 carried across.
 
+#### Denominators travel with rates; units travel with quantities
+
+Added 2026-08-17, from an instance of the same failure one category over.
+A correction table in `external-validation-eslint.md` compared a graph's
+total edge weight **1,199.7** against **532.4** as though they were the same
+quantity. They were not: 1,199.7 sums raw `CodeImport` rows, while 532.4 sums
+the clustering graph, which keeps the **max** weight per file pair. The
+like-for-like pair is 1,033.7 → 532.4.
+
+The same document computed √(2m) — the Fortunato-Barthélemy resolution
+threshold — from an edge **count** (1,482 → 54.4) in one section and an edge
+**weight** (1,033.7 → 45.5) in another, for the same graph, without either
+naming which it meant. m in that result is edge weight; the count-based
+figure answers nothing.
+
+**A table is exactly where two measures of a same-sounding thing get compared
+silently.** "Edges", "weight", "size", "files" and "findings" all routinely
+denote more than one quantity in this project. State the unit next to the
+number wherever more than one is plausible, and when two columns are being
+subtracted or divided, confirm they were produced by the same operation and
+not merely the same word.
+
+Both instances above occurred **inside paragraphs correcting someone else's
+numbers** — which is the moment the rule is least likely to be applied to
+oneself, and therefore the moment to check.
+
 #### Related: the unclustered rate is structural, not a threshold judgement
 
 superset leaves **1,064 of 6,516 files unclustered (16.3%)**, under the 30%
@@ -1682,7 +1804,7 @@ against all six repositories in this project's database, and discarded.
 
 | Repo | Top directory | Share | Verdict |
 |---|---|---:|---|
-| eslint | `lib/` | 393/398 = **98.7%** | correct — a library's source lives in `lib/` |
+| eslint | `lib/` | 393/398 = **98.7%** | correct — a library's source lives in `lib/` *(398-file stripped fixture; a full clone is 1,447 files and `lib/` is a smaller share — see external-validation-eslint.md Round 5, 2026-08-17. Row's role in the argument is unaffected: it was the "concentration is fine" example among four, and remains one regardless of the exact percentage.)* |
 | Athena-OS | `backend/` | 144/224 = 64.3% | correct |
 | superset | `superset-frontend/` | 3903/6516 = 59.9% | correct |
 | AFDE | `frontend/` | 15/28 = 53.6% | correct |
@@ -2443,3 +2565,476 @@ The cheap one is the one that would have caught this class of failure, and it is
 the one that would have been skipped as redundant. It is not redundant: it
 asserts on the interface between two modules, which is exactly where a change
 made elsewhere invalidates an assumption made here.
+
+### 17.25 A default standing in for unknown data
+
+Distinct from cascade suppression (§17.x elsewhere in this document): nothing
+was discarded here. A fabricated value was supplied in place of one that was
+never obtained, and the function consuming it had no way to tell the
+difference between "genuinely zero" and "not measured."
+
+#### The instance
+
+Applying the Gate 1 migration fix to already-ingested repos required
+re-running `classify_file_local_category` against existing `CodeFile` rows —
+a normal re-ingest skips reclassification for any file whose content hash is
+unchanged, so the fix would never reach Superset's existing rows otherwise.
+The one-off script called the classifier with:
+
+```python
+new_cat, new_src = classify_file_local_category(
+    path=f.path, source_text=source_text,
+    symbol_count=symbol_counts.get(f.id, 0),
+    reexport_count=0,   # "unused by the migration path" -- true, and irrelevant
+)
+```
+
+`reexport_count` is not a stored column anywhere; it exists only transiently
+during parsing, inside `extract_python.extract()`'s return value, before
+becoming `CodeImport` rows. The comment justifying `0` was correct about the
+one code path being tested (migration is checked before barrel, so it never
+reads `reexport_count`) and silent about every other path through the same
+function. `classify_file_local_category`'s barrel check —
+`if reexport_count >= 1: return "barrel"` — read the fabricated `0` as "this
+file has no re-exports," which is a real, false, specific claim, not an
+absence of one. **169 real barrel files on repo 6 (1 on repo 3) were
+reclassified `source` on that basis alone.**
+
+A second, independent instance rode the same script: `classify_file_local_category`
+can never return `"entry"` — that fact was written into this exact function's
+docstring hours earlier in the same session, because entry detection is
+graph-dependent and set only by `ranking.py`'s write-back. Calling the
+classifier against every existing row and writing back whatever it returned
+overwrote 9 (repo 1) and 35 (repo 6) files that were correctly `"entry"` back
+to `"source"` — not from a bad default this time, but from applying a
+function outside the domain its own documented contract already excluded it
+from.
+
+#### Why "0" felt safe
+
+Every other default in this same codebase's classification path is a
+genuine absence: a missing YAML key falls back to a documented constant, a
+`None` score sorts as the worst case, an unmatched pattern falls through to
+`"source"`. Those are all cases where the CALLER knows the true state and the
+default encodes an intentional policy for it. `reexport_count=0` looked like
+one more instance of that pattern. It was a different thing wearing the same
+syntax: the caller did not know the true state, and `0` was a guess dressed
+as data.
+
+#### The guard
+
+**A function taking data it cannot obtain should require the caller to
+provide it, not default it on their behalf.** `reexport_count` and
+`symbol_count` are positional/required keyword arguments on
+`classify_file_local_category` precisely so a caller who cannot compute them
+is forced to confront that — hardcoding a placeholder at the call site is
+how that guard gets defeated after the fact; nothing about the function's
+own signature failed. The fix was to re-run the actual extraction
+(`extract_python.extract` / `extract_js.extract`) that ingest.py itself
+would have used, so the reclassification pass supplied REAL values instead
+of a value merely shaped like one.
+
+For the entry case: re-running the classifier against rows outside the set
+it is documented to be valid for is a second flavor of the same shape — the
+data (`prior_source == "graph"`, or more precisely "this file's category was
+last set by something other than this function") existed and was ignored
+rather than checked.
+
+#### The check that made it recoverable
+
+Neither flaw was caught before running — both were found by re-reading the
+diff of what changed, after the fact. What made the repair verifiable rather
+than merely hopeful: the fix re-derived real inputs and re-ran the
+graph-dependent write-back, and the resulting flip counts — 169/1 barrel
+restorations, 9/35 entry restorations — **matched the original damage counts
+exactly.** That is the difference between "I fixed it" and "I ran something
+and it looks better": the second claim has no number attached to it that
+could have been wrong.
+
+### 17.26 The identity of a corpus is itself a measurement, and it was never taken
+
+Every other §17 entry is about a mechanism inside this project: a predicate,
+a default, an instrument pointed at the wrong thing. This one is about the
+thing every other measurement in this document assumes without stating —
+that the repo behind a `repo_id` is what its `owner`/`name` claims it is.
+
+#### The instance
+
+`repo_id=3` was registered as `eslint/eslint` and stayed registered as
+`eslint/eslint` through four rounds of external validation, a Phase 4
+catalogue classification pass, and a roadmap-preview design decision. For
+all of that, its `local_path` pointed at a 398-file `bin/`+`lib/`-only
+slice — a **deliberate, correctly-caveated** scope decision when
+`external-validation-eslint.md`'s Round 1–2 created it (Caveat 1 states
+the scope explicitly), and a **silently dropped** caveat every time later
+work reused the same `repo_id` for a different purpose that Round 1–2
+never claimed to support. The catalogue classification work cited a
+74.7% catalogue-file-share finding as if it described `eslint/eslint`;
+it described 398 files under two directories.
+
+`Repo.file_count` — a real, already-persisted column, read on every repo
+card in the UI — recorded **398** the entire time. `eslint/eslint`'s real
+file count, at any commit in the project's lifetime, has never been
+anywhere near 398. The gap was not hidden. It was in the database, in a
+column already displayed, for the full duration.
+
+#### Why it wasn't a bad number to trust
+
+Nothing about 398 *looked* wrong. It has the right shape for a repo file
+count — not suspiciously round, not zero, not negative. Four separate
+analyses (Rounds 1–4, then the catalogue classifier) each computed real,
+internally consistent numbers from it and reported them faithfully. The
+mechanism failures elsewhere in this document (§17.9, §17.15, §17.24) are
+all cases where an instrument was pointed at the wrong thing and produced
+a wrong answer *about the thing it was actually looking at*. This is a
+different shape: every downstream instrument was correct about the corpus
+it was given. The corpus itself was never checked against the name
+attached to it.
+
+#### The guard
+
+**A corpus's identity is a claim, and claims get checked, not inherited.**
+Before citing a number as being "about" a named external repository —
+not about a `repo_id`, about the actual named thing — confirm at minimum:
+a real, unscoped clone (`.git` resolves, no `--depth`/`--sparse` unless
+explicitly intended and re-stated at every citation site), and
+`file_count` in the range a person familiar with the project would expect
+without having to look it up. The second check alone would have caught
+this: anyone who has looked at `eslint/eslint` knows it is not a
+398-file project, and the number was sitting in a column already
+rendered in the UI.
+
+#### The re-verification, and what it did to four rounds of prior work
+
+Re-cloning fully (1,447 files, real `.git`, real `package.json`) and
+re-running the same measurements the fixture had produced moved the
+catalogue-share finding from 74.7% to 0% — not a refinement, a reversal —
+and moved per-component recall/homogeneity figures in both directions on
+different components, for mechanistically different reasons each time
+(§"Round 5", `external-validation-eslint.md`). None of the four rounds'
+*mechanisms* were wrong. Every specific *percentage* built on top of them
+needed to be re-earned against the real corpus before it could be cited
+again. Per §17.16, the stale figures are marked at their citation sites
+across five other documents, not silently corrected — the fact that they
+were once measured, against what, and why that stopped being true is
+part of the record.
+
+### 17.27 A classifier calibrated on a fixture, which never fired on anything real
+
+#### The instance
+
+`module_mapping.classify_catalogue` flagged subsystems that were "many
+structurally homogeneous members with no sibling relationships once the
+dominant hub is excluded" — eslint's ~300 sibling rule files, which no topic
+strategy can find structure in because there is none to find. The idea is
+sound and the hub-exclusion mechanism was genuinely well-reasoned: raw edge
+density does *not* separate a barrel-plus-siblings from a real module (both
+land near 1.0–1.7 edges/member), and subtracting the single highest-degree
+member's edges does.
+
+Two constants encoded it: `CATALOGUE_MIN_MEMBERS = 30` and
+`CATALOGUE_MAX_HUB_EXCLUDED_DENSITY = 0.2`. Both were calibrated against
+four measured subsystems on `repo_id=3` — which was the 398-file stripped
+fixture of §17.26, not `eslint/eslint`.
+
+Measured across three real corpora after the re-clone: **282 subsystems, 34
+of them at or above the 30-member floor, zero flagged.** The nearest
+candidate anywhere was 2.7× above the density threshold.
+
+| repo | subsystems | ≥30 members | hub-excluded density min / median / max | flagged |
+|---|---:|---:|---|---:|
+| Athena-OS | 6 | 4 | 2.026 / 3.137 / 5.548 | 0 |
+| eslint | 21 | 2 | 0.530 / 0.617 / 0.705 | 0 |
+| Superset | 255 | 28 | 0.909 / 2.115 / 8.808 | 0 |
+
+#### Why the calibration was invalid, specifically
+
+The fixture measured `lib/rules · index` at hub-excluded density **0.01**.
+On the real clone the same region measures **0.53–0.71** — fifty times
+higher. Nothing about eslint changed. The fixture contained `bin/` and
+`lib/` only, so `lib/rules`' rule files were cut off from the shared helpers
+they genuinely import; what looked like "sibling files with no relationships
+between them" was sibling files *whose relationships were out of scope*. The
+classifier was calibrated on an artifact of the scoping, and its threshold
+was set precisely where that artifact sat.
+
+#### The decision
+
+**Deleted** — classifier, both constants, the `is_catalogue` field, the
+endpoint wiring, and the summary counter. Not made configurable: the open
+question was whether the classification should exist, not what its numbers
+should be, and a config seam on dead code is an invitation to tune it until
+it fires. The tests were replaced with assertions that the symbols are
+*absent*, so reinstating it requires a deliberate change rather than a merge.
+
+This also retires everything downstream that reasoned about the flag — the
+exclusion decision, the UI badge, the Phase 5 carry-forward. All of it was
+reasoning about an empty set.
+
+#### The guard
+
+**A classifier calibrated on N hand-picked examples from one corpus has not
+been validated; it has been fitted.** Before a threshold derived that way is
+allowed to gate behaviour, run it across every corpus available and report
+the distribution, not the decisions. A predicate that fires on nothing is
+not conservative — it is untested, and it accumulates dependent reasoning
+that all evaporates at once. The reasoning is preserved here because the
+mechanism may well be right; only its numbers, and the corpus they came
+from, were wrong.
+
+### 17.28 When a measurement changes, check whether the instrument changed too
+
+§17.26 is about the subject of a measurement being unverified. This is the
+other half: **the instrument can move between two measurements that are
+being compared, and unlike the subject, nothing displays it.**
+
+#### The instance
+
+`edge_weights.is_test_file` matched test files with a substring list
+including `"/tests/"`. That requires a leading slash, so it matched a
+*nested* `tests/` directory and never a **top-level** one. `eslint/eslint`
+keeps its entire test suite at top-level `tests/`; Apache Superset keeps
+much of its there too.
+
+| repo | test files missed | resolved edges misweighted |
+|---|---:|---:|
+| eslint | 964 of 970 | 1,011 of 1,720 (**58.8%**) |
+| Superset | 486 of 2,374 | 2,608 of 26,562 (9.8%) |
+| Athena-OS | 0 | 11 of 1,208 (0.9%) |
+
+Those edges carried production weights (0.4–1.0) instead of `test_edge`'s
+0.05. eslint's clustering graph therefore held **roughly twice its correct
+total weight**, and fixing it moved modularity from 120 clusters to 21.
+
+**The predicate had a second consumer that the first write-up of this failure
+missed.** `dir_aggregation._kind_of` reuses `is_test_file` to label each
+directory in the Architecture map as `test`/`source`/`migration` — a
+deliberate reuse, so that two parts of the product would not disagree about
+what a test is. They did not disagree; they were wrong together. Recomputing
+the majority vote per directory:
+
+| repo | directories in the map | changing kind |
+|---|---:|---:|
+| eslint | 212 | **173 (81.6%)** |
+| Superset | 1,307 | 141 (10.8%) |
+| Athena-OS | 22 | 0 |
+
+Four fifths of eslint's architecture map was mislabelled, in a view whose
+entire purpose is to show a reader how the codebase is organised. This was
+found only because the sweep for stale *numbers* turned up the predicate
+published as *documentation* in two files — the consequence itself was never
+reasoned about, in either the original bug report or the first correction.
+
+**And this inverts a principle applied correctly, repeatedly, throughout this
+project.** `neighborGrouping.ts` is shared between the Focus view and the
+Mermaid export; the glossary text is shared between the panel and the
+tooltips; `_build_repo_candidate_modules` is shared between the two previews.
+Every one of those is right, and the reason given each time was the same one
+given for this reuse: two surfaces must not be able to disagree about what a
+thing is. `dir_aggregation._kind_of` reused `is_test_file` for exactly that
+reason and the reasoning was sound.
+
+They did not disagree. They were wrong together — **which is what a shared
+source of truth buys you when the source is wrong.** Shared correctness and
+shared error are not two mechanisms; they are one mechanism with two
+outcomes, and the property that makes consistency cheap is the same property
+that makes a defect total. Deduplication is still right. What it changes is
+the *repair*: a fix to a shared predicate is never local to the site where
+the symptom was seen, and a bug report that names one consumer has not
+scoped the bug. **Enumerate every caller before claiming a shared helper's
+defect is fixed** — the blast radius is the union of its consumers, and here
+one of them was a rendered view that no number in the sweep would ever have
+pointed at.
+
+#### A parameter with a default hides its caller's mistakes
+
+Three instances now share a shape, and the first framing of it —
+"verify every path that reaches the change, not the one you were thinking
+about" — is true but not yet the mechanism. The mechanism is narrower.
+
+The third instance: `persist_repo_roadmap(..., commit_sha=None)` was verified
+by calling the service directly, which passed the default. The endpoint wiring
+it read `repo.head_sha` — a column that **does not exist on `Repo`**, and
+would have raised `AttributeError` on the first real request. Every
+service-level call succeeded, because `None` is a legal `commit_sha` and the
+function cannot tell "the caller had nothing to give me" from "the caller
+tried and got it wrong".
+
+That is the property: **a default value makes a parameter untestable from
+below.** Testing the callee proves the callee works and says nothing about
+whether any caller passes the right thing — and the more sensible the default,
+the more completely the caller's error is absorbed. A required parameter would
+have failed loudly at import-time-adjacent call sites; an optional one turned a
+wrong column name into a silent `NULL` that looked exactly like the legitimate
+"this repo has no SHA yet" case.
+
+So: **a defaulted parameter needs a test that exercises the real caller**, not
+only the function. Where the default exists to express a genuine "absent"
+state, the absent case and the wired case are two different tests and passing
+the first does not cover the second. Related to §17.22's rule that NULL and
+zero must not read alike — this is the same confusion moved from storage into
+a signature, where nothing displays it and nothing can flag it.
+
+> **The same shape at the tooling layer, 2026-08-19.** A full-suite run was
+> invoked as `pytest ... | Select-Object -Last 10`. It failed on one test, and
+> the pipeline discarded the `--tb` traceback before it was ever read — so the
+> failing assertion, the only thing capable of distinguishing "flaky" from
+> "real", was captured by the instrument and thrown away by the command
+> wrapping it. Re-running is not a substitute: an intermittent failure that
+> does not reproduce leaves nothing to read.
+>
+> This is §17.28's own pattern one level out — an instrument that cannot
+> perceive the variable it was watching — except the blind spot was in the
+> observation harness rather than the code. It also rhymes with the deletion
+> logging in the same session: output that exists momentarily and is not
+> retained answers nothing later, whether it is lost to a closed stdout or to a
+> truncating pipe. **Never truncate the output of a run whose purpose is
+> diagnosis; write it whole to a file and read the file.**
+
+#### Why it is the dangerous shape
+
+Rounds 5–7 of `external-validation-eslint.md` compared a 398-file fixture
+against a 1,447-file full clone and attributed the entire difference to
+corpus size. But the fixture had **no `tests/` directory in scope at all** —
+so it had no test edges to misweight, and its graph was *accidentally
+correct*. The full clone's was not.
+
+Two variables moved. One was announced in the section title. The other was
+invisible, had a larger effect than the announced one, and pointed the same
+direction — which is what made the result look clean. The headline finding
+("code-path-analysis merges entirely into a 119-member cluster at 1,447
+files") does not reproduce on the corrected graph at any γ, and has been
+withdrawn.
+
+The bug was found by accident, while fixing the marker list for an unrelated
+repo, hours after the conclusions were written up and reported.
+
+#### The guard
+
+**Before attributing a difference between two measurements to the variable
+you changed, establish that nothing else differed — including whether each
+corpus even exercises the same code paths.** A scoped fixture does not just
+have fewer files; it can silently avoid whole branches of the instrument.
+Concretely, before a before/after comparison is load-bearing:
+
+- Re-run the *old* measurement with the *current* code, not only the new one
+  with new code. A changed result means the instrument moved.
+- Ask which predicates the two corpora exercise differently. Here: "does the
+  fixture contain any file that `is_test_file` would classify?" The answer
+  was no, and that single question would have caught it.
+- Treat "the difference pointed the way I predicted" as weak evidence, not
+  strong. A confound that agrees with the hypothesis is harder to see than
+  one that contradicts it.
+
+§17.0b already says a prediction landing in-band proves nothing if the
+mechanism was wrong. This is the companion: **a comparison proves nothing if
+the instrument was not held fixed**, however well-controlled the subject was.
+
+### 17.29 A mechanism that is unrecoverable, not merely unresolved
+
+**Status: PERMANENT GAP. This is not a task waiting on information that will
+arrive on its own.**
+
+On 2026-08-19 a full-suite run failed one test —
+`test_health_snapshots.py::TestSnapshotIdempotency::
+test_changed_content_creates_even_without_a_commit`. The cause was never
+identified and now cannot be, and the reason it cannot be is itself the
+lesson.
+
+**What was established.** The failing run took **20h13m**; a solo run of the
+identical suite took **26m02s** — a **46.6x** wall-clock difference on the same
+1,103 tests, because the failing run was competing with card generation,
+roadmap persistence and repeated Superset clustering on the same machine. Test
+ordering was NOT a variable: `pytest-randomly` is not installed, so the
+`-p no:randomly` added to the retry was a no-op. Load was the only thing that
+differed.
+
+**What was ruled out**, by inspection rather than assumption: `repo_lock` (a
+module-level `threading.Lock`, single-process by design, so unreachable from a
+second process); a shared SQLite file lock, a shared connection pool, and
+shared fixture state (`conftest` builds a private `sqlite:///:memory:` engine
+per test, and nothing on the failing path opens its own `SessionLocal`); and a
+shared clone cache root (`register_from_path`'s eviction pass only iterates
+clone repos in the passed session, which is in-memory and empty).
+
+**What remains open**, and will stay open: (1) real `git` subprocess spawn
+under load — the fixture spawns 5+ processes and Windows `CreateProcess` was
+measured elsewhere in this project at ~1s each under load; (2) disk I/O
+saturation causing `ingest_repo` to under-produce without raising, which would
+leave `content_sha256` stale, the fingerprint unchanged, and `should_create`
+False — precisely the assertion that failed.
+
+**Deliberate reproduction was attempted and failed.** 10 runs of the failing
+test against 44 concurrent worker processes doing real CPU and disk work on a
+22-core machine. All 10 passed. Measured degradation against an 11.7s unloaded
+baseline: 5.2x to 11.0x, median 6.9x — **well short of the 46.6x regime the
+original failure occurred in.** That is a limit of the experiment, not evidence
+against either hypothesis: the synthetic load never reached the severity being
+investigated.
+
+**Why the mechanism is unrecoverable rather than unresolved.** The one
+measurement that separates the two candidates is `content_sha256` in the
+database versus the file's actual hash on disk, read AT THE MOMENT OF FAILURE.
+That state existed exactly once. The run that produced it was invoked as
+`pytest ... | Select-Object -Last 10`, and the pipeline discarded the traceback
+before anyone read it. The evidence was captured by the instrument and thrown
+away by the command wrapping it.
+
+So this is not a defect awaiting diagnosis. It is a **destroyed observation**.
+An unresolved question resolves when more data arrives; this one cannot,
+because the data that would have resolved it was uniquely available at a moment
+that has passed and cannot be re-entered on demand — as ten deliberate attempts
+established.
+
+**Distinct from "flaky".** Calling it flaky would assert that the failure was
+spurious, which is a claim about the mechanism, and no mechanism was ever
+confirmed. The honest statement is narrower: *one test failed once, under
+measured extreme contention, for reasons that can no longer be determined.*
+
+**The standing rule this produces**, already recorded at the end of §17.28:
+never truncate the output of a run whose purpose is diagnosis. Write it whole
+to a file and read the file. An intermittent failure that does not reproduce
+leaves nothing to re-read, so the first capture is the only capture.
+
+### 17.30 (PREVIEW) A browser-automation instrument that cannot see its own precondition
+
+**Short-form entry, written mid-session to prevent a fourth instance. The full
+write-up is pending; the number may move.**
+
+Four times in one investigation, a scripted browser instrument reported a
+defect in product code that was working correctly. Each time the instrument had
+silently failed a precondition it could not observe:
+
+| # | instrument | what it reported | what was actually true |
+|---|---|---|---|
+| checkpoint 2 | raw CDP click on a React tab | "Architecture may not render — `svg g = 0`" | the click was a **no-op on an unhydrated button**; the tab never switched. Architecture renders 54 rects / 54 texts / 43 groups |
+| checkpoint 2.5 | a wide/narrow layout race | "the ordering is forced by a 19x size difference" | the difference was **6.7x** (400 vs 60 nodes, both capped) and the wide layout finished in **958ms** against a 900ms toggle — there was no race at all |
+| checkpoint 2.6 | a pixel-stability poller | "the graph renders sparse and does not recover within 70s" | the poller sampled at **6.8s** while the render completed at **10.4-11.5s**; 70s was a budget it never reached. 0/6 reproduction headed AND headless |
+| checkpoint 4 | a regex over page text, taking the FIRST match | "Focus surfaces the 400-node cap; four other graph surfaces do not" | **exactly inverted.** Four surfaces read post-filter server fields and display correctly; the truncation notice existed further down the same DOM and was never examined, while Focus is the one surface still reading the capped array |
+
+The shape is one thing wearing four costumes: **an instrument reports the
+absence of what it cannot perceive.** An unhydrated button accepts a click and
+does nothing. A canvas mid-layout is pixel-identical to a settled one. A race
+that never started looks exactly like a race that was correctly handled. A
+regex that stops at its first hit cannot report what the second hit said. In
+every case the instrument returned a clean, confident, wrong answer, and in
+every case the product code was fine.
+
+This is §17.9 in a specific context — Playwright/CDP automation over a
+React + cytoscape + Web-Worker-ELK stack — and it earns its own entry because
+that context is where the next several changes land, and because the failures
+cost two investigations and one recommended-but-unnecessary defect hunt.
+
+**The discipline, which is §15.1 pointed at the instrument rather than at the
+code: canary the reproducer before trusting it.** A browser reproducer is not
+evidence of anything until it has demonstrated it can DISCRIMINATE — pass
+against code known to be good, fail against code known to be broken. Each of
+the three above would have been caught in minutes by that check: the click test
+would have failed to switch tabs even on a working build; the race test passed
+identically with cancellation deliberately removed; the poller reported the
+same "sparse" state on a graph that was simply still drawing.
+
+A corollary worth stating separately, because it is what makes these
+expensive: **a reported defect is not evidence a defect exists.** Planning work
+around one — as a whole checkpoint was — inherits whatever the instrument got
+wrong. Verify the instrument first, then the finding, then plan.

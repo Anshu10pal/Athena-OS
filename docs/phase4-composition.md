@@ -1,5 +1,51 @@
 # Phase 4 composition report: what the curated tables actually hold
 
+> ## ⚠ Provenance, 2026-08-17: every subsystem-derived figure below is stale
+>
+> **Two separate instrument failures invalidate the derived numbers in this
+> document. The curated-table figures (15 modules, 98 topics, 197 resources)
+> are unaffected — those are counts of hand-written rows.**
+>
+> **1. `repo_id=3` was a 398-file stripped fixture, not `eslint/eslint`**
+> (contract §17.26). Already noted at the correction block below, but it
+> applies to every eslint figure in this file, not only the ones there.
+>
+> **2. `is_test_file` never matched a top-level `tests/` directory**
+> (contract §17.28). 58.8% of eslint's graph edges and 9.8% of Superset's
+> were weighted as production coupling instead of `test_edge`. Clustering is
+> computed from those weights, so **every module count, module size, subsystem
+> label, subsystem split and in-band percentage below was computed from a
+> graph that no longer exists.** eslint went from 120 modularity clusters to
+> 21 after the fix; Superset's counts moved too.
+>
+> Specifically stale, and NOT individually re-marked below: the `119 / 135`
+> modules-produced figure for Superset, the `4/7` and `19/119` label-strategy
+> in-band rates, the `149 / 1 / 1` largest-subsystem split, the eight-module
+> eslint listing (`lib/rules · index` 151, `ast-utils` 139, `lib/shared` 56,
+> …), the 932-resource Superset module, and every "largest module holds N"
+> claim.
+>
+> **The catalogue thread is retired entirely** (contract §17.27): the
+> classifier measured zero fires across 282 subsystems on three real repos and
+> has been deleted, along with its constants, its `is_catalogue` field and its
+> UI badge. Any reasoning in this document that branches on catalogue status
+> is reasoning about an empty set.
+>
+> Current, re-measured figures live in `external-validation-eslint.md`
+> Round 8 and contract §17.0/§17.27. The staging design that replaced this one
+> is `module_mapping.stage_modules`.
+>
+> **CORRECTED 2026-08-20 (reconciliation pass): "No Phase 4 rows have been
+> written" is NO LONGER TRUE and was left standing for three days after it
+> stopped being true.** Phase 4 persistence shipped on 2026-08-17. Counted live
+> against `athena.db` on 2026-08-20: **145 codebase modules, 3 codebase
+> roadmaps, 661 comprehension cards** (Phase 5), 1 deletion-audit row. Written
+> by `services/codebase/roadmap_persist.py` via `POST /repos/{id}/roadmap`,
+> under migrations `f8a3c21d9b45` (repo provenance on modules/roadmaps),
+> `a1c9e37f4b82` (orphan marker) and `c4b7e9d2f501` (comprehension cards).
+> Rows are scoped to `source="codebase"` and never touch seed or generated
+> content — pinned by `TestRepoRoadmapPersistence` in `tests/test_repos_api.py`.
+
 Read from the live schema and real rows, not from reasoning about what these
 tables probably contain. The findings-queue work established that a composition
 report beats designing against assumptions, and the cost of being wrong is
@@ -208,6 +254,22 @@ resources per module: min 4 / median 11 / max 151     curated: 10 / 14 / 17
   lib/rules · code-path-utils                 7 resources, showing 7
   Unclustered                                 4 resources, showing 4
 ```
+
+> **Correction, 2026-08-17 — this run was against a stripped fixture, not
+> `eslint/eslint`.** The repo registered as repo id 3 was a 398-file
+> `bin/`+`lib/`-only slice (see `docs/external-validation-eslint.md`'s
+> Caveat 1, which stated this correctly at the time). The catalogue
+> classification work downstream of this report cited a 74.7% catalogue
+> file share derived from this same 8-module shape without carrying that
+> caveat forward — treating a number about the slice as a number about
+> ESLint. Re-run against a freshly, fully re-cloned `eslint/eslint`
+> (1,447 files, no scoping) produces a **different module set entirely**
+> (18 produced modules, not 8) and **zero catalogue-flagged modules**, not
+> two. `lib/rules · index` and `lib/rules · ast-utils` as named above are
+> not the modularity clustering's output on the real repository — see
+> `docs/external-validation-eslint.md`'s Round 5 for the corrected numbers
+> and the mechanism (per §17.16: measured-provenance, not silently
+> updated).
 
 ### Ambiguous titles are disambiguated by the centre file
 

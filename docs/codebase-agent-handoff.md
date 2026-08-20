@@ -1,5 +1,29 @@
 # Codebase Agent — Status & Handoff (Phases A–H complete; Phase I done through I6; Phases J1 and K1 done)
 
+> ## ⚠ Provenance, 2026-08-17: two instrument fixes invalidate graph-derived figures below
+>
+> If you are resuming from this file, read this before trusting any number
+> measured from the import graph for `eslint` (repo 3) or `apache/superset`
+> (repo 6) — cluster counts and sizes, recall/homogeneity, agreement,
+> unclustered rates, `fan_in`, ranks, reachability, layer coverage.
+>
+> - **contract §17.26** — repo 3 was a 398-file stripped fixture, not
+>   `eslint/eslint` (1,447 files). Every "398 files" reference below is the
+>   fixture. eslint only.
+> - **contract §17.28** — `is_test_file` never matched a **top-level**
+>   `tests/` directory, so 58.8% of eslint's and 9.8% of Superset's resolved
+>   edges were weighted as production coupling instead of `test_edge`. Both
+>   repos. Modularity on eslint went from 120 clusters to 21 once fixed. The
+>   predicate description in the `edge_weights.py` entry below is corrected
+>   inline; **`dir_aggregation._kind_of` reuses it, so the Architecture map's
+>   directory `kind` was wrong on those repos too.**
+>
+> Also changed since this file was written: **the catalogue classifier has
+> been deleted** (contract §17.27 — zero fires across 282 subsystems on three
+> repos), γ is now configurable and recorded per `code_subsystems` row, and
+> `setup.py`'s `entry_points` is now read for Python entry detection. Current
+> figures: `external-validation-eslint.md` Round 8.
+
 **Hand this file to a fresh Claude Code session to resume work with full
 context. It supersedes any memory of the conversation that produced it.**
 This version replaces the previous handoff (which only covered Phases A–D)
@@ -304,10 +328,22 @@ noted briefly, followed by everything added since.
 - **`edge_weights.py`** (F1) — `classify_edge()` (kind classification,
   precedence rules), `resolve_weight()` (kind → numeric weight from
   `config/edge_weights.yaml`, resolved at scoring time not parse time so
-  retuning never requires re-ingesting), `is_test_file()` (path-marker
-  heuristic — `("test_", "_test.", "/tests/", ".test.", ".spec.",
-  "__tests__/")` — **reused directly in H1's directory-kind derivation**,
-  not a new heuristic).
+  retuning never requires re-ingesting), `is_test_file()` (**rewritten
+  2026-08-17**: directory-SEGMENT match at any depth plus basename
+  conventions — **reused directly in H1's directory-kind derivation**, not a
+  new heuristic).
+
+  > **The previous marker list here — `("test_", "_test.", "/tests/",
+  > ".test.", ".spec.", "__tests__/")` — was described accurately and was
+  > wrong.** `"/tests/"` requires a leading slash, so a **top-level** `tests/`
+  > directory matched nothing: 964 of eslint/eslint's 970 test files and 486
+  > of Superset's went unrecognised, and their imports were weighted as real
+  > coupling (0.4–1.0) instead of `test_edge`'s 0.05. Because
+  > `dir_aggregation._kind_of` reuses this predicate, **the Architecture map's
+  > directory `kind` was wrong on those repos too** — test directories
+  > rendered as `source`. Both consumers are fixed by the one change. See
+  > `code-health-contract.md` §17.28 and `external-validation-eslint.md`
+  > Round 8.
 - **`node_priors.py`** (F2) — `prior_category` classification
   (`config`/`migration`/`generated`/`barrel`/`source`, checked in that
   order; never returns `"entry"` — that's graph/detection-dependent and
@@ -751,7 +787,12 @@ correlation came out as -9.800 due to un-reindexed rank positions.
 
 ## Testing status
 
-**486 backend tests, all passing.** Run with:
+**CORRECTED 2026-08-20 (reconciliation pass): 1,114 backend tests collected**,
+verified by `pytest tests/ --collect-only -q`. The figure below said **486**, which
+was true when written and has not been updated since. Last full run: 1,109 passed /
+1 skipped / 0 failed (2026-08-19 23:27), plus 4 filter tests added at checkpoint 3
+and verified in isolation (15 passed in `TestGraphFilterVocabulary`, 110 passed
+across the legacy `/graph` callers). Run with:
 ```
 cd backend
 .\venv\Scripts\python.exe -m pytest tests/ -q
@@ -759,16 +800,21 @@ cd backend
 Notable suites added since the original A–D handoff: `test_edge_weights.py`,
 `test_node_priors.py`, `test_root_discovery.py`, `test_js_root_discovery.py`,
 `test_comparison.py`, `test_repo_lock.py`, `test_ordering.py`,
-`test_entry_detection.py` (42 tests, including 2 that spy on `os.walk`
+`test_entry_detection.py` (**45** tests — CORRECTED 2026-08-20, was 42 — including 2 that spy on `os.walk`
 itself to prove ignored-directory pruning — see bug #21),
-`test_dir_aggregation.py` (27 tests, pure functions, no DB),
+`test_dir_aggregation.py` (**32** tests — CORRECTED 2026-08-20, was 27 — pure functions, no DB),
 `test_repos_api.py` (extended through H4 with `TestGetGraphEndpoint`
 [file-level regression] and `TestGetGraphEndpointDirectoryLevel`
 [directory-level, including the limit-after-aggregation regression test
 and a test that monkeypatches live entry detection to RAISE, proving the
 read path never calls it]).
 
-**56 frontend vitest tests, all passing** (was 70 before Phase H5 deleted
+**CORRECTED 2026-08-20: 231 frontend vitest tests across 18 files, all passing**,
+plus 2 Playwright browser tests (`e2e/`, added checkpoint 2). The figure below said 56
+across 5 suites; every suite it names still exists, and eleven more were added without
+the count being updated. `filters` is now 25 (was 12), `layeredLayout` 22 (was 20);
+`matrixLayout` (8), `neighborGrouping` (6) and `mermaid` (10) are unchanged.
+Historical note follows: 56 (was 70 before Phase H5 deleted
 `graphLayout.test.ts`'s 14 tests along with the Raw view). Run with:
 ```
 cd frontend
@@ -903,6 +949,18 @@ One item from that account is still genuinely open, not resolved:
   wasn't saved to the repo — treat as not done.
 
 ## What's NOT done — next phase options (pick one, none chosen yet)
+
+> **CORRECTED 2026-08-20 (reconciliation pass). This section is HISTORICAL.**
+> It says no Phase I brief exists and none is being chosen — but Phase I was
+> subsequently built and is complete through I6, which this file's own title
+> states. The document contradicted itself for six days. Verified against
+> migrations `8dc08ed8f03e` (I1 `code_subsystems`), `425611792c27` (cycle
+> coherence) and `49b14fd05c27` (I6 hdbscan), and `tests/test_subsystems.py`
+> (42 tests). Option 2 below ("Subsystem clustering") was the option taken.
+> Phases 4 (module/roadmap persistence) and 5 (comprehension cards) have since
+> been built on top of it. **Read the dated session-state section at the end of
+> `docs/decisions.md` for current phase state; the three options below are kept
+> only as a record of what was considered.**
 
 **There is no Phase I brief and none is being chosen in this pass.** Per
 the scope reconciliation above, here are three real candidates, each
@@ -1047,6 +1105,14 @@ independent of which option above is picked):
      feature itself works correctly end-to-end; the clustering QUALITY
      question this whole effort was meant to answer came back negative on
      the one repo with real ground truth to check it against.
+     - **Note, 2026-08-17:** the "398 files" this entry and Round 4 describe
+       was a stripped fixture (`bin/`+`lib/` only), not `eslint/eslint`. A
+       full re-clone (1,447 files) produced materially different
+       per-component recall and a zero, not 74.7%, catalogue share — see
+       `docs/external-validation-eslint.md` Round 5. HDBSCAN was not
+       re-run this round; the modularity/Louvain-vs-HDBSCAN comparison
+       above should be treated as unverified against the real corpus until
+       it is.
 6. **Phase J1 (2026-08-09): the file-level graph is back, as a scoped
    explorer — NOT as a restoration of the H5 "Raw" view.** This distinction
    is the whole design and should not be collapsed in a future summary:

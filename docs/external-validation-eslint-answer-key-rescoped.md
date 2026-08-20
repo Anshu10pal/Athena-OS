@@ -10,6 +10,13 @@
 # external-validation-eslint.md's "Round 2" section for why the two runs
 # exist and are reported side by side, on their own denominators (393
 # files vs. 398).
+#
+# Note, 2026-08-17: "398 files" here was a stripped bin/+lib/ fixture, not
+# eslint/eslint. Round 5 (external-validation-eslint.md) re-verified these
+# 30 paths directly against a full, unscoped clone (1,447 files) -- all 30
+# still exist at these exact paths, so the ground truth below is UNCHANGED
+# and still valid to use. Only the denominator/corpus this list gets
+# compared against has changed.
 1. lib/api.js
 2. lib/cli.js
 3. lib/cli-engine/formatters/html.js

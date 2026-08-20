@@ -7,6 +7,11 @@
 # external-validation-eslint.md, not in this file -- this file follows
 # scripts/validate_ranking.py's documented minimal format strictly:
 # comments and blank lines only, one path per line otherwise.
+#
+# Note, 2026-08-17: re-verified against a full, unscoped eslint/eslint
+# clone (1,447 files) in external-validation-eslint.md's Round 5 -- all 30
+# paths below still exist unchanged. The ground truth is not stale; the
+# corpus it was compared against in Rounds 1-4 was a stripped fixture.
 1. api.js
 2. cli.js
 3. cli-engine/formatters/html.js

@@ -331,10 +331,13 @@ Stated rather than buried.
 - **The health thresholds are reasoned defaults**, not fitted to any outcome.
   They are labelled uncalibrated because calibration needs defect-labelled
   history this project does not have.
-- **Architecture Health does not discriminate on the repositories tested so
-  far.** Zero file-level import cycles were found across 599 files — verified
-  as a real finding, not a broken detector — so the axis reports near-maximum
-  everywhere. This is [tracked as a live risk](docs/decisions.md), not hidden.
+- **Architecture Health discriminates on large repositories, and the earlier
+  claim that it does not was drawn from too small a sample.** The original
+  finding — zero file-level import cycles across 599 files — was real for
+  those repos, but 398 of the 599 were a stripped fixture, and Apache Superset
+  since measured **828 of 6,516 files in import cycles**, the largest spanning
+  604. Corrected 2026-08-12/17; see [decisions.md](docs/decisions.md) K3 and
+  [the metric contract](docs/code-health-contract.md) §17.0.
 - **A shallow clone carries no change history**, so anything derived from churn
   is reported as unavailable rather than computed from a constant.
 

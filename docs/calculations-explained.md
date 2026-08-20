@@ -677,6 +677,13 @@ agree.
 null result — there are not many ways to partition a tiny graph. 83% across
 255 clusters is a real measurement about the methods.
 
+> *Provenance, 2026-08-17: the specific "83% across 255 clusters" figure was
+> measured on Superset before the `is_test_file` fix (contract §17.28)
+> reweighted 9.8% of its edges, so both the cluster count and the agreement
+> rate have moved. The point the sentence makes — that agreement only carries
+> information once the partition space is large — does not depend on the
+> exact values.*
+
 ### 6.4 Cycle-cluster coherence
 
 For each directory-level import cycle, what share of its files landed in one
@@ -755,7 +762,16 @@ A grid with directories on both axes. Cell `(row, column)` = how many files in
 | **Imports** | count of import statements found |
 | **% resolved** | `resolved imports / all imports` — the rest point outside the repo (third-party, standard library) or could not be traced |
 | **Clusters** | multi-member clusters from the modularity algorithm |
-| **Test files** | files whose path contains `test_`, `_test.`, `/tests/`, `.test.`, `.spec.`, `__tests__` |
+| **Test files** | files with a `test`/`tests`/`test`/`__tests__`/`__mocks__`/`spec`/`specs` **directory segment** at any depth, or a filename following a test convention (`test_x`, `x_test.`, `x_tests.`, `x.test.`, `x.spec.`, `conftest.py`) |
+
+> **Corrected 2026-08-17.** This row previously described a substring match
+> on `/tests/`, which needed a leading slash and so never matched a
+> **top-level** `tests/` directory. That was the shipped behaviour, described
+> accurately — and the behaviour was wrong: it undercounted eslint/eslint's
+> test files by 964 of 970 and Apache Superset's by 486. The predicate is now
+> segment-based, and the same fix moved the `test_edge` import weighting that
+> feeds ranking and clustering, not just this counter. See
+> `code-health-contract.md` §17.28.
 
 ---
 

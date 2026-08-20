@@ -831,3 +831,566 @@ indiscriminate mega-cluster, or restricting HDBSCAN to a hand-picked subset
 of directories rather than the whole repo when one directory's file count
 and structural homogeneity dominates the corpus the way `lib/rules/` does
 here.
+
+## Round 5, 2026-08-17: every round above was measured against a stripped fixture, not `eslint/eslint`
+
+**Every number in Rounds 1 through 4 was measured against a deliberately
+scoped slice** -- `source_root=lib` (393 files) then `source_root=None`
+rescoped to `bin/`+`lib/`+ four top-level config files (398 files),
+exactly as Caveat 1 at the top of this document states. That caveat was
+never violated by this document itself. It was dropped by downstream work:
+later in the same project, this repo id's module-preview and catalogue
+classification work (`module_mapping.py`) cited an "ESLint" catalogue
+finding -- 74.7% of files in catalogue-flagged modules -- without carrying
+the scope caveat forward. That number was real, for the corpus it was
+computed against; it was never a number about `eslint/eslint`.
+
+The catalogue finding surfaced the gap: `docs/phase4-composition.md` named
+`lib/rules · index` (151 members) and `lib/rules · ast-utils` (139
+members) as catalogue examples. Re-running catalogue classification
+against a freshly, fully re-cloned `eslint/eslint` (`git clone
+--filter=blob:none`, full working tree, no `--depth`/`--sparse`, HEAD
+`9aa38732`, verified real `.git` and `package.json`) produced **zero**
+catalogue-flagged modules. That is not a refinement of 74.7% -- it is a
+reversal, and it is what prompted re-examining every number this document
+reports, not just the catalogue one.
+
+### What changed about the corpus
+
+| | Rounds 1-4 | Round 5 |
+|---|---|---|
+| Clone | shallow (`--depth 1`) + sparse (`bin`+`lib` only) | full, unscoped |
+| Files ingested | 393 -> 398 | **1,447** |
+| `package.json` at repo root | present (read correctly per Bug #2's fix) | present, unchanged |
+| `tests/`, `docs/`, `packages/`, `tools/` | excluded by the sparse checkout | included |
+| Modularity subsystems | ~9 | **120** |
+| Unclustered (modularity) | 10/398 (2.5%) | **600/1,447 (41.5%)** |
+
+The 30 doc-named files and their component groupings are **unchanged** --
+re-transcription check, below.
+
+### Ground truth re-transcription
+
+Checked every one of the 30 doc-named paths against the real clone's
+working tree directly (`test -f`, not a query against this project's own
+ingest). **All 30 exist at their original doc-named paths.** The
+`source-code-*.js` / `languages/js/source-code/` drift this document
+already flagged (Round 2) is confirmed unchanged in the current sense that
+matters here: `lib/linter/source-code-fixer.js`, `source-code-traverser.js`,
+and `source-code-visitor.js` (the three doc-named files) still exist as
+real, non-trivial files (154/333/81 lines) at their original paths,
+*alongside* a separate, newer `lib/languages/js/source-code/` module
+(`index.js`, `source-code.js`, `token-store/`) that implements something
+else. Component membership (`api` 1, `cli` 1, `cli-engine` 6, `linter` 20,
+`rule-tester` 2) is unchanged from Round 3.
+
+### Prediction, written down before this round's numbers were computed
+
+- `cli-engine` (6 files): dynamic-`import()` formatters are a blind spot
+  independent of corpus size -- predicted **similar to or worse than**
+  Round 3's 33.3%.
+- `linter` (20 files): `code-path-analysis`'s 7-file internal clique is a
+  dense, self-contained subgraph that shouldn't be disturbed by unrelated
+  peripheral growth elsewhere in the repo -- predicted it holds, and the
+  component predicted at **45-65%**, similar order to Round 3's 65.0%.
+- `rule-tester` (2 files): a tight, direct-import pair -- predicted
+  **>=90%**, unchanged from Round 3's 100%.
+- Homogeneity: genuinely uncertain between "120 subsystems (vs ~9) argues
+  toward finer, cleaner separation" and "more shared test-harness plumbing
+  argues toward more cross-component merging, the same mechanism that
+  produced Round 3's mixed cluster 10." Predicted **70-90%**, low
+  confidence, roughly Round 3's 77.8-84.0% band either way.
+
+### Results, modularity, old and new side by side
+
+Same methodology as Round 3 exactly: recall's denominator is every member
+of the component (unclustered files count against it); the majority
+cluster is chosen excluding `None` from candidacy; homogeneity is computed
+over labelled members of clusters that have at least one, `None` excluded
+entirely from both its numerator and denominator. Denominators stated
+alongside every rate, per §17.5c.
+
+| Component | Round 3 (398 files) | Round 5 (1,447 files) |
+|---|---:|---:|
+| `cli-engine` | 33.3% (2/6) | **50.0% (3/6)** |
+| `linter` | 65.0% (13/20) | **95.0% (19/20)** |
+| `rule-tester` | 100% (2/2) | **50.0% (1/2)** |
+| Overall homogeneity | 84.0% (21/25, recomputed live in Round 4) | **80.0% (24/30)** |
+| Unclustered among the 30 | 5/30 (the 3 formatters + 2 more, Round 4 live figure) | **0/30** |
+
+Louvain cross-check, same treatment:
+
+| Component | Round 3 Louvain | Round 5 Louvain |
+|---|---:|---:|
+| `cli-engine` | 33.3% (2/6) | 33.3% (2/6) |
+| `linter` | 50.0% (10/20) | **100% (20/20)** |
+| `rule-tester` | 100% (2/2) | 50.0% (1/2) |
+| Overall homogeneity | 84.0% (21/25) | 90.0% (27/30) |
+
+### The prediction, checked against the numbers
+
+Two of four landed inside the predicted band; two missed, in opposite
+directions, and both misses have a mechanism, not a shrug:
+
+- **`cli-engine` landed higher than predicted** (50.0% vs. "similar to or
+  worse than 33.3%"). Mechanism, from the per-file assignment: `stylish.js`,
+  `hash.js`, and `lint-result-cache.js` joined the repo's large
+  `lib/shared`-labelled subsystem (119 members) -- the same "shared
+  plumbing merges components" mechanism Round 3 named, now pulling in more
+  of `cli-engine` than it did at 398 files, not less. The three dynamic-
+  `import()` formatters (`html.js`, `json.js`, `json-with-metadata.js`)
+  still didn't join *each other* -- each landed in its own separate
+  2-member cluster instead. The blind spot itself didn't close; the
+  denominator's other half got luckier.
+- **`linter` landed higher than predicted** (95.0% vs. 45-65%), and the
+  *reason* directly falsifies part of Round 3's own finding: `code-path-
+  analysis` did **not** split off as its own clean cluster this time --
+  all 7 of its files merged into the same 119-member `lib/shared`
+  subsystem as the rest of `linter`. At 398 files, that clique was dense
+  enough *relative to the rest of the graph* to read as its own community;
+  at 1,447 files, the same edges are less distinctive against a much
+  larger graph, and modularity folded them into the bigger group instead.
+  Same edges, same files, different community boundary -- a direct
+  demonstration that "this subsystem split off cleanly" was a fact about
+  the graph's size at the time, not a stable structural property of
+  `code-path-analysis` itself.
+- **`rule-tester` landed lower than predicted** (50.0% vs. >=90%) -- the
+  one genuine surprise. The pair split: `rule-tester/rule-tester.js`
+  joined the 266-member `lib/rules`-dominant subsystem (labelled by top
+  fan-in as "rule-tester," since presumably every one of ~294 individual
+  rule files touches it), while `rule-tester/index.js` joined a *separate*
+  34-member `tests/fixtures/testers/rule-tester` subsystem. The "tight
+  barrel pair" framing from Round 3 was true at 398 files (neither
+  `lib/rules/` nor `tests/` were in scope to pull the pair apart) and is
+  not true of the real repository, where `rule-tester.js`'s edge volume
+  from hundreds of rule files outweighs its one-line relationship to its
+  own `index.js`.
+- **Homogeneity landed inside the predicted band** (80.0% vs. 70-90%
+  predicted) but for a different reason than either predicted mechanism:
+  it isn't finer separation NOR more merging in the aggregate -- it's that
+  the same 119-member `lib/shared` cluster that used to hold ~19 labelled
+  files (Round 3) now holds 24 of the 30 (api, cli, most of linter, half
+  of cli-engine), while `rule-tester.js` moved OUT to the 266-member
+  `lib/rules` cluster instead of staying with the group. Two large
+  compositional shifts landing on a similar aggregate number by
+  coincidence, not by either mechanism holding as stated.
+
+### No tuning was performed
+
+Modularity and Louvain ran with the same parameters already shipped in
+this project (`compute_subsystems`, default settings) -- no threshold,
+`min_cluster_size`, or algorithm choice was adjusted in response to a
+number looking wrong. The homogeneity/recall computation itself is the
+exact script logic Round 3 established (`None` excluded from majority
+candidacy on both metrics), re-run against the new database state, not
+rewritten.
+
+### What this means for every number in Rounds 1-4
+
+**Nothing about the *mechanisms* Rounds 1-4 found is overturned** -- the
+dynamic-`import()` blind spot on the formatters, the "shared plumbing
+merges components" pattern, layer-vs-doc-importance being a loose
+correlation rather than a filter: all four re-appear or are directly
+consistent with what Round 5 found. **What is overturned is treating any
+specific percentage in Rounds 1-4 as a fact about `eslint/eslint`.** They
+are facts about a 398-file `bin/+lib/` slice, correctly caveated as such
+at the time, and incorrectly treated as representative once a different
+part of this project (the catalogue classification work) cited one of
+them without the caveat. Overlap@20/@10/Spearman (Rounds 1-2) were not
+re-run this round -- they depend on `validate_ranking.py` and the answer-
+key's rank-ordering, a separate re-validation from the clustering-only
+scope requested here, tracked as a follow-up, not silently assumed to
+still hold.
+
+## Round 6: Overlap@20/@10/Spearman, re-run against the real 1,447-file corpus
+
+Round 5 tracked this as a follow-up rather than assuming the Round 1/2
+numbers still held. It isn't optional: Section 6 of the original proposal
+quotes 2/20 and 3/20 as the pre-registered failure, both measured against
+a 398-file fixture, and the `GO_NO_GO_THRESHOLD = 12` bar
+(`scripts/validate_ranking.py`) was set against that same denominator.
+§17.5c requires a rate to travel with its denominator; the same rule
+applies to a threshold -- 12 out of a top-20 list means something
+different when that top-20 is drawn from 398 candidates than when it's
+drawn from 1,447.
+
+### Prediction, written down before this round's numbers were computed
+
+Overlap@20 and the full-rank distribution are not the same measurement
+and should not be expected to move together. Overlap@20 only changes if
+a *newly-included* file displaces one of the 30 doc-named files from the
+global top 20 -- and the 1,049 newly-included files are overwhelmingly
+`tests/`, `docs/`, `packages/`, and `tools/` content: test files and
+fixtures with low fan-in, not imported by production code, structurally
+unlikely to out-rank files like `api.js` or `linter.js` for centrality or
+seed-proximity. Predicted Overlap@20 **stays flat or moves by at most one
+file**, in either direction, for all three scorers. The full-rank
+percentile of the 30 doc-named files is a different question -- it's
+sensitive to *any* new file landing anywhere in the ranking, not just the
+top 20 -- and should move more than Overlap@20 does, because the
+denominator against which every one of the 30 files is ranked genuinely
+tripled.
+
+**Contrast with a plausible alternative**, since more than one
+reasonable prediction exists here: the corpus proposal reasoning would say
+30 files now compete against 3.6x more candidates for the same 20 slots,
+so overlap should simply get worse. That reasoning is not wrong on its
+face; it's testable against the same numbers below, and where it diverges
+from the prediction above is the point worth checking.
+
+### Results
+
+| Scorer | Overlap@20, 398 files (Round 1/2) | Overlap@20, 1,447 files (Round 6) | Verdict |
+|---|---:|---:|---|
+| `legacy` | 2/20 | **2/20** | NO-GO |
+| `weighted_pagerank` | 3/20 | **3/20** | NO-GO |
+| `rrf` | 2/20 | **2/20** | NO-GO |
+
+Every count is identical. Overlap@10 also held: 1/10, 2/10, 1/10 --
+unchanged in the new run (was 1/10, 2/10, 0/10; `rrf`'s Overlap@10 moved
+by one file, the only change anywhere in this table). Spearman is not
+reported here at n=2/3 -- §17.0's own prior correction (line ~374) already
+flags per-scorer Spearman as not meaningful at this intersection size, and
+that stands regardless of corpus size.
+
+Full-rank distribution of the same 30 files, 1,447-file denominator:
+
+| Scorer | mean rank | median rank | min | max | median percentile |
+|---|---:|---:|---:|---:|---:|
+| `legacy` | 459.2 | 487.5 | 2 | 796 | **33.7%** |
+| `weighted_pagerank` | 99.2 | 60.5 | 3 | 426 | **4.2%** |
+| `rrf` | 193.6 | 166.5 | 2 | 548 | **11.5%** |
+
+Against the 398-file baseline (median rank 53 for all three scorers,
+Round 2's table above -- median percentile 13.3% across the board): `legacy`
+got **worse** (33.7% vs. 13.3%), `weighted_pagerank` got **dramatically
+better** (4.2% vs. 13.3%), `rrf` landed **close to unchanged** (11.5% vs.
+13.3%).
+
+### The prediction, checked against the numbers
+
+The flat-Overlap@20-despite-tripled-corpus half of the prediction held
+exactly: 2/20, 3/20, 2/20, all three unchanged to the file. The
+"structurally unlikely for test/doc/tooling content to break into the
+top 20" mechanism is the right explanation, not coincidence -- none of the
+1,049 newly-included files displaced a single one of the original top-20
+occupants for any scorer.
+
+The percentile-moves-more-than-overlap half is confirmed, but the
+direction split by scorer, which the prediction correctly anticipated
+could happen (it predicted percentile would move, not which way) without
+resolving in advance. The mechanism for each direction, read from the
+per-file data:
+
+- **`legacy` got worse (33.7%)** because it ranks by raw import fan-in/
+  fan-out with no seed or distance term, and the 1,049 new files include
+  hundreds of production modules (all of `lib/rules/`, all of
+  `packages/js/src/`, `lib/languages/`) that generate their own import
+  edges and rank ahead of some of the 30 on pure connectivity, with
+  nothing in `legacy`'s formula privileging the entry-adjacent files the
+  answer key actually names.
+- **`weighted_pagerank` got better (4.2%)**, and this is the finding the
+  Overlap@20 count alone completely hides. Seeded, personalized PageRank
+  decays with graph distance from the seed set, and only 26.9% of the
+  1,447-file graph is reachable at all from the five auto-detected seeds
+  (`bin/eslint.js`, `lib/api.js`, `docs/_examples/.../eslint-plugin-
+  example.js`, `packages/eslint-config-eslint/index.js`,
+  `packages/js/src/index.js`). The 1,049 new files are disproportionately
+  outside that reachable set -- test fixtures, doc examples, and
+  standalone tooling with no path back to the entry points -- so they
+  don't compete for `weighted_pagerank`'s top ranks even though they exist
+  in the denominator. The doc-named files, which mostly *are* reachable,
+  end up ranked against a smaller effective pool than the nominal 1,447,
+  and their percentile improves even though the corpus tripled.
+- **`rrf` landed close to unchanged (11.5%)** because it's a rank-fusion
+  of `legacy` and `weighted_pagerank` (reciprocal rank fusion) -- one
+  input got worse, the other got much better, and the fusion partially
+  cancels both effects.
+
+**The corpus-tripled-so-overlap-should-worsen alternative did not hold**,
+for any scorer, at the Overlap@20 granularity. It isn't wrong reasoning in
+the abstract -- more candidates genuinely does mean more competition for
+20 slots -- but it predicts a mechanism (uniform dilution) that the actual
+new files don't exercise uniformly: they concentrate in `tests/`, `docs/`,
+`packages/`, and `tools/`, which are exactly the regions each scorer is
+structurally least likely to rank highly (low fan-in for `legacy`,
+unreachable-from-seed for `weighted_pagerank`). Aggregate corpus size
+change is the wrong level to reason at when the *type* of file being added
+is this lopsided.
+
+### Why Overlap@20 alone hides more than it shows
+
+The answer key's own documented format is most-important-first, and
+`validate_ranking.py`'s `Overlap@20` is defined against the answer key's
+own **first 20 lines**, not against all 30 named files -- lines 21-30
+(both `rule-tester/` files and the three `source-code-*.js` files) are
+structurally excluded from what counts as a hit, regardless of where the
+tool ranks them.
+
+This produces a real, checkable discrepancy: under `weighted_pagerank`,
+`lib/rule-tester/index.js` ranks **15th** of 1,447 and
+`lib/rule-tester/rule-tester.js` ranks **17th** -- both inside the tool's
+actual top 20 -- yet neither counts toward Overlap@20, because both are
+answer-key lines 26-27. Counting all 30 doc-named files rather than only
+the key's first 20, `weighted_pagerank` actually has **5** of the 30
+inside its real top 20 (the 3 credited + these 2), `legacy` has **3**
+(2 credited + `rule-tester.js` at rank 2), and `rrf` has **3** (2 credited
++ `rule-tester.js` at rank 2). This doesn't change the NO-GO verdict --
+even 5/20 is far short of 12 -- but it matters for not misreading a
+doc-named file's strong rank as contradicting a low Overlap@20 count; the
+two are simply answering different questions about the same 30-line list.
+
+### No tuning was performed
+
+Ranking ran with the same scorers, seeds, and parameters already in
+production (`rank_repo`, `rank_repo_weighted_pagerank`, `rank_repo_rrf`,
+`--scorer` flag unchanged) -- no seed set, decay factor, or fusion weight
+was adjusted after seeing a number.
+
+## Round 7: the γ resolution sweep -- is code-path-analysis real, or an artifact of corpus size?
+
+Round 5 found that `code-path-analysis`'s 7-file clique, which split off
+as its own clean cluster at 398 files (cited repeatedly, including in
+this document, as the clearest evidence modularity finds real
+architecture), merges entirely into the 119-member `lib/shared` cluster
+at 1,447 files -- same files, same edges. That is exactly the modularity
+**resolution limit** (Fortunato & Barthélemy, PNAS 2007): a community
+whose internal edge weight sits below roughly √(2m) (m = total graph edge
+weight) can be absorbed into a larger neighbor as the graph grows, not
+because the community changed, but because m did. `greedy_modularity_
+communities`'s default resolution, γ=1, is exactly the parameter this
+result is a statement about.
+
+Using `_build_undirected_weighted_graph` -- the same function `compute_
+subsystems`'s production clustering calls, read directly, no persistence
+-- the two graphs' actual sizes:
+
+| | Round 3/4 (398 files) | Round 5 (1,447 files) |
+|---|---:|---:|
+| Graph nodes | 398 | 1,447 |
+| Graph edges (count) | 663 | 1,482 |
+| √(2 × edge count) | 36.4 | **54.4** |
+
+> **Correction, 2026-08-17 — this table uses the wrong quantity, and the
+> two numbers below it are not the ones the argument needs.**
+>
+> In Fortunato & Barthélemy, **m is the graph's total edge WEIGHT**, not its
+> edge count. This graph is weighted and both community algorithms run with
+> `weight="weight"`, so the unweighted count answers a question neither
+> algorithm asks. On the same graph the correct figures are total weight
+> 1,033.7 and **√(2m) = 45.5**, not 54.4 — and after Round 8's `is_test_file`
+> correction, 532.4 and **32.6**.
+>
+> The sentence that followed ("the resolution threshold grew 1.5x while the
+> corpus grew 3.6x") was computed from the count-based pair and is withdrawn.
+> `subsystems.resolution_report` now computes the weighted figure on every
+> clustering run, and states which it means.
+>
+> This is §17.5c's rule applied to units rather than denominators, and it was
+> broken in the section arguing for measuring the threshold rather than
+> citing it.
+
+The question this section answers: does `code-path-analysis`
+reappear as its own community once γ compensates for that growth, or was
+Round 3's 398-file measurement simply wrong about the subsystem?
+
+**If code-path-analysis reappears at γ > 1, the structure is real and γ=1
+was under-resolving it on the larger graph. If it never reappears, Round
+3's finding was an artifact of corpus size, not a discovery about
+`code-path-analysis`.**
+
+### Sweep, γ ∈ {1.0 .. 40.0}, tracking the cluster containing all 7 production `code-path-analysis` files
+
+| γ | Cluster size | Composition |
+|---:|---:|---|
+| 1.0 (production default) | 119 | merged into `lib/shared` |
+| 1.2 | 118 | merged into `lib/shared` |
+| 1.5 | 21 | partial separation |
+| 2.0 | 27 | partial separation |
+| 3.0 | 33 | partial separation |
+| 3.5 | 16 | partial separation |
+| 4.0 | **11** | 7 production + 3 of its own tests + `assert.js` |
+| 4.2 | 19 | transient re-merge (see below) |
+| 4.5 - 20.0 | **11** | 7 production + 3 of its own tests + `assert.js`, stable |
+| 40.0 | fragments into 8 + 3 | see below |
+
+At γ=4.0 the cluster first reaches an 11-member group: the 7 real
+`code-path-analysis` production files, three of its own dedicated test
+files (`tests/lib/linter/code-path-analysis/{code-path-analyzer,fork-
+context,id-generator}.js`), and `lib/shared/assert.js` -- the exact same
+companion file Round 3's 398-file measurement found joining this clique.
+γ=4.2 transiently re-merges it to 19 members before it re-separates and
+holds at 11 from γ=4.5 through γ=20.0. This non-monotonicity is a known
+property of greedy agglomerative modularity optimization (merge order is
+locally greedy, not globally optimal at every γ) and is reported rather
+than smoothed over; the point is the **stable** result from 4.5 to 20.0,
+a 4.4x range in γ, not the single transient value at 4.2.
+
+This 11-member group is arguably a *better* description of the subsystem
+than Round 3's original 8-member finding (7 production files + `assert.
+js`) -- the 398-file fixture never had `tests/` in scope, so it couldn't
+have found the implementation-plus-its-own-tests grouping at all. At
+higher resolution, on the full corpus, modularity recovers something Round
+3 structurally couldn't have measured: production code, its own test
+files, and the one shared utility it depends on, cleanly separated from
+everything else including the rest of `linter/`.
+
+At γ=40.0 -- well past the range where this project's clustering has ever
+run in production -- the 11-member group itself starts to fragment: 6 of
+the 7 production files plus 2 of the 3 tests stay together (8 members);
+`fork-context.js` splits off together with `assert.js` and its own test
+(3 members); `code-path.js`'s test file and `debug-helpers.js`'s test file
+scatter to other groups entirely. (The much larger set of `tests/fixtures/
+code-path-analysis/*.js` files -- pure test-input data with no `require`
+statements of their own -- were never part of any cluster at any γ in this
+sweep; they're inert fixture content, not source modules, and their
+absence here isn't part of this finding.)
+
+### What this answers
+
+**Code-path-analysis reappears, cleanly, across a 4.4x range of γ
+(4.5-20.0) as effectively its own community** -- production files, its own
+tests, and its one real dependency, nothing else. Per the test this
+section was run to satisfy: **the structure is real, and default γ=1 was
+under-resolving it on the larger graph.** Round 3's 398-file finding was
+not an artifact to be discarded -- it was a true positive that a smaller
+graph made easy to see for a reason (fewer competing dense clusters)
+independent of whether `code-path-analysis` is, on its own terms, a real
+subsystem. It is. The 398-file measurement and the γ-sweep measurement are
+both correct; they answer the question at two different resolutions, and
+γ=1 on a 1,447-file graph happens to sit on the wrong side of this
+particular boundary.
+
+This does not generalize into "raise γ in production." No prediction was
+made about any other cluster's behavior under a resolution change, none of
+the other 119 subsystems were swept, and picking γ post hoc to recover a
+result already believed true would be exactly the tuning this document has
+repeatedly avoided elsewhere. What it does establish: the 398-vs-1,447
+disagreement about `code-path-analysis` is resolved, specifically, by
+resolution -- not by one of the two measurements being wrong.
+
+### No tuning was performed
+
+`greedy_modularity_communities`'s `resolution` parameter was swept across
+a predetermined grid chosen to bracket the transition, read-only, against
+the exact production graph-construction function. Nothing about `compute_
+subsystems`'s shipped default (γ=1) was changed; this section is a
+diagnostic sweep, not a proposal to change the production parameter.
+
+## Round 8, same day: Rounds 5-7 measured a graph in which 59% of the edges were misweighted
+
+Rounds 5, 6 and 7 all ran against a graph built from `CodeImport.kind`.
+`edge_weights.is_test_file` decides which edges are `test_edge` (weight
+0.05 instead of 0.4-1.0), and it matched with the substring `"/tests/"` --
+**which requires a leading slash, and therefore never matched a top-level
+`tests/` directory.** `eslint/eslint` keeps its entire test suite at
+top-level `tests/`, so almost none of it was recognised and its edges were
+weighted as ordinary production coupling.
+
+This was found while fixing the marker list for an unrelated repo, after
+Rounds 5-7 were written. It is reported here in full rather than by
+correcting those sections in place, per §17.16.
+
+Exact counts, since a first draft of this section quoted 963 files where
+the measurement is 964, and mixed two different edge populations in
+consecutive sentences:
+
+- **Files:** 970 of 1,447 (67.0%) are test files under the corrected
+  predicate; **964** of those were newly reclassified (6 already matched).
+- **Resolved edges** (`to_file_id` non-null -- the ones that exist in the
+  graph at all): **1,013 of 1,720 (58.9%)** are now `test_edge`; 1,011 newly
+  reclassified.
+- **All `CodeImport` rows** including unresolved: 2,304, of which 1,294 were
+  updated. This is the larger number and is NOT the graph figure -- an
+  unresolved import has no edge to weight.
+
+### A second consumer, missed by this section's first draft
+
+`dir_aggregation._kind_of` reuses `is_test_file` to label directories in the
+Architecture map. Recomputing the per-directory majority vote, **173 of
+eslint's 212 mapped directories (81.6%) change kind**, as do 141 of
+Superset's 1,307 (10.8%) and none of Athena-OS's. Four fifths of eslint's
+architecture map was mislabelled in a view whose whole purpose is to show
+how a codebase is organised. Recorded as part of contract §17.28: a shared
+helper's blast radius is the union of its callers.
+
+### What the corrected graph changes
+
+| | Rounds 5-7 (contaminated) | Round 8 (corrected) |
+|---|---:|---:|
+| `CodeImport` rows classed `test_edge` | 2 / 1,720 | **1,013 / 1,720** |
+| Clustering-graph total edge weight (m) | 1,033.7 | **532.4** |
+| √(2m) | 45.5 | **32.6** |
+| Modularity clusters | 120 | **21** |
+| `lib/shared` cluster size | 119 | *(does not exist in that form)* |
+
+> The two weight figures are the CLUSTERING graph's, where
+> `_build_undirected_weighted_graph` keeps the **max** weight per file pair
+> across all imports between them. Summing raw `CodeImport` rows instead
+> gives 1,199.7 and 545.5 -- a different quantity, not a correction of these,
+> and not the one √(2m) is computed from. Stated because a draft of this
+> table mixed the two.
+
+**Round 7's conclusion survives and strengthens. Round 5's headline finding
+does not.**
+
+- **Round 7 (the γ sweep) is confirmed.** On the corrected graph
+  `code-path-analysis` still converges on the same near-pure community: 11
+  members at γ=8-12 (the 7 production files, 3 of its own test files,
+  `lib/shared/assert.js`) and a 10-member group at γ=20 that is exactly the
+  7 production files plus their own three tests. Same finding, reached on a
+  graph with half the total weight -- the structure is real.
+- **Round 5's "code-path-analysis merges entirely into the 119-member
+  `lib/shared` cluster" is withdrawn.** On the corrected graph it does not
+  merge that way at any γ: at γ=1 it is already a 26-member cluster
+  containing all 7 production files. The merge Round 5 observed was
+  substantially an artifact of ~1,000 test edges carrying 8-20x their
+  correct weight and pulling unrelated files together -- not the resolution
+  limit acting alone.
+
+### The comparison Rounds 5-7 were built on was confounded
+
+Rounds 1-4 measured a 398-file `bin/`+`lib/` fixture. That fixture had
+**no `tests/` directory in scope at all**, so it had no test edges to
+misweight and its graph was, accidentally, correct. Round 5 compared it
+against a full clone in which 59% of edges were wrong. The 398-vs-1,447
+comparison was therefore not "same instrument, bigger corpus" -- it was two
+different instruments, and the difference between them was read entirely as
+a corpus-size effect.
+
+The resolution limit is still real, still correctly described, and still
+the right frame for Round 7. What is withdrawn is the claim that Round 5
+*observed* it: that specific merge had a second, larger cause that was not
+controlled for. §17.0's third row (cluster boundaries are provisional to
+corpus size) stands on Round 7's γ sweep, which is measured on the
+corrected graph. It should not cite Round 5's 398-vs-1,447 merge as
+evidence.
+
+### What is unaffected
+
+Round 6's Overlap@20 numbers were re-measured after the fix by re-running
+all three scorers and `validate_ranking.py` again: **2/20, 3/20, 2/20 --
+identical**, Overlap@10 1/10, 2/10, 1/10 identical, and all three verdicts
+still NO-GO. The ranking scorers
+read edge weights, so this is a real result rather than an untouched one:
+the doc-named files are production code whose edges were never misclassified
+either way, and the test files whose weights collapsed were not competing
+for the top 20 to begin with -- the same mechanism Round 6 predicted for why
+adding 1,049 files changed nothing.
+
+---
+
+**Reconciliation audit, 2026-08-20.** Every corpus and clustering figure in this
+document was re-checked against the live database rather than re-derived from
+the text. **VERIFIED:** repo 3 is `eslint` with **1,447 files** and **21
+modularity clusters**, matching the corrected figures in the Round 8 table
+(`Modularity clusters | 120 | 21`). The `120` and `398`-file figures elsewhere
+in this document are historical readings that the text already marks as
+superseded, and they are correct as history — they are not claims about the
+current state. No corrections were required to this file.
+
+**CARRIED-FORWARD-UNVERIFIED:** the Overlap@20 / Spearman / recall percentages
+in Rounds 1–8 were not recomputed in this pass. Re-running them requires a full
+ranking and clustering cycle against repo 3, which is runtime work rather than a
+records check. They were last computed in Round 8 on the corrected graph, after
+the `is_test_file` fix.
