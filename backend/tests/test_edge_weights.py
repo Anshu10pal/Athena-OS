@@ -103,6 +103,27 @@ class TestIsTestFile:
         for path in ("backend/app/main.py", "frontend/src/App.tsx", "backend/app/core/testing_utils.py"):
             assert not is_test_file(path), path
 
+    def test_top_level_test_directory_matches(self):
+        """The regression that motivated the structural rewrite: the old
+        "/tests/" substring needed a leading slash, so a top-level tests/
+        tree matched nothing. eslint/eslint has 963 such files and Superset
+        443, all of them weighted as real coupling instead of test_edge."""
+        for path in ("tests/lib/linter.js", "tests/conftest.py", "test/helpers/setup.js"):
+            assert is_test_file(path), path
+
+    def test_matches_python_and_js_naming_conventions(self):
+        for path in ("superset/db_tests.py", "a/conftest.py", "src/foo-test.js", "spec/models/user.rb"):
+            assert is_test_file(path), path
+
+    def test_word_boundary_prevents_substring_false_positives(self):
+        """A bare "test" substring would match all of these; the "_", "." or
+        "-" boundary on at least one side is what keeps them out."""
+        for path in ("src/latest_version.py", "src/contest.py", "app/protest_handler.py", "src/manifest.py"):
+            assert not is_test_file(path), path
+
+    def test_normalizes_windows_separators(self):
+        assert is_test_file("backend\\tests\\test_ingest.py")
+
 
 class TestOccurrenceCountAfterLine:
     def test_excludes_import_block_lines(self):

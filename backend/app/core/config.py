@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     ROOT_DISCOVERY_CONFIG_PATH: str = "./config/root_discovery.yaml"
     JS_ROOT_DISCOVERY_CONFIG_PATH: str = "./config/js_root_discovery.yaml"
     RESOLUTION_TRIPWIRE_CONFIG_PATH: str = "./config/resolution_tripwire.yaml"
+    SUBSYSTEM_CLUSTERING_CONFIG_PATH: str = "./config/subsystem_clustering.yaml"
+    ROADMAP_STAGING_CONFIG_PATH: str = "./config/roadmap_staging.yaml"
 
     class Config:
         env_file = ".env"

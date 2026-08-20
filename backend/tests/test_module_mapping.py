@@ -241,77 +241,30 @@ class TestMigrationExclusion:
         assert s["migration_files_excluded"] == 6
 
 
-def _star(hub, spokes):
-    """A barrel/shared-util pattern: one hub file, edges to every spoke, no
-    edges between spokes -- the shape found in eslint's two bad lib/rules
-    subsystems."""
-    return [(hub, s) for s in spokes]
+class TestCatalogueClassificationIsGone:
+    """`classify_catalogue` and its two fixture-calibrated constants were
+    removed on 2026-08-17 after measuring zero fires across 282 subsystems on
+    three real repos (contract §17.27). These assertions exist so the removal
+    is a decision the suite protects rather than something a later change can
+    quietly reintroduce -- reviving it needs a real corpus where it fires,
+    not a merge that puts the symbol back."""
 
+    def test_the_classifier_and_its_constants_are_removed(self):
+        for name in ("classify_catalogue", "CATALOGUE_MIN_MEMBERS",
+                     "CATALOGUE_MAX_HUB_EXCLUDED_DENSITY"):
+            assert not hasattr(mm, name), f"{name} is back -- see contract §17.27"
 
-class TestCatalogueClassification:
-    """eslint's two largest subsystems (repo 3, modularity clustering) are
-    ~300 sibling rule files with no structure between them. Simple edge
-    density does not separate them from good modules (both land near 1.0-1.7
-    edges/member); hub-excluded density does. See module_mapping.py's
-    CATALOGUE section for the measured numbers this calibrates against."""
-
-    def test_LOADBEARING_a_pure_barrel_is_a_catalogue(self):
-        # lib/rules -- index.js requires all 149 others; 0 edges remain once
-        # the hub is excluded.
-        edges = _star(hub=0, spokes=list(range(1, 151)))
-        assert mm.classify_catalogue(151, edges) is True
-
-    def test_LOADBEARING_a_shared_util_with_a_few_real_edges_is_still_a_catalogue(self):
-        # lib/rules/utils/ast-utils -- most rules import the shared util, but
-        # a handful of rules also import each other. A couple of extra edges
-        # between spokes still leave hub-excluded density near zero.
-        edges = _star(hub=0, spokes=list(range(1, 139))) + [(1, 2), (3, 4)]
-        assert mm.classify_catalogue(139, edges) is True
-
-    def test_LOADBEARING_real_interconnection_is_not_a_catalogue(self):
-        # lib/shared -- 56 members, 96 edges, no single dominant hub; most
-        # edges are between ordinary members.
-        edges = _star(hub=0, spokes=list(range(1, 6)))  # a small hub exists too
-        edges += [(i, i + 1) for i in range(1, 56)]      # but most members link to each other
-        assert mm.classify_catalogue(56, edges) is False
-
-    def test_a_small_subsystem_is_never_a_catalogue_regardless_of_shape(self):
-        # unicode -- 10 members, star-shaped (hub-excluded density 0.67), but
-        # far below CATALOGUE_MIN_MEMBERS. A 10-file module built around one
-        # shared helper is an ordinary module, not a catalogue.
-        edges = _star(hub=0, spokes=list(range(1, 10)))
-        assert mm.classify_catalogue(10, edges) is False
-
-    def test_a_large_subsystem_with_no_internal_edges_at_all_is_a_catalogue(self):
-        assert mm.classify_catalogue(100, []) is True
-
-    def test_the_floor_is_exclusive_at_CATALOGUE_MIN_MEMBERS(self):
-        edges = _star(hub=0, spokes=list(range(1, mm.CATALOGUE_MIN_MEMBERS)))
-        assert mm.classify_catalogue(mm.CATALOGUE_MIN_MEMBERS - 1, edges) is False
-        assert mm.classify_catalogue(mm.CATALOGUE_MIN_MEMBERS, edges) is True
-
-    def test_is_catalogue_defaults_to_false_until_a_caller_sets_it(self):
-        # classify_catalogue needs edges, which map_subsystem_to_module does
-        # not have (it is pure, no DB) -- so the field starts false and only
-        # the caller who queried edges can set it.
+    def test_modules_no_longer_carry_an_is_catalogue_flag(self):
         m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
                                        member_count=40, members=members(40))
-        assert m.is_catalogue is False
+        assert not hasattr(m, "is_catalogue")
+        assert "is_catalogue" not in m.to_dict()
 
-    def test_to_dict_reports_is_catalogue(self):
-        m = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="x",
-                                       member_count=4, members=members(4))
-        m.is_catalogue = True
-        assert m.to_dict()["is_catalogue"] is True
-
-    def test_summary_counts_flagged_modules(self):
+    def test_the_summary_no_longer_reports_a_flagged_count(self):
         a = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="a",
                                        member_count=4, members=members(4))
-        b = mm.map_subsystem_to_module(repo_id=1, subsystem_id=2, subsystem_label="b",
-                                       member_count=4, members=members(4))
-        b.is_catalogue = True
-        s = mm.summarise([a, b], topic_strategy="single_topic")
-        assert s["modules_flagged_catalogue"] == 1
+        assert "modules_flagged_catalogue" not in mm.summarise(
+            [a], topic_strategy="single_topic")
 
 
 class TestSummary:
@@ -332,6 +285,141 @@ class TestSummary:
         s = mm.summarise([], topic_strategy="parent_directory")
         assert s["modules_produced"] == 0
         assert s["topics_per_module"] is None
+
+
+class TestStageGrouping:
+    """Roadmap-preview groundwork: modules grouped by BFS-from-entry layer,
+    the same depth the Layers view already computes and renders as "Layer N"
+    columns (LayersView.tsx) -- one level up, modules instead of files."""
+
+    def _module(self, subsystem_id, file_ids, ranks=None):
+        ranks = ranks or list(range(len(file_ids)))
+        mems = [{"path": f"pkg{subsystem_id}/f{i}.py", "file_id": fid, "rank": r,
+                 "prior_category": "source"} for i, (fid, r) in enumerate(zip(file_ids, ranks))]
+        return mm.map_subsystem_to_module(repo_id=1, subsystem_id=subsystem_id,
+                                          subsystem_label=f"m{subsystem_id}",
+                                          member_count=len(mems), members=mems, min_files=1)
+
+    def test_LOADBEARING_a_module_s_stage_is_its_earliest_reachable_member(self):
+        # File 1 is layer 0, file 2 is layer 3 -- the module must land in
+        # stage 0, the earliest a reader could reach ANY of its files, not
+        # its centre (best-ranked) file's own depth.
+        m = self._module(1, [1, 2], ranks=[9, 1])  # file 2 (layer 3) ranks higher -> centre file
+        layers = {1: 0, 2: 3}
+        stages = mm.group_modules_into_stages([m], layers)
+        assert [s["title"] for s in stages] == ["Layer 0"]
+
+    def test_modules_land_in_different_stages_by_layer(self):
+        a = self._module(1, [1])
+        b = self._module(2, [2])
+        stages = mm.group_modules_into_stages([a, b], {1: 0, 2: 1})
+        assert [s["title"] for s in stages] == ["Layer 0", "Layer 1"]
+        assert stages[0]["modules"] == [a]
+        assert stages[1]["modules"] == [b]
+
+    def test_LOADBEARING_a_module_with_no_reachable_member_is_unreachable_not_the_last_layer(self):
+        reachable = self._module(1, [1])
+        orphan = self._module(2, [2])
+        stages = mm.group_modules_into_stages([reachable, orphan], {1: 5, 2: None})
+        titles = [s["title"] for s in stages]
+        assert titles == ["Layer 5", "Unreachable"]
+
+    def test_a_file_id_missing_from_the_layer_map_entirely_counts_as_unknown(self):
+        # Not every member file is guaranteed a layer entry (e.g. a file
+        # dropped from the graph build) -- missing must behave like None,
+        # not raise.
+        m = self._module(1, [1, 2])
+        stages = mm.group_modules_into_stages([m], {1: 2})  # file 2 absent
+        assert stages[0]["title"] == "Layer 2"
+
+    def test_skipped_modules_are_excluded_entirely(self):
+        tiny = mm.map_subsystem_to_module(repo_id=1, subsystem_id=1, subsystem_label="tiny",
+                                          member_count=1, members=members(1))
+        assert tiny.skipped_reason is not None
+        stages = mm.group_modules_into_stages([tiny], {})
+        assert stages == []
+
+    def test_stages_are_ordered_numerically_not_by_first_appearance(self):
+        a = self._module(1, [1])
+        b = self._module(2, [2])
+        c = self._module(3, [3])
+        stages = mm.group_modules_into_stages([c, a, b], {1: 0, 2: 1, 3: 2})
+        assert [s["title"] for s in stages] == ["Layer 0", "Layer 1", "Layer 2"]
+
+    def test_within_a_stage_modules_are_ordered_by_their_best_rank(self):
+        a = self._module(1, [1], ranks=[50])
+        b = self._module(2, [2], ranks=[3])
+        stages = mm.group_modules_into_stages([a, b], {1: 0, 2: 0})
+        assert stages[0]["modules"] == [b, a]
+
+    def test_empty_input_produces_no_stages(self):
+        assert mm.group_modules_into_stages([], {}) == []
+
+
+class TestConditionalStagingBasis:
+    """Layer staging assumes most of a repo is reachable from its entry
+    points. Measured, that assumption holds on one of three real repos
+    (Athena-OS 55.3%, eslint 26.9%, Superset 13.2%), so the basis has to be
+    chosen from the graph rather than assumed."""
+
+    def _module(self, subsystem_id, file_ids, ranks=None):
+        ranks = ranks or list(range(len(file_ids)))
+        mems = [{"path": f"pkg{subsystem_id}/f{i}.py", "file_id": fid, "rank": r,
+                 "prior_category": "source"} for i, (fid, r) in enumerate(zip(file_ids, ranks))]
+        return mm.map_subsystem_to_module(repo_id=1, subsystem_id=subsystem_id,
+                                          subsystem_label=f"m{subsystem_id}",
+                                          member_count=len(mems), members=mems, min_files=1)
+
+    def test_layer_coverage_is_the_reachable_fraction(self):
+        assert mm.layer_coverage({1: 0, 2: 1, 3: None, 4: None}) == 0.5
+        assert mm.layer_coverage({}) == 0.0
+
+    def test_high_coverage_uses_layers(self):
+        a, b = self._module(1, [1]), self._module(2, [2])
+        out = mm.stage_modules([a, b], {1: 0, 2: 1}, layer_coverage_threshold=0.4)
+        assert out["basis"] == "layer"
+        assert out["layer_coverage"] == 1.0
+        assert [s["title"] for s in out["stages"]] == [
+            "Layer 0 · from entry points", "Layer 1 · from entry points"]
+
+    def test_LOADBEARING_low_coverage_uses_subsystem_depth_and_names_no_unreachable_stage(self):
+        """Superset's case: 13.2% reachable is a ceiling of static analysis,
+        not a fact about the code. Filing 87% of a repo under one stage
+        called "Unreachable" would report the former as the latter."""
+        a, b = self._module(1, [1]), self._module(2, [2])
+        # b depends on a; only a is reachable, so coverage is 50% -> below 0.6
+        out = mm.stage_modules([a, b], {1: 0, 2: None},
+                               dependencies={2: {1}}, layer_coverage_threshold=0.6)
+        assert out["basis"] == "subsystem"
+        assert "Unreachable" not in [s["title"] for s in out["stages"]]
+        assert [s["title"] for s in out["stages"]] == [
+            "Stage 1 · by dependency", "Stage 2 · by dependency"]
+        assert out["stages"][0]["modules"] == [a]
+        assert out["stages"][1]["modules"] == [b]
+
+    def test_stage_numbers_are_ordinal_not_raw_depth(self):
+        """A real run produced longest-path depths 0, 1, 117, 118 -- printing
+        those would imply 115 stages that never existed."""
+        mods = [self._module(i, [i]) for i in (1, 2, 3)]
+        # 3 depends on 2 depends on 1, so raw depths are 0, 1, 2 -- but drop
+        # the middle module from the produced set and the survivors are 0 and 2.
+        out = mm.stage_modules([mods[0], mods[2]], {1: None, 3: None},
+                               dependencies={3: {2}, 2: {1}}, layer_coverage_threshold=0.6)
+        assert [s["title"] for s in out["stages"]] == ["Stage 1 · by dependency"]
+
+    def test_a_dependency_cycle_terminates(self):
+        a, b = self._module(1, [1]), self._module(2, [2])
+        out = mm.stage_modules([a, b], {1: None, 2: None},
+                               dependencies={1: {2}, 2: {1}}, layer_coverage_threshold=0.6)
+        assert out["basis"] == "subsystem"
+        assert sum(len(s["modules"]) for s in out["stages"]) == 2
+
+    def test_the_basis_reason_is_always_stated(self):
+        a = self._module(1, [1])
+        for layers, threshold in (({1: 0}, 0.4), ({1: None}, 0.4)):
+            out = mm.stage_modules([a], layers, layer_coverage_threshold=threshold)
+            assert out["basis_reason"]
+            assert out["layer_coverage_threshold"] == threshold
 
 
 class TestCapAndPaginate:

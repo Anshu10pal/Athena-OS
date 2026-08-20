@@ -5,16 +5,18 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user, require_write_access
 from app.db.database import SessionLocal, get_db
 from app.db.models import (
     CodeFile, CodeFileHealth, CodeFileRank, CodeHealthSnapshot, CodeImport,
-    CodeSubsystem, Repo, RepoJob, User,
+    CodeSubsystem, ComprehensionCard, Repo, RepoJob, User,
 )
 from app.services.codebase import (
-    deletion, edge_weights, findings_queue, jobs, module_mapping, registry, repo_lock,
+    card_generation, card_persist, deletion, edge_weights, findings_queue, jobs,
+    module_mapping, registry, repo_lock,
 )
 from app.services.codebase.dir_aggregation import DEFAULT_MAX_GROUPS, aggregate_to_directories
 from app.services.codebase.discovery import TooManyFilesError
@@ -29,6 +31,8 @@ from app.services.codebase.overview import build_overview
 from app.services.codebase.policy import RepoBlocked
 from app.services.codebase.ranking import _build_graph, rank_repo
 from app.services.codebase.repo_lock import RepoBusyError
+from app.services.codebase import roadmap_persist
+from app.services.codebase.roadmap_staging import load_roadmap_staging_config
 from app.services.codebase.subsystems import (
     VALID_ALGORITHMS,
     compute_subsystems,
@@ -1139,89 +1143,7 @@ def get_module_preview(
             "An empty preview would read as 'this repo produces no modules'.",
         )
 
-    # One pass for every member file, then grouped in memory: a query per
-    # subsystem would be 250+ round trips on apache/superset.
-    rank_by_file = dict(
-        db.query(CodeFileRank.file_id, CodeFileRank.rank)
-        .filter(CodeFileRank.repo_id == repo_id, CodeFileRank.scorer == "legacy")
-        .all()
-    )
-    members_by_subsystem: dict[int, list[dict]] = {}
-    subsystem_by_file: dict[int, int] = {}
-    for file_id, path, category, sid in (
-        db.query(CodeFile.id, CodeFile.path, CodeFile.prior_category, column)
-        .filter(CodeFile.repo_id == repo_id, column.isnot(None))
-        .all()
-    ):
-        members_by_subsystem.setdefault(sid, []).append(
-            {"path": path, "file_id": file_id, "rank": rank_by_file.get(file_id),
-             "prior_category": category}
-        )
-        subsystem_by_file[file_id] = sid
-
-    # For classify_catalogue: is a large subsystem's edges concentrated on one
-    # hub (a barrel/shared-util file) with nothing between the other members,
-    # or does it have real internal structure? One query for the whole repo,
-    # bucketed by subsystem -- the same "no per-subsystem round trip" reason
-    # members_by_subsystem is built this way above.
-    all_edges = (
-        db.query(CodeImport.from_file_id, CodeImport.to_file_id)
-        .filter(CodeImport.repo_id == repo_id, CodeImport.to_file_id.isnot(None))
-        .all()
-    )
-    internal_edges_by_subsystem: dict[int, list[tuple[int, int]]] = {}
-    for from_id, to_id in all_edges:
-        sid = subsystem_by_file.get(from_id)
-        if sid is not None and subsystem_by_file.get(to_id) == sid:
-            internal_edges_by_subsystem.setdefault(sid, []).append((from_id, to_id))
-
-    modules = [
-        module_mapping.map_subsystem_to_module(
-            repo_id=repo_id,
-            subsystem_id=s.id,
-            subsystem_label=s.custom_label or s.dominant_prefix_label or s.top_fan_in_label,
-            member_count=s.member_count,
-            members=members_by_subsystem.get(s.id, []),
-            topic_strategy=topic_strategy,
-        )
-        for s in subsystems
-    ]
-    for m in modules:
-        m.is_catalogue = module_mapping.classify_catalogue(
-            m.member_count, internal_edges_by_subsystem.get(m.subsystem_id, []))
-
-    # Files from below-floor subsystems, gathered rather than dropped. Reporting
-    # a skipped_reason keeps the COUNTS honest; it does not keep the FILES, and
-    # a file that exists in the repo but appears nowhere in the library is worse
-    # than one in an awkward module. Same answer the Dependency Clusters view
-    # already gives with its single "Unclustered" row.
-    claimed = {m.subsystem_id for m in modules if m.skipped_reason is None}
-    leftovers = [
-        member
-        for sid, member_list in members_by_subsystem.items()
-        if sid not in claimed
-        for member in member_list
-    ]
-    unclustered = module_mapping.unclustered_module(
-        repo_id=repo_id, members=leftovers, topic_strategy=topic_strategy)
-    if unclustered is not None:
-        # Unclustered draws from many original subsystems, so its internal
-        # edges are not any single bucket above -- recomputed over exactly its
-        # own member set. Superset's is 270 files (its 8th-largest module);
-        # this is the group most likely to need the same flag.
-        leftover_ids = {m["file_id"] for m in leftovers if m.get("file_id") is not None}
-        unclustered_edges = [
-            (f, t) for f, t in all_edges if f in leftover_ids and t in leftover_ids
-        ]
-        unclustered.is_catalogue = module_mapping.classify_catalogue(
-            unclustered.member_count, unclustered_edges)
-        modules.append(unclustered)
-
-    # Several clusters can legitimately share a dominant prefix -- three of
-    # eslint's eight modules are titled `lib/rules` -- so a title is only
-    # unique after the fact. Applied here, over the whole set, because no
-    # single-subsystem mapping can know what the others are called.
-    module_mapping.disambiguate_titles(modules)
+    modules = _build_repo_candidate_modules(db, repo_id, algorithm, topic_strategy, subsystems)
 
     return {
         "repo_id": repo_id,
@@ -1231,6 +1153,243 @@ def get_module_preview(
         "writes_nothing": True,
         "summary": module_mapping.summarise(modules, topic_strategy=topic_strategy),
         "modules": [m.to_dict() for m in modules],
+    }
+
+
+def _build_repo_candidate_modules(
+    db: Session, repo_id: int, algorithm: str, topic_strategy: str, subsystems: list,
+) -> list:
+    """Thin alias for roadmap_persist.build_candidate_modules.
+
+    The build moved into the service layer when persistence became a THIRD
+    consumer alongside /module-preview and /roadmap-preview. Keeping a
+    preview's modules and a written module in step is the same requirement
+    that made the two previews share a build in the first place, one step
+    further: the rows written must be provably the rows previewed.
+    """
+    return roadmap_persist.build_candidate_modules(
+        db, repo_id, algorithm, topic_strategy, subsystems)
+
+
+@router.get("/{repo_id}/roadmap-preview")
+def get_roadmap_preview(
+    repo_id: int, algorithm: str = "modularity",
+    topic_strategy: str = module_mapping.DEFAULT_TOPIC_STRATEGY,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """What ONE ContentRoadmap for this repo would look like: the same
+    modules /module-preview computes (see _build_repo_candidate_modules --
+    shared, so the two previews cannot silently disagree on what a module
+    IS), grouped into stages by dependency layer instead of listed flat.
+
+    READ-ONLY, same contract as /module-preview: computes and returns,
+    writes nothing, inserts nothing. ContentRoadmap/RoadmapStage/RoadmapNode
+    already have the exact shape needed (an ordered composition of module
+    references) -- nothing here is a schema gap, only unwritten code, and
+    this endpoint stays on the read side of that gap deliberately.
+
+    Layers come from the same BFS-from-entry-points computation the file
+    graph and the Layers view already use (compute_layers over the resolved
+    import graph, entry_ids = seed-eligible files) -- not recomputed
+    differently here, so a module's stage means the same "how many hops
+    from an entry point" thing a file's "Layer N" column already means.
+    """
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    if algorithm not in VALID_ALGORITHMS:
+        raise HTTPException(400, f"Unknown algorithm {algorithm!r} -- must be one of {VALID_ALGORITHMS}")
+    if topic_strategy not in module_mapping.TOPIC_STRATEGIES:
+        raise HTTPException(
+            400,
+            f"Unknown topic_strategy {topic_strategy!r} -- must be one of "
+            f"{sorted(module_mapping.TOPIC_STRATEGIES)}",
+        )
+
+    subsystems = (
+        db.query(CodeSubsystem)
+        .filter(CodeSubsystem.repo_id == repo_id, CodeSubsystem.algorithm == algorithm)
+        .order_by(CodeSubsystem.member_count.desc(), CodeSubsystem.id.asc())
+        .all()
+    )
+    if not subsystems:
+        raise HTTPException(
+            404,
+            f"No {algorithm} clustering for this repo yet -- run clustering first. "
+            "An empty preview would read as 'this repo produces no modules'.",
+        )
+
+    # The identical read-only half persistence runs, so a preview and a
+    # written roadmap cannot disagree about what this repo's roadmap IS.
+    modules, staging = roadmap_persist.stage_repo_modules(
+        db, repo, algorithm, topic_strategy, subsystems)
+    stages = staging["stages"]
+    unreachable_count = next((len(s["modules"]) for s in stages if s["title"] == "Unreachable"), 0)
+
+    return {
+        "repo_id": repo_id,
+        "algorithm": algorithm,
+        "topic_strategy": topic_strategy,
+        "writes_nothing": True,
+        "staging_basis": staging["basis"],
+        "layer_coverage": staging["layer_coverage"],
+        "layer_coverage_threshold": staging["layer_coverage_threshold"],
+        "basis_reason": staging["basis_reason"],
+        "stage_count": len(stages),
+        "modules_produced": sum(1 for m in modules if m.skipped_reason is None),
+        "unreachable_module_count": unreachable_count,
+        "stages": [
+            {"title": s["title"], "module_count": len(s["modules"]),
+             "modules": [m.to_dict() for m in s["modules"]]}
+            for s in stages
+        ],
+    }
+
+
+@router.post("/{repo_id}/roadmap")
+def create_repo_roadmap(
+    repo_id: int, algorithm: str = "modularity",
+    topic_strategy: str = module_mapping.DEFAULT_TOPIC_STRATEGY,
+    user: User = Depends(require_write_access), db: Session = Depends(get_db),
+):
+    """Write this repo's derived roadmap into the curated tables.
+
+    The write counterpart to /roadmap-preview, and the first code in this
+    project that puts derived rows in `modules`/`topics`/`resources`/
+    `content_roadmaps` alongside hand-written seed content. Both endpoints run
+    the SAME read-only half (roadmap_persist.stage_repo_modules), so what gets
+    written is what the preview showed.
+
+    Idempotent: re-running upserts by slug and REUSES topic ids, so
+    `topic_progress` survives. The response reports every row created, reused
+    and deleted, including `topic_progress_rows_deleted` -- stated even when
+    zero, because "no progress was lost" is a result rather than the absence
+    of one.
+
+    Held under the per-repo advisory lock: this reads the clustering and the
+    resolved import graph, so it must not run inside an in-flight ingest.
+    """
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    if algorithm not in VALID_ALGORITHMS:
+        raise HTTPException(400, f"Unknown algorithm {algorithm!r} -- must be one of {VALID_ALGORITHMS}")
+    if topic_strategy not in module_mapping.TOPIC_STRATEGIES:
+        raise HTTPException(
+            400,
+            f"Unknown topic_strategy {topic_strategy!r} -- must be one of "
+            f"{sorted(module_mapping.TOPIC_STRATEGIES)}",
+        )
+    try:
+        with repo_lock.repo_lock(repo_id, "roadmap"):
+            try:
+                return roadmap_persist.persist_repo_roadmap(
+                    db, repo, algorithm=algorithm, topic_strategy=topic_strategy,
+                    # last_ingested_sha, not a freshly-read HEAD: the resources
+                    # describe the files INGEST saw, and stamping them with a
+                    # newer HEAD would claim provenance the rows do not have.
+                    commit_sha=repo.last_ingested_sha,
+                )
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+    except RepoBusyError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.post("/{repo_id}/cards")
+def generate_repo_cards_endpoint(
+    repo_id: int, card_source: str = card_generation.SOURCE_DETERMINISTIC,
+    cap: int = card_generation.MAX_CARDS_PER_MODULE,
+    user: User = Depends(require_write_access), db: Session = Depends(get_db),
+):
+    """Regenerate this repo's comprehension cards (Phase 5).
+
+    Requires the roadmap to exist -- cards attach to persisted modules, and
+    generating them for nothing would report success over an empty set.
+
+    `card_source` selects the generator through the same dispatch table the
+    `card_source` COLUMN stores, so a row and the function that produced it
+    cannot drift apart. Passing "llm" today raises NotImplementedError by
+    design: the seam is declared, not built.
+
+    The response carries the conservation equation (rows before, after,
+    expected) alongside the counts, and reports zero-valued counters rather
+    than omitting them.
+    """
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    try:
+        with repo_lock.repo_lock(repo_id, "cards"):
+            try:
+                return card_persist.generate_repo_cards(
+                    db, repo, card_source=card_source, cap=cap,
+                    commit_sha=repo.last_ingested_sha,
+                )
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            except NotImplementedError as e:
+                # 501, not 400: the request is well formed and the capability
+                # is declared but unbuilt. A 400 would blame the caller.
+                raise HTTPException(501, str(e))
+    except RepoBusyError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.get("/{repo_id}/cards")
+def get_repo_cards(
+    repo_id: int, module_id: Optional[int] = None,
+    card_source: Optional[str] = None, limit: int = 50, offset: int = 0,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """This repo's cards, newest generation only (they are replaced wholesale).
+
+    `answer` and `rationale` are deliberately INCLUDED. These are a question
+    bank for review, not a live exam -- an attempt table that would need to
+    withhold answers does not exist yet, and pretending otherwise by hiding
+    them here would be security theatre over a GET that any reader can run.
+    When attempts exist, the withholding belongs on that endpoint.
+    """
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+
+    q = db.query(ComprehensionCard).filter(ComprehensionCard.code_repo_id == repo_id)
+    if module_id is not None:
+        q = q.filter(ComprehensionCard.module_id == module_id)
+    if card_source is not None:
+        q = q.filter(ComprehensionCard.card_source == card_source)
+    total = q.count()
+    rows = (q.order_by(ComprehensionCard.module_id, ComprehensionCard.order_index)
+            .offset(offset).limit(limit).all())
+
+    by_source = dict(
+        db.query(ComprehensionCard.card_source, func.count(ComprehensionCard.id))
+        .filter(ComprehensionCard.code_repo_id == repo_id)
+        .group_by(ComprehensionCard.card_source).all()
+    )
+    return {
+        "repo_id": repo_id,
+        "total": total,
+        "returned": len(rows),
+        # The truncation is stated rather than implied -- same rule as the
+        # module preview's resource cap.
+        "truncated": offset + len(rows) < total,
+        "offset": offset,
+        "limit": limit,
+        # The seam, visible: a reader can see which sources this repo has
+        # cards from without inferring it from the rows returned.
+        "cards_by_source": by_source,
+        "cards": [
+            {
+                "id": c.id, "module_id": c.module_id, "template": c.template,
+                "card_source": c.card_source, "question": c.question,
+                "options": c.options, "answer": c.answer,
+                "rationale": c.rationale, "subject_path": c.subject_path,
+                "code_commit_sha": c.code_commit_sha, "order_index": c.order_index,
+            }
+            for c in rows
+        ],
     }
 
 

@@ -63,6 +63,42 @@ class TestPythonAuthoritativeSources:
         modules = find_python_authoritative_entry_modules(tmp_path)
         assert "package.module" in modules
 
+    def test_setup_py_console_scripts(self, tmp_path):
+        """Apache Superset's exact shape: pyproject defers via `dynamic`, and
+        the real entry point is only declared in setup.py."""
+        _write(
+            tmp_path / "pyproject.toml",
+            '[project]\nname = "x"\ndynamic = ["version", "scripts", "entry-points"]\n',
+        )
+        _write(
+            tmp_path / "setup.py",
+            'setup(\n    name="x",\n    entry_points={\n'
+            '        "console_scripts": ["superset=superset.cli.main:superset"],\n'
+            '        "sqlalchemy.dialects": [\n'
+            '            "postgres = sqlalchemy.dialects.postgresql:dialect",\n'
+            '        ],\n    },\n)\n',
+        )
+        modules = find_python_authoritative_entry_modules(tmp_path)
+        assert "superset.cli.main" in modules
+        # The sibling entry-point group is not a CLI entry point -- scoping
+        # to the console_scripts region is what excludes it.
+        assert "sqlalchemy.dialects.postgresql" not in modules
+
+    def test_setup_py_multiple_console_scripts(self, tmp_path):
+        _write(
+            tmp_path / "setup.py",
+            'setup(entry_points={"console_scripts": [\n'
+            '    "one=pkg.first:main",\n'
+            '    "two=pkg.second:main",\n'
+            ']})\n',
+        )
+        modules = find_python_authoritative_entry_modules(tmp_path)
+        assert "pkg.first" in modules and "pkg.second" in modules
+
+    def test_setup_py_without_entry_points_yields_nothing(self, tmp_path):
+        _write(tmp_path / "setup.py", 'setup(name="x", packages=find_packages())\n')
+        assert find_python_authoritative_entry_modules(tmp_path) == []
+
     def test_no_config_files_returns_empty(self, tmp_path):
         assert find_python_authoritative_entry_modules(tmp_path) == []
 

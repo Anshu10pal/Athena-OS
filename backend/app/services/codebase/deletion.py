@@ -64,7 +64,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.db.models import Repo
+from app.db.models import Repo, RepoDeletionAudit
 from app.services.codebase import registry
 
 # Executed in order, inside one transaction. Children before parents; see the
@@ -297,6 +297,32 @@ def delete_repo_unconfirmed(db: Session, repo: Repo, *, reason: str) -> Deletion
     # files have vanished.
     for name, sql in _DELETE_PLAN:
         db.execute(text(sql), {"rid": repo_id})
+
+    # The durable record, written in the SAME transaction as the deletes.
+    #
+    # The print above is kept but is no longer the record. It fired for exactly
+    # one real deletion and went to a stdout nobody was capturing, which left
+    # "was delete_repo called?" as unanswerable as it had been before any
+    # logging existed. "The code path fires" and "the output survives" are
+    # different claims and only the second one helps at the point somebody
+    # notices a repo is missing -- always after that process has exited.
+    #
+    # Same transaction, not a second commit: a separate commit could leave the
+    # rows deleted and the record absent, which is the exact state this exists
+    # to make impossible.
+    db.add(RepoDeletionAudit(
+        repo_id=repo_id,
+        repo_label=label,
+        source_kind=source_kind or "",
+        reason=reason,
+        rows_deleted=dict(counts),
+        rows_total=sum(counts.values()),
+        directory_path=directory_path,
+        # Recorded as None rather than False: at this point the directory has
+        # not been attempted yet, and False would claim a decision that has not
+        # been made. Updated below once it has.
+        directory_deleted=None,
+    ))
     db.commit()
 
     report = DeletionReport(
@@ -317,6 +343,22 @@ def delete_repo_unconfirmed(db: Session, repo: Repo, *, reason: str) -> Deletion
             f"{dir_reason} The directory was already absent, so nothing was removed."
         )
 
+    # The directory outcome is only known now, so the audit row is completed
+    # rather than written twice. The row already exists and is committed -- if
+    # this second commit never happens the record still says the rows went, and
+    # only the directory verdict stays NULL, which reads correctly as "not
+    # recorded" rather than as "not deleted".
+    audit = (
+        db.query(RepoDeletionAudit)
+        .filter(RepoDeletionAudit.repo_id == repo_id)
+        .order_by(RepoDeletionAudit.id.desc())
+        .first()
+    )
+    if audit is not None:
+        audit.directory_deleted = report.directory_deleted
+        db.commit()
+
     print(f"[deletion] repo {repo_id} ({label}): done; reason={reason!r}; "
-          f"{report.rows_total} rows removed; directory_deleted={report.directory_deleted}")
+          f"{report.rows_total} rows removed; directory_deleted={report.directory_deleted}; "
+          f"audit_id={audit.id if audit else None}")
     return report

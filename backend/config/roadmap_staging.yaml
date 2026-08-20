@@ -1,0 +1,49 @@
+# Phase 4: how a repo-roadmap's stages are derived.
+#
+# layer_coverage_threshold -- the fraction of a repo's files that must be
+# reachable from its entry points before dependency LAYERS are used as the
+# staging basis. Below it, modules are staged by their own dependency depth
+# instead (which subsystem must be read before which), a relation that needs
+# no entry points at all.
+#
+# This exists so "adequate coverage" is a number in a file rather than a
+# judgment made per repo. Measured coverage on the three repos available:
+#
+#     Athena-OS   55.3%   ->  layer staging
+#     eslint      26.9%   ->  subsystem staging
+#     Superset    13.2%   ->  subsystem staging
+#
+# 0.30, 0.40 and 0.50 all produce those same three verdicts -- no repo sits
+# near a boundary -- so this value is NOT currently load-bearing and has not
+# been validated against a repo that would separate them. 0.40 is the midpoint
+# of the range tested, chosen for that reason and no stronger one.
+#
+# Superset's 13.2% is a ceiling rather than a gap: it is a Flask app wired
+# through create_app() and dynamic blueprint registration, which emit no
+# static import edges. Adding its real console_scripts entry point moved
+# reachability by two files. Raising this threshold would not help such a
+# repo; it is exactly the case the subsystem basis exists for.
+layer_coverage_threshold: 0.40
+
+# module_identity_min_overlap -- how much of a PREVIOUS module's file set a new
+# one must contain before the two are treated as the same module across a
+# re-clustering.
+#
+# This exists because a module's slug embeds its subsystem_id, and
+# CodeSubsystem rows are replaced wholesale on every clustering run. Without
+# identity matching, re-clustering renames every module, orphans the previous
+# set, and takes any topic_progress with it -- a user's study history destroyed
+# by an unrelated re-cluster.
+#
+# Matching is by PATH, not file_id: file ids are replaced on re-ingest too, so
+# they would make identity depend on the very operation it has to survive.
+#
+# Deliberately the same rule and the same 0.50 default as the custom_label
+# carry-over in subsystems.py -- one identity-matching notion for the codebase,
+# not two that can disagree about whether a cluster is "the same" one.
+#
+# 0.50 was inherited from that carry-over, where a wrong match is cosmetic (a
+# label). Here it decides whether someone's progress survives, so it was
+# re-measured at this scale rather than assumed -- see docs/decisions.md's
+# module-identity row for the perturbation results across 0.50/0.70/0.90.
+module_identity_min_overlap: 0.50

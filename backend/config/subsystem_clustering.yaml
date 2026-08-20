@@ -1,0 +1,52 @@
+# Phase I: subsystem clustering over the resolved import graph
+# (subsystems.py). One tunable: the modularity RESOLUTION parameter, gamma,
+# passed to both networkx community algorithms.
+#
+# gamma = 1.0 is networkx's own default and every clustering result this
+# project has ever produced. It is kept as the default here deliberately --
+# this config exists so the value is RECORDED and CHANGEABLE, not so it can
+# be quietly retuned. Changing it changes every cluster boundary on every
+# repo, and no cross-repo validation has been run at any other value.
+#
+# Why it needed to become config at all: docs/external-validation-eslint.md's
+# Round 5/7 found eslint's `code-path-analysis` subsystem splitting off
+# cleanly at 398 files and merging entirely into a 119-member cluster at
+# 1,447 files -- same files, same edges. That is the modularity resolution
+# limit (Fortunato & Barthelemy, PNAS 2007): a community whose internal
+# weight sits below roughly sqrt(2m) (m = the graph's total edge weight) gets
+# absorbed as m grows. A gamma sweep confirmed the subsystem is real -- it
+# reappears as an 11-member cluster across gamma 4.5-20.0 -- so gamma=1 was
+# under-resolving it, not finding nothing. A clustering result without the
+# gamma that produced it is uninterpretable once that is known, hence
+# CodeSubsystem.resolution, which records this value on every row.
+#
+# Higher gamma penalises merging: smaller, more numerous clusters. Lower
+# gamma merges more readily. There is no repo-independent "correct" value --
+# the right one depends on graph size, which is exactly the finding above.
+resolution: 1.0
+
+# Per-cluster stability. After clustering at `resolution`, the same graph is
+# re-clustered at resolution * stability_resolution_multiplier, and each
+# cluster is recorded as stable (all its members land together again) or
+# dissolved. Stored on CodeSubsystem.stable_under_perturbation.
+#
+# This exists because sqrt(2m) -- the Fortunato-Barthelemy threshold reported
+# alongside it -- turned out to be a poor predictor of whether a boundary
+# actually moves. Measured across all three repos:
+#
+#     repo         below sqrt(2m)     actually dissolved at 2*gamma
+#     Athena-OS    2/6   (33%)        4/6   (67%)
+#     eslint       19/21 (90%)        3/21  (14%)
+#     Superset     247/255 (97%)      16/255 (6%)
+#
+# It over-flags on large graphs and under-flags on small ones, because it
+# answers what modularity COULD fail to resolve rather than what it DID.
+# sqrt(2m) is still reported, as context; this is the actual test.
+#
+# Cost is one extra clustering pass, measured at 0.06s / 1.44s / 15.6s on
+# 257 / 1,447 / 6,523 files -- 0.44x, 0.90x and 0.49x of the baseline run. The
+# ratio does not grow with size (higher gamma converges faster). Set
+# stability_check to false if a repo is large enough for that to matter; the
+# column then stays NULL, which reads as "not measured" rather than "stable".
+stability_check: true
+stability_resolution_multiplier: 2.0

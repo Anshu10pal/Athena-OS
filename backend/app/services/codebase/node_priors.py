@@ -23,6 +23,7 @@ Two of the six categories need different timing:
   structural fact (like the others), those rows get prior_source =
   "structural" and the write-back leaves them alone from then on.
 """
+import ast
 import fnmatch
 import re
 from pathlib import Path
@@ -91,6 +92,54 @@ def resolve_prior(category: str, priors: Optional[dict] = None) -> float:
     return values.get(category, DEFAULT_PRIOR_VALUES.get(category, 1.0))
 
 
+def _is_alembic_revision(source_text: str) -> bool:
+    """A structural fact about what the file IS, not where it lives:
+    module-level `revision` AND `down_revision` assignments (Alembic's own
+    template writes both on every revision, including the root migration
+    where `down_revision = None`), plus at least one of `upgrade`/
+    `downgrade` defined at module level.
+
+    Path markers are a name enumeration -- `alembic/versions/` matches
+    Alembic's own default layout and nothing else, so a project that moved
+    the folder (Superset's is `superset/migrations/versions/`) or a
+    different tool with the same shape (Flask-Migrate wraps Alembic and
+    inherits this exact structure) is invisible to it. The combination
+    checked here is what actually distinguishes a revision file from
+    anything else, independent of what directory it happens to sit in.
+
+    `revision` alone is too weak a signal on its own -- some other file
+    could plausibly define a variable with that name. Requiring the
+    upgrade/downgrade half of the template alongside it is what makes the
+    combination distinctive rather than coincidental.
+
+    Parses with the stdlib `ast` module, not the tree-sitter extraction
+    ingest.py already ran -- that pipeline's symbol table records
+    functions/classes only (see extract_python.py), not module-level
+    assignments, so the fact this function needs does not exist in it yet.
+    A second, narrow parse of the same text open here already reads (the
+    header-marker scan above does the same) is the smaller change against
+    extending the shared extraction schema for one caller's need."""
+    try:
+        tree = ast.parse(source_text)
+    except (SyntaxError, ValueError):
+        return False
+
+    has_revision = False
+    has_down_revision = False
+    has_upgrade_or_downgrade = False
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            names = {t.id for t in node.targets if isinstance(t, ast.Name)}
+            if "revision" in names:
+                has_revision = True
+            if "down_revision" in names:
+                has_down_revision = True
+        elif isinstance(node, ast.FunctionDef) and node.name in ("upgrade", "downgrade"):
+            has_upgrade_or_downgrade = True
+
+    return has_revision and has_down_revision and has_upgrade_or_downgrade
+
+
 def _is_trivial_init(source_text: str) -> bool:
     """Heuristic for a barrel-like __init__.py: after stripping a leading
     module docstring (if present) and any `__all__ = [...]` assignment
@@ -113,6 +162,19 @@ def classify_file_local_category(
     this order; first match wins: config, migration, generated, barrel,
     else "source".
 
+    Migration is checked structurally FIRST (module-level `revision`/
+    `down_revision` plus an upgrade/downgrade function -- see
+    _is_alembic_revision), the path marker SECOND as a fallback. The
+    marker only ever matched Alembic's own default `alembic/versions/`
+    layout; a project that renamed the folder (Superset uses
+    `superset/migrations/versions/`) was invisible to it even though the
+    files are unmistakably Alembic revisions by content. The marker stays
+    as a fallback because it is cheap and still correct where it applies,
+    and because a `.py` file that fails to parse (rare, but ast.parse can
+    throw on some byte content ingest is deliberately still tolerant of --
+    see extract_python's own try/except in ingest.py) would otherwise lose
+    a classification the path alone can still supply.
+
     barrel requires an actual FORWARD (a re-export edge, reexport_count >= 1)
     or a trivial __init__.py -- not merely "has at least one import". A
     plain script that imports a helper and calls it, defining nothing else,
@@ -127,6 +189,8 @@ def classify_file_local_category(
     if any(fnmatch.fnmatch(basename, pat) for pat in priors["config_filename_patterns"]):
         return "config", "pattern"
 
+    if basename.endswith(".py") and _is_alembic_revision(source_text):
+        return "migration", "structural"
     if any(marker in path for marker in priors["migration_path_markers"]):
         return "migration", "pattern"
 

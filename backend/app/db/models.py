@@ -207,9 +207,28 @@ class Module(Base):
     kind: Mapped[str] = mapped_column(String(20), default="skill")  # skill|tool
     summary: Mapped[str] = mapped_column(Text, default="")
     aliases: Mapped[list] = mapped_column(JSON, default=list)
-    source: Mapped[str] = mapped_column(String(20), default="generated")  # seed|generated
+    source: Mapped[str] = mapped_column(String(20), default="generated")  # seed|generated|codebase
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    # Which repo this module was derived from, for source="codebase" rows.
+    # NULL for seed and generated modules, which have no repo.
+    #
+    # Needed because "replace this repo's codebase modules" has to be a query,
+    # and the alternative -- parsing the repo id back out of the slug, which
+    # embeds it -- would make a naming convention load-bearing for a delete.
+    # Carries no ForeignKey for the same reason Resource.code_repo_id does not:
+    # a repo can be deleted while its derived content is deliberately kept.
+    code_repo_id: Mapped[int] = mapped_column(Integer, nullable=True, default=None, index=True)
+    # Set when a re-clustering dissolved the subsystem this module came from
+    # AND a user had progress on it. The module is kept, not deleted: deleting
+    # would take the `topic_progress` rows with it and destroy real study
+    # because of a re-cluster the user did not ask for and cannot see.
+    #
+    # An orphan with NO progress is deleted instead -- there is nothing to
+    # preserve, and keeping it would accumulate dead rows on every re-cluster.
+    # So this column marks "kept because someone studied it", not "no longer
+    # produced"; the latter is not a state worth a row.
+    code_orphaned_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)
 
     topics: Mapped[list["Topic"]] = relationship(back_populates="module", cascade="all, delete-orphan")
 
@@ -301,10 +320,19 @@ class ContentRoadmap(Base):
     title: Mapped[str] = mapped_column(String(255))
     target: Mapped[str] = mapped_column(String(255), default="")
     aliases: Mapped[list] = mapped_column(JSON, default=list)
-    kind: Mapped[str] = mapped_column(String(20), default="generated")  # seed|generated
+    kind: Mapped[str] = mapped_column(String(20), default="generated")  # seed|generated|codebase
     category: Mapped[str] = mapped_column(String(20), default="role")  # role|tool -- browsing tiles on the roadmap page
     summary: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Which repo this roadmap was derived from, for kind="codebase" rows; NULL
+    # for seed and generated roadmaps. Same reasoning as Module.code_repo_id.
+    code_repo_id: Mapped[int] = mapped_column(Integer, nullable=True, default=None, index=True)
+    # How the stages were derived: "layer" (BFS depth from entry points) or
+    # "subsystem" (module dependency depth). Stored rather than parsed back out
+    # of the stage titles, because a roadmap whose stages mean two different
+    # things depending on the repo must say which without the reader inferring
+    # it from prose. NULL for non-codebase roadmaps, which have neither basis.
+    staging_basis: Mapped[str] = mapped_column(String(20), nullable=True, default=None)
 
     stages: Mapped[list["RoadmapStage"]] = relationship(back_populates="roadmap", cascade="all, delete-orphan")
 
@@ -372,6 +400,131 @@ class ModuleAssessment(Base):
     questions: Mapped[list] = mapped_column(JSON, default=list)  # [{q, options, answer, topic}]
     status: Mapped[str] = mapped_column(String(20), default="active")  # active|graded
     score: Mapped[int] = mapped_column(Integer, default=0)  # percent
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RepoDeletionAudit(Base):
+    """An append-only record that a repo was deleted, and what went with it.
+
+    Exists because the previous instrumentation proved its own inadequacy. A
+    repo vanished across all eight tables with no explanation; logging was
+    added to `delete_repo` in response; that logging then fired for exactly one
+    real deletion (repo 8) and went to a process stdout nobody captured. So the
+    question it was built to answer -- "was delete_repo called, and on what?"
+    -- was STILL unanswerable afterwards.
+
+    "The code path fires" and "the output can be read back later" turned out to
+    be different claims. A print satisfies the first and not the second, and
+    only the second is any use at the point someone notices a repo is missing,
+    which is always after the process that removed it has exited.
+
+    Deliberately NOT a foreign key to `repos`: this row's entire purpose is to
+    outlive that row. It is also never deleted by `delete_repo` itself -- an
+    audit trail a delete can erase is not one.
+
+    Written in the SAME transaction as the deletes. A separate commit could
+    leave the rows gone and the record absent, which is precisely the state
+    this exists to make impossible.
+    """
+
+    __tablename__ = "repo_deletion_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # No ForeignKey, by design -- see the class docstring.
+    repo_id: Mapped[int] = mapped_column(Integer, index=True)
+    repo_label: Mapped[str] = mapped_column(String(255), default="")
+    source_kind: Mapped[str] = mapped_column(String(20), default="")
+    # Why: a user action, LRU eviction, or a test. Free text, required by
+    # delete_repo's own signature, so a deletion in the record can be
+    # attributed without guessing.
+    reason: Mapped[str] = mapped_column(Text, default="")
+    # {table: count} as counted BEFORE the deletes ran -- the before/after
+    # numbers, kept rather than printed.
+    rows_deleted: Mapped[dict] = mapped_column(JSON, default=dict)
+    rows_total: Mapped[int] = mapped_column(Integer, default=0)
+    directory_path: Mapped[str] = mapped_column(String(1000), nullable=True, default=None)
+    directory_deleted: Mapped[bool] = mapped_column(Boolean, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class ComprehensionCard(Base):
+    """Phase 5: one question about a module, stored rather than generated at
+    read time so it can be reviewed, filtered and graded consistently.
+
+    NOT folded into `ModuleAssessment.questions` (a JSON blob) despite the
+    overlap. Two reasons a blob cannot satisfy: a card needs a `card_source`
+    COLUMN the grader dispatches on, and cards need to be queryable -- "how
+    many deterministic cards does this module have", "which template produced
+    this" -- which a JSON list turns into a scan. `ModuleAssessment` stays what
+    it is, a user's attempt at a quiz; this is the question bank.
+
+    Cards are derived content keyed to a module and replaced wholesale when
+    regenerated -- they carry no user state (an ATTEMPT would, and does not
+    exist yet).
+    """
+
+    __tablename__ = "comprehension_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    module_id: Mapped[int] = mapped_column(ForeignKey("modules.id"), index=True)
+    # Which repo the card's facts came from. Same no-ForeignKey reasoning as
+    # Module.code_repo_id: a repo may be deleted while derived content is kept.
+    code_repo_id: Mapped[int] = mapped_column(Integer, nullable=True, default=None, index=True)
+
+    # THE SEAM. Not a note and not a convention -- a column, written on every
+    # row from the first one, while only "deterministic" occurs.
+    #
+    # "deterministic": generated from facts already in the graph (imports,
+    #   subsystem membership, layer depth, rank). Grades by comparison against
+    #   a stored answer that was COMPUTED, not authored.
+    # "llm": generated by a model, explaining what code does and why. Grades
+    #   against a rubric rather than a string.
+    #
+    # The two grade differently, which is why the distinction is stored rather
+    # than inferred: a grader guessing from question shape would be wrong the
+    # first time a deterministic card happened to read like prose.
+    #
+    # NO PYTHON-SIDE DEFAULT, deliberately. It had one ("deterministic") and
+    # that was the exact defect §17.28 records one section earlier: a default
+    # makes a parameter untestable from below, because the writer that forgot
+    # to say what it was produces a row indistinguishable from the writer that
+    # meant it. A fixture, a migration or a test helper could insert a card
+    # that CLAIMS to be deterministic while no registered generator ever ran,
+    # and grading would then dispatch on that claim. Omitting it now raises at
+    # insert instead.
+    #
+    # Residual, stated rather than hidden: migration c4b7e9d2f501 gave the
+    # COLUMN a server_default, so a raw `INSERT` that names no card_source
+    # still gets "deterministic" from SQLite. This change closes the ORM path,
+    # which is the one any application code takes; the raw-SQL path stays open
+    # and is not currently used by anything.
+    card_source: Mapped[str] = mapped_column(String(20), index=True)
+    # Which generator template produced this, e.g. "which_does_it_import".
+    # Stored so variety across templates can be MEASURED and capped rather than
+    # assumed -- six templates over 122 modules is a distribution, not a
+    # guarantee.
+    template: Mapped[str] = mapped_column(String(60), default="")
+
+    question: Mapped[str] = mapped_column(Text, default="")
+    # Multiple choice for deterministic cards. An llm card may have none, so
+    # this is a list that can legitimately be empty rather than NOT NULL.
+    options: Mapped[list] = mapped_column(JSON, default=list)
+    # The expected answer for a deterministic card; for an llm card, the
+    # rubric's reference answer. Both are strings; what differs is how
+    # grading compares against them, which is what card_source says.
+    answer: Mapped[str] = mapped_column(Text, default="")
+    # Why this is the answer, in terms of the stored fact it came from -- so a
+    # reader can check the card instead of trusting it.
+    rationale: Mapped[str] = mapped_column(Text, default="")
+
+    # The file the question is about, for a "show me this in the code" link.
+    subject_path: Mapped[str] = mapped_column(String(1000), nullable=True, default=None)
+    # The revision the facts were read at. Same reasoning as
+    # Resource.code_commit_sha: a card about an import that no longer exists is
+    # simply wrong, and without a sha nothing can notice.
+    code_commit_sha: Mapped[str] = mapped_column(String(64), nullable=True, default=None)
+
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -491,6 +644,14 @@ class Repo(Base):
     # compare to).
     subsystem_hdbscan_agreement: Mapped[float] = mapped_column(Float, nullable=True, default=None)
     subsystem_hdbscan_cycle_coherence: Mapped[list] = mapped_column(JSON, nullable=True, default=None)
+    # The last modularity run's resolution-limit diagnostic (subsystems.
+    # resolution_report's "resolution_limit" block): total edge weight m,
+    # sqrt(2m), and how many clusters sit at or below that threshold. Stored
+    # rather than recomputed on read for the same reason as
+    # subsystem_cycle_coherence above. Repo-wide because sqrt(2m) is a
+    # property of the whole graph, not of any one cluster -- the per-cluster
+    # half of the comparison lives on CodeSubsystem.internal_weight.
+    subsystem_resolution_limit: Mapped[dict] = mapped_column(JSON, nullable=True, default=None)
 
 
 # ---------------- Codebase agent: parse + import graph (Phase B) ----------------
@@ -761,6 +922,36 @@ class CodeSubsystem(Base):
     # non-empty, same "state the source of truth" pattern as G3's glossary
     # tooltips. One of "dominant_prefix" | "top_fan_in" | "numeric" | "custom".
     active_label_rule: Mapped[str] = mapped_column(String(20), default="dominant_prefix")
+    # The modularity resolution parameter (gamma) this cluster was found at,
+    # and the cluster's own internal edge weight. Both exist because a
+    # cluster BOUNDARY is not a stable fact about the code: eslint's
+    # code-path-analysis subsystem resolved cleanly at 398 files and merged
+    # entirely into a 119-member cluster at 1,447 -- same files, same edges
+    # (docs/external-validation-eslint.md, Rounds 5 and 7). That is the
+    # Fortunato-Barthelemy resolution limit, and it means a clustering result
+    # without the gamma that produced it cannot be compared against another
+    # one. internal_weight is what the reader compares against the repo-level
+    # sqrt(2m) on Repo.subsystem_resolution_limit to judge whether THIS
+    # cluster's boundary was resolvable at all.
+    # NULL for hdbscan rows: gamma is a modularity/Louvain parameter and
+    # density clustering over embeddings has no analogue, so a number here
+    # would be a false claim rather than a missing one.
+    resolution: Mapped[float] = mapped_column(Float, nullable=True, default=None)
+    internal_weight: Mapped[float] = mapped_column(Float, nullable=True, default=None)
+    # Did this cluster survive re-clustering the same graph at a higher gamma
+    # (subsystems.stability_report)? True means its boundary is found at more
+    # than one resolution; False means it scattered, so the grouping was a
+    # partition of convenience rather than a structural finding.
+    #
+    # This, not internal_weight vs sqrt(2m), is what makes a boundary
+    # judgeable: measured across three repos, sqrt(2m) over-flags on large
+    # graphs (Superset 97% flagged, 6% actually dissolved) and under-flags on
+    # small ones (Athena-OS 33% flagged, 67% dissolved).
+    #
+    # NULL means NOT MEASURED -- the stability check is config-gated and does
+    # not apply to hdbscan, which has no resolution parameter. It must never
+    # be read as "stable".
+    stable_under_perturbation: Mapped[bool] = mapped_column(Boolean, nullable=True, default=None)
     computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

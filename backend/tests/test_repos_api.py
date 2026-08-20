@@ -19,6 +19,7 @@ from app.api.repos import (
     compute_health_endpoint,
     compute_subsystems_endpoint,
     compute_subsystems_hdbscan_endpoint,
+    create_repo_roadmap,
     get_file_neighbors,
     get_graph,
     get_ranking,
@@ -26,6 +27,7 @@ from app.api.repos import (
     get_health_directories,
     get_health_files,
     get_module_preview,
+    get_roadmap_preview,
     get_findings,
     get_findings_files,
     get_subsystem_members,
@@ -1408,6 +1410,81 @@ class TestGraphFilterVocabulary:
         assert payload["filters_active"] is True
         assert payload["files_matched"] > 0
 
+    # --- combining params: OR within one, AND across two -------------------
+    # The existing tests cover each param alone. Neither pins what happens when
+    # two are sent together, which is the ordinary case once the UI wires a
+    # filter bar with several controls: values inside one param must UNION,
+    # while separate params must INTERSECT. An implementation that unioned
+    # across params too would widen a filter as the user added constraints --
+    # confidently wrong in the direction a user would never suspect.
+
+    def test_LOADBEARING_separate_params_intersect_while_values_within_one_union(
+            self, db_session, tmp_path):
+        repo = self._ranked(db_session, tmp_path)
+        # backend/ holds app.py + util.py (python); scripts/ holds build.py
+        # (python); frontend/ holds typescript and tsx.
+        both_segments = get_graph(repo.id, level="file",
+                                  segments=["backend", "frontend"], user=None, db=db_session)
+        combined = get_graph(repo.id, level="file", segments=["backend", "frontend"],
+                             languages=["python"], user=None, db=db_session)
+        paths = set(self._paths(combined))
+
+        # Every survivor satisfies BOTH constraints, not either.
+        assert paths, "the combination filtered everything away; fixture cannot test this"
+        assert all(p.startswith("backend/") for p in paths), (
+            f"a language filter did not intersect with the segment filter: {sorted(paths)}")
+        # And it is strictly narrower than the segment filter alone -- proof the
+        # second param did something rather than being ignored.
+        assert paths < set(self._paths(both_segments))
+
+    def test_a_second_param_cannot_widen_the_result(self, db_session, tmp_path):
+        """The failure mode this guards is unioning ACROSS params: adding a
+        constraint would then ADD files. Stated as a property because it must
+        hold for any pair, not just the one above."""
+        repo = self._ranked(db_session, tmp_path)
+        segment_only = set(self._paths(
+            get_graph(repo.id, level="file", segments=["backend"], user=None, db=db_session)))
+        with_language = set(self._paths(
+            get_graph(repo.id, level="file", segments=["backend"], languages=["python"],
+                      user=None, db=db_session)))
+        with_query = set(self._paths(
+            get_graph(repo.id, level="file", segments=["backend"], query="util",
+                      user=None, db=db_session)))
+
+        assert with_language <= segment_only
+        assert with_query <= segment_only
+
+    def test_an_empty_repeated_param_narrows_nothing(self, db_session, tmp_path):
+        """`segments=[]` means "no segment constraint", not "no segment
+        matches". The distinction matters because a UI that clears its last
+        chip sends the empty list rather than omitting the param, and an
+        implementation testing truthiness of the list gets this right only by
+        accident -- the same NULL-versus-zero confusion as §17.22, in a query
+        string."""
+        repo = self._ranked(db_session, tmp_path)
+        unfiltered = get_graph(repo.id, level="file", user=None, db=db_session)
+        empty = get_graph(repo.id, level="file", segments=[], languages=[],
+                          user=None, db=db_session)
+
+        assert self._paths(empty) == self._paths(unfiltered)
+        assert empty["filters_active"] is False, (
+            "an empty filter list must not read as an active filter")
+
+    def test_counts_track_the_combination_not_just_the_first_param(
+            self, db_session, tmp_path):
+        """The counts trap, at the combination. `total_nodes_before_cap` must
+        describe the population AFTER every param has been applied -- if it
+        reflected only the first, the frontend counter would overstate what is
+        on screen precisely when the user has narrowed hardest."""
+        repo = self._ranked(db_session, tmp_path)
+        segment_only = get_graph(repo.id, level="file", segments=["backend", "frontend"],
+                                 user=None, db=db_session)
+        combined = get_graph(repo.id, level="file", segments=["backend", "frontend"],
+                             languages=["python"], user=None, db=db_session)
+
+        assert combined["total_nodes_before_cap"] == len(combined["nodes"])
+        assert combined["total_nodes_before_cap"] < segment_only["total_nodes_before_cap"]
+
 
 class TestModulePreviewEndpoint:
     """Phase 4 groundwork. READ-ONLY by contract, so the tests check that
@@ -1541,13 +1618,112 @@ class TestModulePreviewEndpoint:
         assert e.value.status_code == 400
 
 
-class TestModulePreviewCatalogueWiring:
-    """classify_catalogue itself is pure and covered in test_module_mapping.py.
-    This is the endpoint wiring around it: the CodeImport query, bucketing
-    edges by which subsystem both endpoints belong to, and setting
-    is_catalogue on the resulting module -- built directly against the DB
-    rather than through git ingest, so the subsystem/edge shape (a 30-file
-    barrel) is exact rather than whatever real clustering happens to produce."""
+class TestRoadmapPreviewEndpoint:
+    """What one ContentRoadmap for this repo would look like, grouped into
+    stages by dependency layer -- same READ-ONLY contract as module-preview,
+    verified the same way (row counts, not handler internals)."""
+
+    def _make_repo(self, tmp_path) -> Path:
+        # A real __main__ guard on api.py makes IT the entry point (layer 0);
+        # util.py (one import hop away) lands at layer 1, core.py at layer 2
+        # -- a real, checkable BFS-depth chain rather than an all-unreachable
+        # fixture with nothing to distinguish stages by.
+        root = tmp_path / "roadmap_preview_repo"
+        _init_repo(root)
+        _write(root / "pkg" / "__init__.py", "")
+        _write(root / "pkg" / "core.py", "def run():\n    return 1\n")
+        _write(root / "pkg" / "util.py", "from pkg.core import run\n\n\ndef helper():\n    return run()\n")
+        _write(root / "pkg" / "api.py",
+               "from pkg.util import helper\n\n\ndef go():\n    return helper()\n\n\n"
+               "if __name__ == '__main__':\n    go()\n")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.name=A", "-c", "user.email=a@t.com", "commit", "-m", "initial")
+        return root
+
+    def _clustered(self, db_session, tmp_path):
+        repo = register_from_path(db_session, str(self._make_repo(tmp_path)))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        compute_subsystems_endpoint(repo.id, user=None, db=db_session)
+        return repo
+
+    def test_404_before_clustering_rather_than_an_empty_preview(self, db_session, tmp_path):
+        repo = register_from_path(db_session, str(self._make_repo(tmp_path)))
+        ingest_repo(db_session, repo)
+        rank_repo(db_session, repo)
+        with pytest.raises(HTTPException) as e:
+            get_roadmap_preview(repo.id, user=None, db=db_session)
+        assert e.value.status_code == 404
+
+    def test_LOADBEARING_the_preview_writes_nothing(self, db_session, tmp_path):
+        repo = self._clustered(db_session, tmp_path)
+        watch = ["modules", "topics", "resources", "topic_progress",
+                 "content_roadmaps", "roadmap_stages", "roadmap_nodes", "code_subsystems"]
+        before = {t: db_session.execute(text(f"select count(*) from {t}")).scalar() for t in watch}
+
+        payload = get_roadmap_preview(repo.id, user=None, db=db_session)
+
+        after = {t: db_session.execute(text(f"select count(*) from {t}")).scalar() for t in watch}
+        assert after == before, f"the preview wrote rows: {before} -> {after}"
+        assert payload["writes_nothing"] is True
+
+    def test_LOADBEARING_every_produced_module_appears_in_exactly_one_stage(self, db_session, tmp_path):
+        repo = self._clustered(db_session, tmp_path)
+        payload = get_roadmap_preview(repo.id, user=None, db=db_session)
+
+        total_in_stages = sum(s["module_count"] for s in payload["stages"])
+        assert total_in_stages == payload["modules_produced"]
+        all_slugs = [m["slug"] for s in payload["stages"] for m in s["modules"]]
+        assert len(all_slugs) == len(set(all_slugs)), "a module appeared in more than one stage"
+
+    def test_stage_module_count_matches_its_own_modules_list_length(self, db_session, tmp_path):
+        repo = self._clustered(db_session, tmp_path)
+        payload = get_roadmap_preview(repo.id, user=None, db=db_session)
+        for s in payload["stages"]:
+            assert s["module_count"] == len(s["modules"])
+
+    def test_unreachable_module_count_matches_the_unreachable_stage_if_any(self, db_session, tmp_path):
+        repo = self._clustered(db_session, tmp_path)
+        payload = get_roadmap_preview(repo.id, user=None, db=db_session)
+        unreachable_stages = [s for s in payload["stages"] if s["title"] == "Unreachable"]
+        expected = unreachable_stages[0]["module_count"] if unreachable_stages else 0
+        assert payload["unreachable_module_count"] == expected
+
+    def test_stage_titles_are_Layer_N_in_ascending_order_then_Unreachable_last(self, db_session, tmp_path):
+        repo = self._clustered(db_session, tmp_path)
+        payload = get_roadmap_preview(repo.id, user=None, db=db_session)
+        titles = [s["title"] for s in payload["stages"]]
+        layer_titles = [t for t in titles if t != "Unreachable"]
+        layer_numbers = [int(t.split(" ")[1]) for t in layer_titles]
+        assert layer_numbers == sorted(layer_numbers)
+        if "Unreachable" in titles:
+            assert titles[-1] == "Unreachable"
+
+    def test_an_unknown_algorithm_is_rejected(self, db_session, tmp_path):
+        repo = self._clustered(db_session, tmp_path)
+        with pytest.raises(HTTPException) as e:
+            get_roadmap_preview(repo.id, algorithm="nonsense", user=None, db=db_session)
+        assert e.value.status_code == 400
+
+    def test_an_unknown_topic_strategy_is_rejected(self, db_session, tmp_path):
+        repo = self._clustered(db_session, tmp_path)
+        with pytest.raises(HTTPException) as e:
+            get_roadmap_preview(repo.id, topic_strategy="vibes", user=None, db=db_session)
+        assert e.value.status_code == 400
+
+
+class TestModulePreviewHasNoCatalogueWiring:
+    """This class used to test the endpoint wiring around `classify_catalogue`
+    -- the CodeImport query, edge bucketing by subsystem, and setting
+    `is_catalogue`. All of it was removed on 2026-08-17 (contract §17.27)
+    after the classifier measured zero fires across 282 subsystems on three
+    real repos.
+
+    The fixture is kept, exercising the exact shape the classifier was built
+    for (a 31-file barrel: one hub importing 30 spokes, no spoke-to-spoke
+    edges). It now asserts the preview handles that shape as an ordinary
+    module and reports no flag anywhere -- so if the wiring is reinstated,
+    this fails rather than silently passing."""
 
     def _repo_with_barrel_subsystem(self, db_session):
         repo = Repo(host="local", owner="", name="catalogue-fixture",
@@ -1579,52 +1755,332 @@ class TestModulePreviewCatalogueWiring:
         db_session.commit()
         return repo
 
-    def test_LOADBEARING_a_barrel_subsystem_is_flagged_a_catalogue(self, db_session):
+    def test_LOADBEARING_a_barrel_subsystem_is_an_ordinary_module_now(self, db_session):
         repo = self._repo_with_barrel_subsystem(db_session)
         payload = get_module_preview(repo.id, user=None, db=db_session)
         modules = [m for m in payload["modules"] if m["skipped_reason"] is None]
         assert len(modules) == 1
-        assert modules[0]["is_catalogue"] is True
-        assert payload["summary"]["modules_flagged_catalogue"] == 1
+        assert "is_catalogue" not in modules[0]
+        assert "modules_flagged_catalogue" not in payload["summary"]
 
-    def test_a_subsystem_with_real_interconnection_is_not_flagged(self, db_session):
+    def test_the_preview_still_builds_when_a_subsystem_has_no_internal_edges(self, db_session):
+        """The removed classifier treated "no internal edges" as its strongest
+        catalogue signal, so it is the shape most likely to have had a code
+        path of its own. The preview must still produce a module for it."""
         repo = self._repo_with_barrel_subsystem(db_session)
-        # Rewire: replace the barrel with a chain among the spokes -- real
-        # sibling structure, no dominant hub.
         db_session.query(CodeImport).filter(CodeImport.repo_id == repo.id).delete()
-        spokes = (db_session.query(CodeFile)
-                  .filter(CodeFile.repo_id == repo.id).order_by(CodeFile.id).all()[1:])
-        db_session.add_all([
-            CodeImport(repo_id=repo.id, from_file_id=a.id, to_file_id=b.id, raw_specifier=b.path)
-            for a, b in zip(spokes, spokes[1:])
-        ])
         db_session.commit()
 
         payload = get_module_preview(repo.id, user=None, db=db_session)
         modules = [m for m in payload["modules"] if m["skipped_reason"] is None]
         assert len(modules) == 1
-        assert modules[0]["is_catalogue"] is False
+        assert modules[0]["member_count"] == 31
 
-    def test_edges_to_a_different_subsystem_are_not_counted_as_internal(self, db_session):
-        """An edge crossing subsystem boundaries says nothing about whether
-        THIS subsystem has internal structure -- counting it would let an
-        unrelated import make a catalogue look interconnected."""
-        repo = self._repo_with_barrel_subsystem(db_session)
-        outsider = CodeFile(repo_id=repo.id, path="pkg/outsider.py", language="python",
-                            content_sha256="sha_outsider", subsystem_modularity_id=2)
-        db_session.add(outsider)
+
+class TestRepoRoadmapPersistence:
+    """Phase 4's first WRITE into the curated tables. These tables also hold
+    hand-written seed content, so most of what matters here is what the write
+    must NOT touch, and what a re-run must NOT destroy."""
+
+    def _repo_with_two_subsystems(self, db_session):
+        repo = Repo(host="local", owner="", name="persist-fixture",
+                    local_path="/nonexistent", source_kind="local",
+                    last_ingested_sha="abc123")
+        db_session.add(repo)
         db_session.flush()
-        spoke = (db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id)
-                 .order_by(CodeFile.id).all()[1])
-        db_session.add(CodeImport(repo_id=repo.id, from_file_id=spoke.id, to_file_id=outsider.id,
-                                  raw_specifier="outsider"))
+        for idx in range(2):
+            s = CodeSubsystem(repo_id=repo.id, algorithm="modularity",
+                              cluster_index=idx, member_count=4,
+                              dominant_prefix_label=f"pkg{idx}")
+            db_session.add(s)
+            db_session.flush()
+            db_session.add_all([
+                CodeFile(repo_id=repo.id, path=f"pkg{idx}/f{i}.py", language="python",
+                         content_sha256=f"sha{idx}{i}", subsystem_modularity_id=s.id)
+                for i in range(4)
+            ])
+        db_session.commit()
+        return repo
+
+    def test_LOADBEARING_seed_and_generated_content_is_never_touched(self, db_session):
+        """The property the whole design exists for: every write and delete is
+        scoped to source == "codebase" AND this repo."""
+        from app.db.models import Module
+        seed = Module(slug="seed-mod", title="Seed", source="seed")
+        generated = Module(slug="gen-mod", title="Gen", source="generated")
+        other_repo = Module(slug="other-repo-mod", title="Other",
+                            source="codebase", code_repo_id=9999)
+        db_session.add_all([seed, generated, other_repo])
         db_session.commit()
 
-        payload = get_module_preview(repo.id, user=None, db=db_session)
-        modules = [m for m in payload["modules"] if m["skipped_reason"] is None
-                   and m["title"] != "Unclustered"]
-        assert len(modules) == 1
-        assert modules[0]["is_catalogue"] is True  # unaffected by the cross-subsystem edge
+        repo = self._repo_with_two_subsystems(db_session)
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+
+        survivors = {m.slug for m in db_session.query(Module).all()}
+        assert {"seed-mod", "gen-mod", "other-repo-mod"} <= survivors
+
+    def test_LOADBEARING_a_re_run_reuses_topics_so_progress_survives(self, db_session):
+        """topic_progress points at topics.id. Replacing topics wholesale would
+        take a user's completed-topic records with them."""
+        from app.db.models import Module, Topic, TopicProgress
+        repo = self._repo_with_two_subsystems(db_session)
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+
+        topic = (db_session.query(Topic).join(Module, Topic.module_id == Module.id)
+                 .filter(Module.code_repo_id == repo.id).first())
+        db_session.add(TopicProgress(user_id=1, topic_id=topic.id))
+        db_session.commit()
+
+        report = create_repo_roadmap(repo.id, user=None, db=db_session)
+        assert report["topics_created"] == 0
+        assert report["topics_reused"] > 0
+        assert report["topic_progress_rows_deleted"] == 0
+        assert db_session.query(TopicProgress).filter(
+            TopicProgress.topic_id == topic.id).count() == 1
+
+    def test_a_re_run_does_not_duplicate_rows(self, db_session):
+        from app.db.models import ContentRoadmap, Module, Resource, Topic
+        repo = self._repo_with_two_subsystems(db_session)
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+        counts = tuple(db_session.query(m).count()
+                       for m in (Module, Topic, Resource, ContentRoadmap))
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+        assert counts == tuple(db_session.query(m).count()
+                               for m in (Module, Topic, Resource, ContentRoadmap))
+
+    def test_resources_carry_repo_path_and_commit_sha(self, db_session):
+        """A code reference without a SHA points at a moving target."""
+        from app.db.models import Resource
+        repo = self._repo_with_two_subsystems(db_session)
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+        rows = db_session.query(Resource).filter(Resource.code_repo_id == repo.id).all()
+        assert rows
+        assert all(r.code_path and r.code_commit_sha == "abc123" for r in rows)
+
+    def test_the_roadmap_records_its_staging_basis(self, db_session):
+        from app.db.models import ContentRoadmap
+        repo = self._repo_with_two_subsystems(db_session)
+        report = create_repo_roadmap(repo.id, user=None, db=db_session)
+        rm = db_session.query(ContentRoadmap).filter(
+            ContentRoadmap.code_repo_id == repo.id).one()
+        assert rm.staging_basis in ("layer", "subsystem")
+        assert rm.staging_basis == report["staging_basis"]
+        assert rm.kind == "codebase"
+        assert rm.summary  # the basis reason, never blank
+
+    def test_LOADBEARING_a_re_cluster_renames_modules_and_progress_still_survives(
+            self, db_session):
+        """The scenario the identity matching exists for. A module's slug embeds
+        its subsystem_id and CodeSubsystem rows are replaced wholesale, so
+        re-clustering renames every module. Under slug identity that deleted
+        every module and destroyed every topic_progress row attached to one.
+
+        Simulated by replacing the subsystem rows with new ids holding the same
+        files -- exactly what a real re-cluster does."""
+        from app.db.models import CodeSubsystem, Module, Topic, TopicProgress
+        repo = self._repo_with_two_subsystems(db_session)
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+
+        topic = (db_session.query(Topic).join(Module, Topic.module_id == Module.id)
+                 .filter(Module.code_repo_id == repo.id).first())
+        db_session.add(TopicProgress(user_id=1, topic_id=topic.id))
+        old_slugs = {m.slug for m in db_session.query(Module).filter(
+            Module.code_repo_id == repo.id).all()}
+        db_session.commit()
+
+        # Delete every old row BEFORE inserting the new ones -- the real
+        # _persist_algorithm does exactly this, and (repo_id, algorithm,
+        # cluster_index) is unique, so an insert-then-delete fixture collides.
+        old_rows = db_session.query(CodeSubsystem).filter(
+            CodeSubsystem.repo_id == repo.id).all()
+        snapshot = [
+            (old.cluster_index, old.member_count, old.dominant_prefix_label,
+             [f.id for f in db_session.query(CodeFile).filter(
+                 CodeFile.subsystem_modularity_id == old.id).all()])
+            for old in old_rows
+        ]
+        db_session.query(CodeFile).filter(CodeFile.repo_id == repo.id).update(
+            {"subsystem_modularity_id": None}, synchronize_session=False)
+        for old in old_rows:
+            db_session.delete(old)
+        db_session.flush()
+        for cluster_index, member_count, label, file_ids in snapshot:
+            fresh = CodeSubsystem(repo_id=repo.id, algorithm="modularity",
+                                  cluster_index=cluster_index,
+                                  member_count=member_count,
+                                  dominant_prefix_label=label)
+            # Explicit high id: SQLite reuses the rowids just deleted, which
+            # would hand the new rows the OLD ids, leave every slug unchanged
+            # and make this test pass without exercising renaming at all.
+            fresh.id = 9000 + cluster_index
+            db_session.add(fresh)
+            db_session.flush()
+            db_session.query(CodeFile).filter(CodeFile.id.in_(file_ids)).update(
+                {"subsystem_modularity_id": fresh.id}, synchronize_session=False)
+        db_session.commit()
+
+        report = create_repo_roadmap(repo.id, user=None, db=db_session)
+
+        assert report["modules_renamed"] > 0, "the fixture must actually rename"
+        assert report["modules_created"] == 0
+        assert report["modules_orphaned_kept"] == []
+        assert report["topic_progress_rows_deleted"] == 0
+        assert db_session.query(TopicProgress).filter(
+            TopicProgress.topic_id == topic.id).count() == 1
+        # Topics must survive the rename too. This assertion was MISSING when
+        # this test was first written, and its absence hid a real bug: topic
+        # slugs also embedded the subsystem_id, so a re-cluster created a
+        # SECOND topic beside each original and stranded the first with its
+        # resources and its progress -- while every module-level assertion
+        # above still passed.
+        assert report["topics_created"] == 0
+        assert report["topics_reused"] > 0
+        assert db_session.query(Topic).filter(Topic.module_id == topic.module_id).count() == 1
+        new_slugs = {m.slug for m in db_session.query(Module).filter(
+            Module.code_repo_id == repo.id).all()}
+        assert new_slugs != old_slugs, "slugs should have changed"
+
+    def test_LOADBEARING_a_topic_slug_does_not_depend_on_the_subsystem_id(self, db_session):
+        """The root cause of the stranded-topic bug, pinned directly rather
+        than only through its symptom: CodeSubsystem ids are replaced on every
+        clustering run, so anything keyed to one is unstable by construction.
+        `topics` is unique on (module_id, slug), so the id bought nothing."""
+        from app.services.codebase import module_mapping as mm
+        members = [{"path": f"pkg/f{i}.py", "file_id": i, "rank": i} for i in range(4)]
+        a = mm.map_subsystem_to_module(repo_id=1, subsystem_id=111,
+                                       subsystem_label="pkg", member_count=4,
+                                       members=members)
+        b = mm.map_subsystem_to_module(repo_id=1, subsystem_id=999,
+                                       subsystem_label="pkg", member_count=4,
+                                       members=members)
+        assert [t.slug for t in a.topics] == [t.slug for t in b.topics]
+        assert all("111" not in t.slug and "999" not in t.slug for t in a.topics)
+
+    def test_a_stale_topic_with_no_progress_is_removed_not_stranded(self, db_session):
+        from app.db.models import Module, Resource, Topic
+        repo = self._repo_with_two_subsystems(db_session)
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+        module = db_session.query(Module).filter(
+            Module.code_repo_id == repo.id).first()
+        ghost = Topic(module_id=module.id, slug="ghost-topic", title="Ghost",
+                      source="codebase")
+        db_session.add(ghost)
+        db_session.flush()
+        db_session.add(Resource(topic_id=ghost.id, kind="doc", title="x",
+                                code_repo_id=repo.id, code_path="pkg0/f0.py"))
+        db_session.commit()
+
+        report = create_repo_roadmap(repo.id, user=None, db=db_session)
+        assert report["topics_stale_deleted"] >= 1
+        assert db_session.query(Topic).filter(Topic.slug == "ghost-topic").count() == 0
+        assert db_session.query(Resource).filter(Resource.topic_id == ghost.id).count() == 0
+
+    def test_a_stale_topic_with_progress_is_kept_and_reported(self, db_session):
+        from app.db.models import Module, Topic, TopicProgress
+        repo = self._repo_with_two_subsystems(db_session)
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+        module = db_session.query(Module).filter(
+            Module.code_repo_id == repo.id).first()
+        ghost = Topic(module_id=module.id, slug="ghost-topic", title="Ghost",
+                      source="codebase")
+        db_session.add(ghost)
+        db_session.flush()
+        db_session.add(TopicProgress(user_id=1, topic_id=ghost.id))
+        db_session.commit()
+
+        report = create_repo_roadmap(repo.id, user=None, db=db_session)
+        assert [t["topic_slug"] for t in report["topics_stale_kept"]] == ["ghost-topic"]
+        assert report["topic_progress_rows_preserved_on_orphans"] == 1
+        assert db_session.query(Topic).filter(Topic.slug == "ghost-topic").count() == 1
+
+    def test_LOADBEARING_a_dissolved_module_with_progress_is_kept_not_deleted(
+            self, db_session):
+        """A cluster can genuinely vanish. Deleting the module would cascade to
+        its topics and take real study with it."""
+        from app.db.models import CodeSubsystem, Module, Topic, TopicProgress
+        repo = self._repo_with_two_subsystems(db_session)
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+
+        doomed = (db_session.query(Module)
+                  .filter(Module.code_repo_id == repo.id).order_by(Module.id).first())
+        topic = db_session.query(Topic).filter(Topic.module_id == doomed.id).first()
+        db_session.add(TopicProgress(user_id=1, topic_id=topic.id))
+        db_session.commit()
+
+        # Dissolve one subsystem entirely: its files leave the clustering.
+        victim = db_session.query(CodeSubsystem).filter(
+            CodeSubsystem.repo_id == repo.id).order_by(CodeSubsystem.id).first()
+        db_session.query(CodeFile).filter(
+            CodeFile.subsystem_modularity_id == victim.id).update(
+            {"subsystem_modularity_id": None}, synchronize_session=False)
+        db_session.delete(victim)
+        db_session.commit()
+
+        report = create_repo_roadmap(repo.id, user=None, db=db_session)
+
+        assert report["topic_progress_rows_deleted"] == 0
+        assert report["topic_progress_rows_preserved_on_orphans"] == 1
+        assert [o["topic_progress_rows"] for o in report["modules_orphaned_kept"]] == [1]
+        kept = db_session.get(Module, doomed.id)
+        assert kept is not None and kept.code_orphaned_at is not None
+        assert db_session.query(TopicProgress).filter(
+            TopicProgress.topic_id == topic.id).count() == 1
+
+    def test_a_dissolved_module_with_no_progress_is_deleted(self, db_session):
+        """Nothing is preserved by keeping it, and keeping it would accumulate
+        dead rows on every re-cluster."""
+        from app.db.models import CodeSubsystem, Module
+        repo = self._repo_with_two_subsystems(db_session)
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+        before = db_session.query(Module).filter(Module.code_repo_id == repo.id).count()
+
+        victim = db_session.query(CodeSubsystem).filter(
+            CodeSubsystem.repo_id == repo.id).order_by(CodeSubsystem.id).first()
+        db_session.query(CodeFile).filter(
+            CodeFile.subsystem_modularity_id == victim.id).update(
+            {"subsystem_modularity_id": None}, synchronize_session=False)
+        db_session.delete(victim)
+        db_session.commit()
+
+        report = create_repo_roadmap(repo.id, user=None, db=db_session)
+        assert len(report["modules_orphaned_deleted"]) == 1
+        assert report["modules_orphaned_kept"] == []
+        assert db_session.query(Module).filter(
+            Module.code_repo_id == repo.id).count() == before - 1
+
+    def test_an_orphan_does_not_appear_on_the_roadmap(self, db_session):
+        """Kept for its progress, not because it is still part of the reading
+        order -- a stage node pointing at one would put a dissolved module back
+        on the roadmap."""
+        from app.db.models import CodeSubsystem, Module, RoadmapNode, Topic, TopicProgress
+        repo = self._repo_with_two_subsystems(db_session)
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+        doomed = (db_session.query(Module)
+                  .filter(Module.code_repo_id == repo.id).order_by(Module.id).first())
+        topic = db_session.query(Topic).filter(Topic.module_id == doomed.id).first()
+        db_session.add(TopicProgress(user_id=1, topic_id=topic.id))
+        victim = db_session.query(CodeSubsystem).filter(
+            CodeSubsystem.repo_id == repo.id).order_by(CodeSubsystem.id).first()
+        db_session.query(CodeFile).filter(
+            CodeFile.subsystem_modularity_id == victim.id).update(
+            {"subsystem_modularity_id": None}, synchronize_session=False)
+        db_session.delete(victim)
+        db_session.commit()
+
+        create_repo_roadmap(repo.id, user=None, db=db_session)
+        assert not (
+            db_session.query(RoadmapNode)
+            .filter(RoadmapNode.module_id == doomed.id).count()
+        )
+
+    def test_refuses_when_the_repo_has_no_clustering(self, db_session):
+        repo = Repo(host="local", owner="", name="unclustered-fixture",
+                    local_path="/nonexistent", source_kind="local")
+        db_session.add(repo)
+        db_session.commit()
+        with pytest.raises(HTTPException) as e:
+            create_repo_roadmap(repo.id, user=None, db=db_session)
+        assert e.value.status_code == 400
 
 
 class TestHealthFilesSingleLookup:

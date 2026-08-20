@@ -35,18 +35,46 @@ Codebase side, repo 3 (eslint, the validated repo):
     files per subsystem      2 / 10 / 151
 
 So subsystem -> module and file -> resource land in roughly the right range at
-the module level. **The topic level does not exist in the data.** Three
-derivable candidates were measured for "how many groups does this produce per
-subsystem", against a 3-8 target:
+the module level. Three derivable candidates were measured for "how many groups
+does this produce per subsystem", against a 3-8 target.
 
-    grouping            eslint in band    superset in band
-    parent directory    4/7  (57%)        19/119 (16%)
-    2nd path segment    0/7  (0%)         5/119  (4%)
-    prior_category      0/7  (0%)         4/119  (3%)
+RE-MEASURED 2026-08-17 against corrected graphs (the original figures came from
+a 398-file fixture and from edge weights in which is_test_file misweighted 59%
+of eslint's edges -- contract §17.26 and §17.28, so the SUBSYSTEMS themselves
+were different objects). Original figures in brackets:
 
-None is close, and the failure is not merely numerical: eslint's largest
-subsystem (151 files) splits by parent directory into three groups of 149, 1 and
-1. That is one directory with two strays, not three concepts.
+    grouping            Athena-OS      eslint             superset
+    parent directory    4/4  (100%)    8/17  (47%) [57%]  22/122 (18%) [16%]
+    2nd path segment    1/4  (25%)     6/17  (35%) [0%]    7/122 (6%)  [4%]
+    prior_category      0/4  (0%)      1/17  (6%)  [0%]    4/122 (3%)  [3%]
+
+**The in-band rates broadly reproduce and the conclusion holds -- but the
+argument for it does not, and has been rewritten.**
+
+What no longer holds: the structural claim. The original said eslint's largest
+subsystem splits by parent directory into 149/1/1, "one directory with two
+strays, not three concepts". That was a fixture artifact. On the real corpora
+the largest module splits into:
+
+    eslint    (413 files)  ->  285, 17, 13, 12, 10, 5, ...   top group 69%
+    superset (1138 files)  ->   94, 75, 56, 41, 36, 34, ...  top group 8%
+
+Superset's is a genuinely even split. A concept level DOES exist in that data;
+parent directory finds it. Athena-OS lands 4/4 in band -- though at n=4 that is
+a fact about the corpus, not the method (§17.5c).
+
+What does hold, for a different reason: group COUNT is uncorrelated with the
+3-8 band because module SIZE spans three orders of magnitude (3 to 1,138 files
+per module). Superset's largest module yields 230 parent-directory groups --
+far out of band, yet averaging ~5 files each, which is a reasonable topic size.
+The band was never the right test; it is the count/size coupling already
+recorded as §17.17's third instance, showing up one level down.
+
+So `single_topic` remains the default, now on this basis: **no strategy is
+reliable ACROSS modules, because the right number of topics depends on a module
+size that varies enormously.** That is a statement about needing a size-aware
+split (§17.17's budget answer), not about the data lacking sub-structure -- the
+earlier, stronger claim that it lacks any is withdrawn.
 
 **So `TOPIC_STRATEGIES` is explicit and named rather than silently chosen.**
 The default is the least-bad option, the alternatives are one argument away, and
@@ -92,70 +120,31 @@ MIN_FILES_FOR_MODULE = 3
 # "config" and "generated" files are still things a person plausibly reads.
 EXCLUDED_PRIOR_CATEGORIES = frozenset({"migration"})
 
-# ## Catalogue vs module
+# ## Catalogue classification: REMOVED, 2026-08-17
 #
-# eslint's two largest subsystems (`lib/rules · index`, 151 members;
-# `lib/rules · ast-utils`, 139) are ~300 sibling rule files implementing a
-# common interface. No topic strategy can find structure in them because there
-# is none to find -- any split is arbitrary. That is not a labelling problem;
-# it is the wrong abstraction for this shape of subsystem, and the fix is to
-# say so rather than to keep trying titles.
+# A `classify_catalogue` predicate lived here, flagging subsystems that were
+# "many structurally homogeneous members with no sibling relationships once
+# the dominant hub is excluded" -- eslint's ~300 sibling rule files, which no
+# topic strategy can find structure in because there is none to find. Two
+# constants (>=30 members, hub-excluded density < 0.2) were calibrated
+# against eslint repo 3.
 #
-# The plain guess -- "near-zero internal edge density" -- does NOT separate
-# them from good modules when measured. Simple density (internal edges /
-# member_count) on eslint, repo 3, modularity clustering:
+# It never fired on a real corpus. Measured across Athena-OS, the fully
+# re-cloned eslint/eslint and Apache Superset: 282 subsystems, 34 of them at
+# or above the 30-member floor, ZERO flagged, with the nearest candidate 2.7x
+# above the density threshold. The calibration figures (`lib/rules · index`
+# at hub-excluded density 0.01) came from a 398-file stripped fixture in
+# which `lib/rules` was cut off from the shared helpers that give it real
+# internal structure in the actual repository; on the real clone that same
+# region measures 0.53-0.71.
 #
-#     lib/rules · index        151 members   density 1.00   (BAD)
-#     lib/rules · ast-utils    139 members   density 1.09   (BAD)
-#     lib/shared                56 members   density 1.71   (GOOD)
-#     lib/rules/utils/unicode   10 members   density 0.90   (GOOD)
-#
-# Bad is lower but not "near zero", and the ranges overlap. The reason: both
-# bad subsystems DO have ~1 edge per file -- but essentially all of them are
-# to or from ONE file. `index.js` has out-degree 149 of 151 edges (it
-# require()s every rule as a barrel); `ast-utils.js` has in-degree 136 of 151
-# (every rule imports the shared helper). Remove that single hub's edges and
-# what is left is the SIBLING structure the label is claiming to have found:
-#
-#     lib/rules · index        2 edges among the other 150 members    density 0.01
-#     lib/rules · ast-utils    15 edges among the other 138 members   density 0.11
-#     lib/shared                91 edges among the other 55 members   density 1.65
-#     lib/rules/utils/unicode   6 edges among the other 9 members     density 0.67
-#
-# That separates cleanly. A barrel file's fan-out and a shared util's fan-in
-# are not "this subsystem has internal structure" -- they are one file's
-# relationship to everything else, present in nearly every subsystem, and
-# subtracting the single highest-degree member's edges is what isolates the
-# question this classification is actually asking: do the OTHER members
-# relate to each other at all.
-CATALOGUE_MIN_MEMBERS = 30
-CATALOGUE_MAX_HUB_EXCLUDED_DENSITY = 0.2
-
-
-def classify_catalogue(member_count: int, internal_edges: list[tuple[int, int]]) -> bool:
-    """True if this subsystem is a catalogue -- many structurally homogeneous
-    members with no sibling relationships once the single dominant hub (a
-    barrel or a shared util) is excluded -- rather than a module a reader
-    would go through in order.
-
-    `internal_edges` are (from_file_id, to_file_id) pairs where BOTH ends are
-    members of this subsystem; the caller queries those, this function stays
-    pure. Below `CATALOGUE_MIN_MEMBERS` this never fires: a small subsystem
-    with no internal edges is just a small subsystem (see `unicode`, 10
-    members, called GOOD above at hub-excluded density 0.67 -- there is no
-    member count at which near-zero-after-hub-removal alone would be safe to
-    act on)."""
-    if member_count < CATALOGUE_MIN_MEMBERS:
-        return False
-    if not internal_edges:
-        return True
-    degree: dict[int, int] = {}
-    for a, b in internal_edges:
-        degree[a] = degree.get(a, 0) + 1
-        degree[b] = degree.get(b, 0) + 1
-    hub = max(degree, key=degree.get)
-    remaining = sum(1 for a, b in internal_edges if a != hub and b != hub)
-    return (remaining / member_count) < CATALOGUE_MAX_HUB_EXCLUDED_DENSITY
+# Removed rather than made configurable: the question was whether the
+# classification should exist, not what its numbers should be, and leaving
+# dead code behind a config seam invites someone to tune it until it fires.
+# The full reasoning, including why hub exclusion was the right idea even
+# though the thresholds were not, is preserved in docs/code-health-contract.md
+# §17.27 -- if a genuine catalogue turns up on a future repo this is a small
+# rebuild from a recorded argument, not a rediscovery.
 
 
 _SLUG_UNSAFE = re.compile(r"[^a-z0-9]+")
@@ -185,13 +174,19 @@ def _prior_category(path: str, category: Optional[str]) -> str:
 # module-level resources possible would mean altering an existing column from
 # NOT NULL to nullable.
 #
-# Given that a topic must exist, the choice is between INVENTING a grouping the
-# analysis never found -- all three alternatives below fail, and eslint's
-# largest subsystem splits 149/1/1 under the best of them -- and declining to
-# invent one. `single_topic` declines: one topic per module, holding every file
-# in reading-rank order. It says "this module has no sub-structure the analysis
-# can see", which is true, rather than asserting three concepts that are one
-# directory and two strays.
+# Given that a topic must exist, the choice is between applying a grouping that
+# is unreliable across modules and declining to. `single_topic` declines: one
+# topic per module, holding every file in reading-rank order.
+#
+# REVISED 2026-08-17 (see the re-measurement in this module's docstring). The
+# earlier justification was "this module has no sub-structure the analysis can
+# see". That was too strong and is withdrawn: on Superset, parent directory
+# splits the largest module into 94/75/56/41/36/34... -- real, even structure.
+# What `single_topic` now says is narrower and still true: the number of topics
+# a module should have depends on its size, module sizes span 3 to 1,138 files,
+# and no fixed strategy produces a sensible count across that range. Choosing
+# one anyway would assert a level of confidence the measurement does not
+# support -- but so would claiming the level does not exist.
 TOPIC_STRATEGIES: dict[str, Callable[[str, Optional[str]], str]] = {
     "single_topic": lambda path, cat: "Files",
     "parent_directory": lambda path, cat: _parent_directory(path),
@@ -281,12 +276,6 @@ class CandidateModule:
     # shows for this same group, and disagreeing with it silently would be the
     # exact honesty problem `skipped_reason` already exists to avoid.
     excluded_migration_count: int = 0
-    # Set by the caller via `classify_catalogue` -- edges are not data this
-    # dataclass or `map_subsystem_to_module` has, so this is never computed
-    # here, only carried. A reference to look things up in, not a reading
-    # list: the UI is expected to branch on this rather than render it as an
-    # ordinary module, once anything renders these at all.
-    is_catalogue: bool = False
 
     @property
     def resource_count(self) -> int:
@@ -311,7 +300,6 @@ class CandidateModule:
             "subsystem_id": self.subsystem_id, "repo_id": self.repo_id,
             "member_count": self.member_count,
             "excluded_migration_count": self.excluded_migration_count,
-            "is_catalogue": self.is_catalogue,
             "topic_count": len(self.topics),
             "resource_count": self.resource_count,
             "topics": [t.to_dict(resource_limit) for t in self.topics],
@@ -412,7 +400,16 @@ def map_subsystem_to_module(
     for t_index, (group_key, items) in enumerate(
             sorted(grouped.items(), key=lambda kv: best_rank(kv[1]))):
         module.topics.append(CandidateTopic(
-            slug=slugify(f"{group_key}-{subsystem_id}-{t_index}"),
+            # Scoped by GROUP KEY and position only -- deliberately NOT by
+            # subsystem_id. `topics` is unique on (module_id, slug), so the id
+            # added nothing; what it did add was instability, because
+            # CodeSubsystem rows are replaced wholesale on every clustering run
+            # and the id therefore changes. That made a topic un-matchable
+            # across a re-cluster, so persistence created a SECOND topic beside
+            # the first and stranded the original's resources and its
+            # topic_progress on a module that no longer showed it. Same defect
+            # as the module slug, one level down (contract §17.28).
+            slug=slugify(f"{group_key}-{t_index}"),
             title=group_key,
             order_index=t_index,
             resources=[
@@ -500,6 +497,200 @@ def unclustered_module(
     return module
 
 
+def group_modules_into_stages(
+    modules: list[CandidateModule],
+    layer_by_file_id: dict[int, Optional[int]],
+) -> list[dict]:
+    """Groups PRODUCED modules (skipped_reason is None) into stages by
+    dependency layer -- the same BFS-from-entry-points depth the Layers view
+    already computes and renders as columns ("Layer N" in LayersView.tsx). A
+    repo-roadmap with every module in one stage is a bag; grouped by layer
+    it is a reading order: stage "Layer 0" is entry points, "Layer 1" is
+    what they reach, and so on -- the same thing the Layers view already
+    demonstrates works, one level up (modules instead of files).
+
+    A module's stage is the MINIMUM layer among its own members that have a
+    known layer -- the earliest point a reader could reach ANY file in it --
+    not its centre file's layer, which can sit considerably deeper than the
+    module's most-reachable member and would place the whole module later
+    than a reader could actually first encounter it.
+
+    A module with no member reachable from any entry point (every member's
+    layer is None) goes into a distinct "Unreachable" stage, appended last --
+    the same convention LayersView already uses for individual files, not
+    folded into the highest-numbered stage: reachable-but-far and
+    reachable-by-nothing are structurally different facts, not points on the
+    same scale.
+    """
+    produced = [m for m in modules if m.skipped_reason is None]
+
+    def module_stage(m: CandidateModule) -> Optional[int]:
+        known = [
+            layer_by_file_id[r.file_id]
+            for t in m.topics for r in t.resources
+            if r.file_id is not None and layer_by_file_id.get(r.file_id) is not None
+        ]
+        return min(known) if known else None
+
+    def reading_order_key(m: CandidateModule) -> tuple:
+        # Best-ranked member first -- same ordering principle as topics
+        # within a module and resources within a topic elsewhere here.
+        centre_rank = None
+        for t in m.topics:
+            if t.resources:
+                centre_rank = t.resources[0].rank
+                break
+        return (centre_rank is None, centre_rank or 0)
+
+    by_stage: dict[Optional[int], list[CandidateModule]] = {}
+    for m in produced:
+        by_stage.setdefault(module_stage(m), []).append(m)
+
+    stages = [
+        {"title": f"Layer {layer}", "modules": sorted(by_stage[layer], key=reading_order_key)}
+        for layer in sorted(k for k in by_stage if k is not None)
+    ]
+    if None in by_stage:
+        stages.append({"title": "Unreachable", "modules": sorted(by_stage[None], key=reading_order_key)})
+    return stages
+
+
+DEFAULT_LAYER_COVERAGE_THRESHOLD = 0.40
+
+
+def layer_coverage(layer_by_file_id: dict[int, Optional[int]]) -> float:
+    """Fraction of files reachable from any entry point. The input for
+    deciding whether layer-based staging is even applicable to a repo."""
+    if not layer_by_file_id:
+        return 0.0
+    reached = sum(1 for v in layer_by_file_id.values() if v is not None)
+    return reached / len(layer_by_file_id)
+
+
+def _subsystem_depth(module_ids: list[int], dependencies: dict[int, set]) -> dict[int, int]:
+    """Longest-path depth of each module in the module-level dependency DAG,
+    with cycles collapsed by iterating to a fixed point rather than by
+    condensing -- a module in a cycle gets the depth of the cycle's earliest
+    member, which is the honest answer (there is no order within a cycle).
+
+    Bounded by len(module_ids) iterations so a cycle cannot loop forever."""
+    depth = {mid: 0 for mid in module_ids}
+    known = set(module_ids)
+    for _ in range(len(module_ids)):
+        changed = False
+        for mid in module_ids:
+            deps = [d for d in dependencies.get(mid, ()) if d in known and d != mid]
+            if not deps:
+                continue
+            candidate = max(depth[d] for d in deps) + 1
+            if candidate > depth[mid] and candidate < len(module_ids):
+                depth[mid] = candidate
+                changed = True
+        if not changed:
+            break
+    return depth
+
+
+def stage_modules(
+    modules: list[CandidateModule],
+    layer_by_file_id: dict[int, Optional[int]],
+    *,
+    dependencies: Optional[dict[int, set]] = None,
+    layer_coverage_threshold: float = DEFAULT_LAYER_COVERAGE_THRESHOLD,
+) -> dict:
+    """Stages a repo's modules on whichever basis its graph actually supports,
+    and says which one it used.
+
+    Layer staging assumes most of the repo is reachable from its entry points.
+    That assumption is repo-specific, not generally true, and the spread is
+    not marginal -- measured: Athena-OS 55.3%, eslint 26.9%, Superset 13.2%.
+    Superset's figure is a CEILING, not a gap to be closed by better entry
+    detection: it is a Flask app wired through `create_app()` and dynamic
+    blueprint registration, which produce no static import edges at all, so
+    adding its real `console_scripts` entry point (which this project did)
+    moved reachability by two files. Presenting 87% of such a repo under one
+    stage called "Unreachable" would report a property of static analysis as
+    though it were a property of the codebase.
+
+    Below the threshold, modules are staged by their own dependency depth
+    instead -- which module must be read before which -- a relation that needs
+    no entry points and is therefore available on exactly the repos where
+    layers are not. `dependencies` maps a module's subsystem_id to the set of
+    subsystem_ids it imports from; the caller queries them, this function
+    stays pure.
+
+    The threshold is a parameter, not a judgment call made here. On the three
+    repos measured, 30%, 40% and 50% all produce the identical basis for all
+    three -- no repo sits near a boundary -- so the exact value is not
+    currently load-bearing, and that is a reason to state it rather than to
+    treat any of the three as validated.
+    """
+    coverage = layer_coverage(layer_by_file_id)
+    basis = "layer" if coverage >= layer_coverage_threshold else "subsystem"
+
+    if basis == "layer":
+        # Titles carry the basis, not just the number: "Layer 2" alone does
+        # not tell a reader whether it means two hops from an entry point or
+        # the third tier of a dependency ordering, and those are different
+        # claims that this function can return on different repos.
+        stages = [
+            {**s, "title": s["title"] if s["title"] == "Unreachable"
+                  else f"{s['title']} · from entry points"}
+            for s in group_modules_into_stages(modules, layer_by_file_id)
+        ]
+        return {
+            "basis": "layer",
+            "layer_coverage": coverage,
+            "layer_coverage_threshold": layer_coverage_threshold,
+            "basis_reason": (
+                f"{coverage:.1%} of files are reachable from an entry point, at or above "
+                f"the {layer_coverage_threshold:.0%} threshold, so stages are dependency "
+                f"layers from the entry points."
+            ),
+            "stages": stages,
+        }
+
+    produced = [m for m in modules if m.skipped_reason is None]
+
+    def reading_order_key(m: CandidateModule) -> tuple:
+        centre_rank = None
+        for t in m.topics:
+            if t.resources:
+                centre_rank = t.resources[0].rank
+                break
+        return (centre_rank is None, centre_rank or 0)
+
+    depth = _subsystem_depth([m.subsystem_id for m in produced], dependencies or {})
+    by_depth: dict[int, list[CandidateModule]] = {}
+    for m in produced:
+        by_depth.setdefault(depth.get(m.subsystem_id, 0), []).append(m)
+
+    # Stage numbers are the ORDINAL position of each occupied depth, not the
+    # raw longest-path depth. Those are sparse -- a real run produced depths
+    # 0, 1, 117, 118, 119, 120, 121 -- and printing them would imply 116
+    # missing stages that never existed. The ordering is identical; only the
+    # label is dense.
+    stages = [
+        {"title": f"Stage {position} · by dependency",
+         "modules": sorted(by_depth[d], key=reading_order_key)}
+        for position, d in enumerate(sorted(by_depth), start=1)
+    ]
+    return {
+        "basis": "subsystem",
+        "layer_coverage": coverage,
+        "layer_coverage_threshold": layer_coverage_threshold,
+        "basis_reason": (
+            f"Only {coverage:.1%} of files are reachable from an entry point, below the "
+            f"{layer_coverage_threshold:.0%} threshold. For this repo that is a limit of "
+            f"static import analysis rather than a fact about the code, so stages are "
+            f"ordered by which subsystem depends on which instead of by distance from an "
+            f"entry point. No stage is labelled Unreachable, because reachability is not "
+            f"the basis being used."
+        ),
+        "stages": stages,
+    }
+
+
 def summarise(modules: list[CandidateModule], *, topic_strategy: str) -> dict:
     """Counters for the preview, including the distributions that decide whether
     this shape is right -- against the curated numbers, so the comparison does
@@ -518,7 +709,6 @@ def summarise(modules: list[CandidateModule], *, topic_strategy: str) -> dict:
         "subsystems_considered": len(modules),
         "modules_produced": len(produced),
         "subsystems_skipped": len(skipped),
-        "modules_flagged_catalogue": sum(1 for m in produced if m.is_catalogue),
         "migration_files_excluded": sum(m.excluded_migration_count for m in modules),
         "topics_per_module": stat(topics_per),
         "resources_per_module": stat(res_per_module),

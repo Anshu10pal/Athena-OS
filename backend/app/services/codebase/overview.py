@@ -40,12 +40,9 @@ from sqlalchemy.orm import Session
 
 from app.db.models import CodeFile, CodeImport, CodeSubsystem, CodeSymbol, Repo
 from app.services.codebase.dir_aggregation import dirname_of
+from app.services.codebase.edge_weights import is_test_file
 
 HOTSPOT_LIMIT = 10
-# Path segments that mark a file as a test. Substring-matched against the
-# POSIX path, matching how the rest of this codebase already identifies
-# tests (dir_aggregation's kind assignment).
-TEST_PATH_MARKERS = ("test_", "_test.", "/tests/", "/test/", ".test.", ".spec.", "__tests__")
 
 
 def _pct(numerator: int, denominator: int) -> float:
@@ -89,7 +86,7 @@ def counts(db: Session, repo: Repo) -> dict:
     # already treats as a module-level unit (dir_aggregation.dirname_of).
     paths = [p for (p,) in db.query(CodeFile.path).filter(CodeFile.repo_id == rid).all()]
     directories = len({dirname_of(p) for p in paths})
-    test_files = sum(1 for p in paths if any(m in p for m in TEST_PATH_MARKERS))
+    test_files = sum(1 for p in paths if is_test_file(p))
 
     return {
         "files": total_files,

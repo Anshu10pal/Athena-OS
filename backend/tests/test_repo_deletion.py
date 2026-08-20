@@ -318,6 +318,83 @@ class TestReport:
         assert payload["directory_reason"], "a reason is always reported, not only on refusal"
 
 
+class TestDeletionAuditIsDurable:
+    """The instrumentation that proved its own inadequacy.
+
+    `delete_repo` had no logging; a repo vanished unexplained; a print was
+    added; the print then fired for exactly one real deletion and went to a
+    stdout nobody captured, leaving the original question -- was delete_repo
+    called, and on what? -- exactly as unanswerable as before.
+
+    These pin the distinction that incident taught: "the code path fires" and
+    "the output can be read back afterwards" are different claims, and only the
+    second is any use at the point somebody notices a repo is missing.
+    """
+
+    def test_LOADBEARING_a_deletion_leaves_a_retrievable_record(self, fk_session, tmp_path):
+        from app.db.models import RepoDeletionAudit
+        repo = _populate(fk_session, source_kind="local", local_path=str(tmp_path))
+        repo_id = repo.id
+        before = _counts(fk_session, repo_id)
+
+        deletion.delete_repo(fk_session, repo, "acme/widget")
+
+        # Queried fresh, not held from the write -- the claim is retrieval, not
+        # that an object stayed in memory.
+        audit = (fk_session.query(RepoDeletionAudit)
+                 .filter(RepoDeletionAudit.repo_id == repo_id).one())
+        assert audit.rows_deleted == before, \
+            "the record must hold the BEFORE counts, which is what a later " \
+            "reader needs and cannot recompute once the rows are gone"
+        assert audit.rows_total == sum(before.values())
+        assert audit.reason, "a deletion with no attributable reason is the gap itself"
+        assert audit.repo_label
+        assert audit.source_kind == "local"
+
+    def test_LOADBEARING_the_record_outlives_the_repo_row(self, fk_session, tmp_path):
+        """No ForeignKey to `repos`, deliberately: the row's whole purpose is to
+        survive the row it describes. A FK would either block the delete or
+        cascade the evidence away."""
+        from app.db.models import Repo as RepoModel, RepoDeletionAudit
+        repo = _populate(fk_session, source_kind="local", local_path=str(tmp_path))
+        repo_id = repo.id
+        deletion.delete_repo(fk_session, repo, "acme/widget")
+
+        assert fk_session.get(RepoModel, repo_id) is None
+        assert fk_session.query(RepoDeletionAudit).filter(
+            RepoDeletionAudit.repo_id == repo_id).count() == 1
+
+    def test_eviction_is_recorded_too_not_only_user_deletions(self, fk_session, tmp_path):
+        """An unattended deletion is the case that most needs a record -- there
+        is no user to have noticed it happening."""
+        from app.db.models import RepoDeletionAudit
+        repo = _populate(fk_session, source_kind="clone", local_path=str(tmp_path))
+        repo_id = repo.id
+        deletion.delete_repo_unconfirmed(fk_session, repo, reason="LRU cache eviction: test")
+
+        audit = (fk_session.query(RepoDeletionAudit)
+                 .filter(RepoDeletionAudit.repo_id == repo_id).one())
+        assert "eviction" in audit.reason.lower()
+
+    def test_the_audit_survives_a_later_deletion_of_another_repo(self, fk_session, tmp_path):
+        """An audit trail a delete can erase is not one."""
+        from app.db.models import RepoDeletionAudit
+        first = _populate(fk_session, source_kind="local", local_path=str(tmp_path / "a"))
+        deletion.delete_repo(fk_session, first, "acme/widget")
+        # Keyed on the AUDIT row's own id, not the repo's: SQLite reuses the
+        # rowid just freed, so the second repo is handed the same repo_id and a
+        # repo_id-based assertion would be testing id reuse rather than
+        # survival. That reuse is also exactly why the audit needs its own key.
+        first_audit_id = fk_session.query(RepoDeletionAudit).one().id
+
+        second = _populate(fk_session, source_kind="local", local_path=str(tmp_path / "b"))
+        deletion.delete_repo(fk_session, second, "acme/widget")
+
+        assert fk_session.query(RepoDeletionAudit).count() == 2
+        assert fk_session.get(RepoDeletionAudit, first_audit_id) is not None, \
+            "the earlier deletion's record must survive a later deletion"
+
+
 class TestEvictionDeletesEverything:
     """Item 2. `evict_lru_if_needed` used to call `db.delete(r)` on the Repo row
     alone, and nothing cascades -- so an eviction left the whole analysis behind

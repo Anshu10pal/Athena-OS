@@ -30,13 +30,107 @@ class TestConfigDetection:
         assert (cat, source) == ("config", "pattern")
 
 
+_REAL_ALEMBIC_REVISION = '''"""add a column"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = "abc123"
+down_revision = "def456"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column("table", sa.Column("x", sa.Integer()))
+
+
+def downgrade():
+    op.drop_column("table", "x")
+'''
+
+
 class TestMigrationDetection:
     def test_alembic_versions_path(self):
+        # No revision/down_revision here -- structural detection can't fire,
+        # so this is exactly the path-marker fallback path.
         cat, source = classify_file_local_category(
             path="backend/alembic/versions/abc123_add_thing.py", source_text="def upgrade(): pass\n",
             symbol_count=1, reexport_count=0,
         )
         assert (cat, source) == ("migration", "pattern")
+
+    def test_LOADBEARING_a_real_revision_is_detected_regardless_of_its_folder_name(self):
+        # The bug this closes: node_priors.py's only migration marker was
+        # "alembic/versions/", Alembic's own default layout. Superset's
+        # actual path is "superset/migrations/versions/" -- doesn't contain
+        # that substring, so 378 real migration files were classified
+        # "source" despite being unmistakably Alembic revisions by content.
+        cat, source = classify_file_local_category(
+            path="superset/migrations/versions/2020-01-01_abc123_add_a_column.py",
+            source_text=_REAL_ALEMBIC_REVISION, symbol_count=2, reexport_count=0,
+        )
+        assert (cat, source) == ("migration", "structural")
+
+    def test_the_root_revision_has_down_revision_None_and_is_still_detected(self):
+        # Alembic's own template always assigns down_revision, even on the
+        # very first migration -- `down_revision = None`. The assignment
+        # existing is the structural fact, not what value it holds.
+        source = _REAL_ALEMBIC_REVISION.replace('down_revision = "def456"', "down_revision = None")
+        cat, sourcekind = classify_file_local_category(
+            path="superset/migrations/versions/0001_initial.py",
+            source_text=source, symbol_count=2, reexport_count=0,
+        )
+        assert (cat, sourcekind) == ("migration", "structural")
+
+    def test_flask_migrate_s_identical_template_is_also_detected(self):
+        # Flask-Migrate wraps Alembic and inherits the exact same revision
+        # shape -- proof the structural signal generalises past one
+        # project's folder choice, not just Superset's.
+        cat, source = classify_file_local_category(
+            path="migrations/versions/abc123_add_a_column.py",
+            source_text=_REAL_ALEMBIC_REVISION, symbol_count=2, reexport_count=0,
+        )
+        assert (cat, source) == ("migration", "structural")
+
+    def test_a_variable_named_revision_alone_is_not_enough(self):
+        # revision alone is too weak a signal by itself -- some unrelated
+        # file could plausibly define a variable with that name. Without
+        # down_revision AND an upgrade/downgrade function, this must not
+        # fire.
+        cat, source = classify_file_local_category(
+            path="app/models.py", source_text="revision = 3\n", symbol_count=0, reexport_count=0,
+        )
+        assert cat != "migration"
+
+    def test_revision_and_down_revision_without_upgrade_or_downgrade_is_not_enough(self):
+        source = 'revision = "abc"\ndown_revision = None\n'
+        cat, _ = classify_file_local_category(
+            path="app/models.py", source_text=source, symbol_count=0, reexport_count=0,
+        )
+        assert cat != "migration"
+
+    def test_unparseable_python_does_not_crash_and_falls_back_to_the_path_marker(self):
+        # ast.parse can throw on content extract_python's tree-sitter parser
+        # tolerates -- ingest.py's own philosophy is "one unparseable file
+        # must not abort the whole ingest," and this function must honour
+        # that rather than propagate a SyntaxError.
+        cat, source = classify_file_local_category(
+            path="backend/alembic/versions/broken.py", source_text="def upgrade(:\n    pass",
+            symbol_count=0, reexport_count=0,
+        )
+        assert (cat, source) == ("migration", "pattern")
+
+    def test_a_non_python_file_never_reaches_the_ast_parser(self):
+        # Alembic revisions are always .py -- a JS/TS file with a coincidental
+        # module-level `revision`/`down_revision` pair (unlikely, but this is
+        # the guard, not a probability argument) must not be sent through
+        # Python's ast.parse at all, path marker aside.
+        cat, _ = classify_file_local_category(
+            path="frontend/src/revision.ts",
+            source_text='export const revision = "x"; export const down_revision = null; function upgrade() {}',
+            symbol_count=1, reexport_count=0,
+        )
+        assert cat != "migration"
 
 
 class TestGeneratedDetection:

@@ -35,7 +35,32 @@ USAGE_KIND_PRIORITY = ("inherits", "calls", "heavy_use", "light_use", "type_only
 
 ALL_KINDS = ("inherits", "calls", "heavy_use", "light_use", "type_only", "reexport", "test_edge", "unresolvable_binding")
 
-TEST_PATH_MARKERS = ("test_", "_test.", "/tests/", ".test.", ".spec.", "__tests__/")
+# Directory names that make everything beneath them a test, checked as PATH
+# SEGMENTS rather than as substrings. The substring version this replaced
+# used "/tests/", which requires a leading slash and therefore matched a
+# nested tests/ directory but never a TOP-LEVEL one -- so eslint/eslint's
+# entire 963-file tests/ tree and 443 of Superset's test files were
+# classified as ordinary source and their import edges weighted as real
+# coupling instead of test_edge's 0.05. Segment matching has no such
+# position dependency; it is also what stops "latest_version.py" and
+# "contest.py" from matching, which a bare "test" substring would.
+TEST_DIR_SEGMENTS = frozenset({"test", "tests", "__tests__", "__mocks__", "spec", "specs"})
+
+# Filename conventions, applied to the BASENAME only. Anchored at a word
+# boundary of "_", "." or "-" on at least one side in every branch, which is
+# what keeps "testing_utils.py" (test infrastructure, not a test) and
+# "latest_thing.py" out while admitting test_x.py, x_test.py, x_tests.py,
+# x.test.ts, x.spec.ts and conftest.py. A `conftest.py`-sibling rule was
+# considered and measured: on both Python repos here it flagged zero files
+# the segment rule had not already caught, so it was not worth the
+# directory-listing argument it would have required.
+TEST_FILENAME_RE = re.compile(
+    r"^test[_.\-]"
+    r"|[_.\-]tests?[_.\-]"
+    r"|[_.\-]tests?\."
+    r"|\.spec\."
+    r"|^conftest\.py$"
+)
 
 _HEAVY_USE_THRESHOLD = 5
 
@@ -70,8 +95,14 @@ def resolve_weight(kind: str, weights: Optional[dict] = None) -> float:
 
 
 def is_test_file(path: str) -> bool:
-    lower = path.lower()
-    return any(marker in lower for marker in TEST_PATH_MARKERS)
+    """Structural, not marker-list-based: a path is a test if any DIRECTORY
+    segment names a test directory, or if the basename follows a test-file
+    naming convention. Backslashes are normalized first -- CodeFile.path is
+    POSIX, but this is also called with raw paths during ingest on Windows."""
+    segments = path.replace("\\", "/").lower().split("/")
+    if any(segment in TEST_DIR_SEGMENTS for segment in segments[:-1]):
+        return True
+    return bool(TEST_FILENAME_RE.search(segments[-1]))
 
 
 def _appears_in_bases_list(source_text: str, name: str) -> bool:

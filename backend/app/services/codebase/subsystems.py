@@ -46,13 +46,16 @@ cluster homogeneity against the same ESLint ground truth (see
 docs/external-validation-eslint.md's Round 4 once it's run). It is not
 assumed to be better just because it uses a different technique.
 """
+import math
 import time
 from collections import Counter
+from pathlib import Path
 from typing import Optional
 
 import hdbscan as hdbscan_lib
 import networkx as nx
 import numpy as np
+import yaml
 from networkx.algorithms.community import greedy_modularity_communities, louvain_communities
 from sqlalchemy.orm import Session
 
@@ -62,6 +65,23 @@ from app.services.codebase.dir_aggregation import dirname_of
 
 VALID_ALGORITHMS = ("modularity", "louvain", "hdbscan")
 LOUVAIN_SEED = 42
+
+# networkx's own default for both community algorithms, and the value every
+# clustering result in this project's history was produced at. Kept as the
+# default deliberately -- see config/subsystem_clustering.yaml for why this
+# became config (the resolution limit finding in
+# docs/external-validation-eslint.md Round 5/7) and why it is NOT being
+# retuned on the strength of one repo's sweep.
+DEFAULT_SUBSYSTEM_CLUSTERING_CONFIG = {
+    "resolution": 1.0,
+    # Per-cluster stability: re-cluster at resolution * multiplier and record
+    # which clusters survive. On by default -- see stability_report for why
+    # this and not sqrt(2m) is what makes a cluster boundary judgeable, and
+    # for the measured cost (never more than ~1x the baseline run, and the
+    # ratio does not grow with graph size).
+    "stability_check": True,
+    "stability_resolution_multiplier": 2.0,
+}
 # HDBSCAN's own tuning knob for "how many files make a real cluster,"
 # analogous in purpose to modularity/Louvain's implicit tendency to merge
 # small groups but not remotely equivalent in mechanism -- these are
@@ -144,6 +164,128 @@ def _build_undirected_weighted_graph(db: Session, repo: Repo, file_by_id: dict) 
     return graph
 
 
+def _subsystem_clustering_config_path() -> Path:
+    from app.core.config import BACKEND_DIR, settings
+    p = Path(settings.SUBSYSTEM_CLUSTERING_CONFIG_PATH)
+    return p if p.is_absolute() else BACKEND_DIR / p
+
+
+def load_subsystem_clustering_config() -> dict:
+    path = _subsystem_clustering_config_path()
+    if not path.is_file():
+        return dict(DEFAULT_SUBSYSTEM_CLUSTERING_CONFIG)
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return {**DEFAULT_SUBSYSTEM_CLUSTERING_CONFIG, **data}
+
+
+def resolution_report(graph: nx.Graph, clusters: list) -> dict:
+    """The Fortunato-Barthelemy resolution limit, computed rather than cited.
+
+    m is the graph's total edge WEIGHT, not its edge count -- this graph is
+    weighted and both community algorithms run with weight="weight", so the
+    unweighted count would answer a question neither algorithm is asking.
+    The two differ substantially in practice (eslint/eslint: 1,482 edges but
+    1,033.7 total weight, sqrt(2m) 54.4 vs. 45.5), so which one is meant has
+    to be stated, not left to the reader.
+
+    sqrt(2m) is reported as CONTEXT, not as a per-cluster flag. It states what
+    modularity *could* have failed to resolve, which turns out to be a poor
+    predictor of what it *did* fail to resolve -- measured against the
+    perturbation check in `stability_report`, it errs in both directions:
+
+        repo         below sqrt(2m)     actually dissolved at 2*gamma
+        Athena-OS    2/6   (33%)        4/6   (67%)
+        eslint       19/21 (90%)        3/21  (14%)
+        Superset     247/255 (97%)      16/255 (6%)
+
+    Wildly over-flagging on the large graphs, under-flagging on the small one.
+    Those are two different questions and the scalar was standing in for the
+    wrong one, so `clusters_below_sqrt_2m` is named descriptively rather than
+    as "at risk" -- the risk verdict belongs to the perturbation check.
+
+    Cheap by construction: one pass over the edges, no re-clustering.
+    """
+    total_weight = float(sum(d["weight"] for _, _, d in graph.edges(data=True)))
+    threshold = math.sqrt(2 * total_weight) if total_weight > 0 else 0.0
+
+    cluster_of = {fid: i for i, c in enumerate(clusters) for fid in c}
+    internal_weight = {i: 0.0 for i in range(len(clusters))}
+    for a, b, d in graph.edges(data=True):
+        ca, cb = cluster_of.get(a), cluster_of.get(b)
+        if ca is not None and ca == cb:
+            internal_weight[ca] += d["weight"]
+
+    multi = [i for i, c in enumerate(clusters) if len(c) >= 2]
+    sizes = sorted((len(clusters[i]) for i in multi), reverse=True)
+    return {
+        "resolution_limit": {
+            "total_edge_weight": round(total_weight, 3),
+            "edge_count": graph.number_of_edges(),
+            "sqrt_2m": round(threshold, 3),
+            "clusters_below_sqrt_2m": sum(1 for i in multi if internal_weight[i] <= threshold),
+            "clusters_total": len(multi),
+        },
+        "cluster_sizes": sizes,
+        "internal_weight_by_index": {i: round(internal_weight[i], 3) for i in multi},
+    }
+
+
+def stability_probe(graph: nx.Graph, resolution: float, multiplier: float) -> list:
+    """The single extra clustering pass the stability check costs.
+
+    Separate from `stability_report` so one probe can be scored against BOTH
+    algorithms' clusterings: the question is whether a grouping of these files
+    survives a resolution change on this graph, which does not depend on which
+    algorithm proposed the grouping. Computing it per algorithm would double
+    the cost to answer the same question.
+
+    Measured cost: 0.06s on 257 files, 1.44s on 1,447, 15.6s on 6,523 --
+    0.44x, 0.90x and 0.49x of the baseline clustering run respectively. The
+    ratio does NOT grow with graph size, because a higher gamma yields smaller
+    communities and the greedy merge converges sooner.
+
+    Only the finer direction is probed (higher gamma). A lower gamma merges
+    more, so every cluster would trivially remain "together" inside some
+    larger one and the test would pass vacuously.
+    """
+    return cluster_modularity(graph, resolution=resolution * multiplier)
+
+
+def stability_report(clusters: list, probe: list, probe_resolution: float) -> dict:
+    """Does each cluster survive a change of resolution, or was its boundary an
+    artifact of the particular gamma it was found at?
+
+    A cluster is stable when all of its members land together again in
+    `probe`. One that scatters was a partition of convenience.
+
+    This is what actually discharges the contract's third bar (§17.0) --
+    sqrt(2m) states what modularity *could* fail to resolve, this states what
+    it *did*, and the two disagree badly in both directions (see
+    `resolution_report`).
+    """
+    index_of = {fid: i for i, c in enumerate(probe) for fid in c}
+
+    stable_by_index = {}
+    for i, members in enumerate(clusters):
+        if len(members) < 2:
+            continue
+        landed = {index_of.get(fid) for fid in members}
+        stable_by_index[i] = len(landed) == 1
+
+    total = len(stable_by_index)
+    survived = sum(1 for v in stable_by_index.values() if v)
+    return {
+        "stability": {
+            "probe_resolution": round(probe_resolution, 4),
+            "clusters_tested": total,
+            "clusters_stable": survived,
+            "clusters_dissolved": total - survived,
+            "stable_fraction": round(survived / total, 4) if total else None,
+        },
+        "stable_by_index": stable_by_index,
+    }
+
+
 def _sorted_clusters(raw_clusters) -> list:
     """Sort cluster OUTPUTS too, not just graph inputs -- networkx's own
     community-list order is an implementation detail. Deterministic
@@ -153,12 +295,16 @@ def _sorted_clusters(raw_clusters) -> list:
     return clusters
 
 
-def cluster_modularity(graph: nx.Graph) -> list:
-    return _sorted_clusters(greedy_modularity_communities(graph, weight="weight"))
+def cluster_modularity(graph: nx.Graph, resolution: float = 1.0) -> list:
+    return _sorted_clusters(
+        greedy_modularity_communities(graph, weight="weight", resolution=resolution)
+    )
 
 
-def cluster_louvain(graph: nx.Graph, seed: int = LOUVAIN_SEED) -> list:
-    return _sorted_clusters(louvain_communities(graph, weight="weight", seed=seed))
+def cluster_louvain(graph: nx.Graph, seed: int = LOUVAIN_SEED, resolution: float = 1.0) -> list:
+    return _sorted_clusters(
+        louvain_communities(graph, weight="weight", seed=seed, resolution=resolution)
+    )
 
 
 def cluster_hdbscan(vectors: np.ndarray, ordered_ids: list,
@@ -292,7 +438,10 @@ def cycle_cluster_coherence(db: Session, repo: Repo, path_of: dict, cluster_of: 
 
 
 def _persist_algorithm(db: Session, repo: Repo, algorithm: str, clusters: list,
-                        path_of: dict, fan_in_of: dict) -> tuple:
+                        path_of: dict, fan_in_of: dict,
+                        resolution: Optional[float] = None,
+                        internal_weight_by_index: Optional[dict] = None,
+                        stable_by_index: Optional[dict] = None) -> tuple:
     """Replaces this algorithm's CodeSubsystem rows wholesale (decoupled
     from ingest, same shape as CodeFileRank's per-scorer replace), except
     a custom_label survives IF the new cluster overlaps a previously
@@ -348,7 +497,9 @@ def _persist_algorithm(db: Session, repo: Repo, algorithm: str, clusters: list,
             member_count=len(members), dominant_prefix_label=dom_label,
             dominant_prefix_count=dom_count, top_fan_in_label=top_label,
             top_fan_in_file_id=top_fid, custom_label=custom_label,
-            active_label_rule=active_rule,
+            active_label_rule=active_rule, resolution=resolution,
+            internal_weight=(internal_weight_by_index or {}).get(index),
+            stable_under_perturbation=(stable_by_index or {}).get(index),
         )
         db.add(row)
         db.flush()
@@ -378,7 +529,7 @@ def compute_subsystems(db: Session, repo: Repo, on_progress=None) -> dict:
         return _compute_subsystems_locked(db, repo, on_progress=on_progress)
 
 
-CLUSTERING_PHASES = 3  # graph build, modularity, louvain
+CLUSTERING_PHASES = 4  # graph build, modularity, louvain, stability probe
 
 
 def _compute_subsystems_locked(db: Session, repo: Repo, on_progress=None) -> dict:
@@ -391,28 +542,70 @@ def _compute_subsystems_locked(db: Session, repo: Repo, on_progress=None) -> dic
         if on_progress is not None:
             on_progress("clustering", step, CLUSTERING_PHASES, message)
 
+    config = load_subsystem_clustering_config()
+    resolution = float(config["resolution"])
+    stability_enabled = bool(config["stability_check"])
+    stability_multiplier = float(config["stability_resolution_multiplier"])
+
     report(0, "Building the co-import graph")
     graph = _build_undirected_weighted_graph(db, repo, file_by_id)
     report(1, "Grouping files (modularity)")
-    modularity_clusters = cluster_modularity(graph)
+    modularity_clusters = cluster_modularity(graph, resolution=resolution)
     report(2, "Grouping files (Louvain)")
-    louvain_clusters = cluster_louvain(graph)
-    report(3, "Recording subsystems")
+    louvain_clusters = cluster_louvain(graph, resolution=resolution)
+
+    # One probe clustering, scored against BOTH algorithms' groupings -- see
+    # stability_probe for why it is not computed per algorithm.
+    stable_by_index_for = {"modularity": None, "louvain": None}
+    stability_for = {}
+    if stability_enabled:
+        report(3, "Checking cluster stability")
+        probe = stability_probe(graph, resolution, stability_multiplier)
+        probe_resolution = resolution * stability_multiplier
+        for algorithm, clusters in (("modularity", modularity_clusters),
+                                    ("louvain", louvain_clusters)):
+            rep = stability_report(clusters, probe, probe_resolution)
+            stable_by_index_for[algorithm] = rep["stable_by_index"]
+            stability_for[algorithm] = rep["stability"]
+
+    report(4, "Recording subsystems")
 
     agreement = algorithm_agreement(modularity_clusters, louvain_clusters)
     repo.subsystem_algorithm_agreement = agreement
 
-    report = {"agreement": agreement, "algorithms": {}}
+    report = {"agreement": agreement, "resolution": resolution, "algorithms": {}}
     cluster_of_by_algo = {}
     for algorithm, clusters in (("modularity", modularity_clusters), ("louvain", louvain_clusters)):
-        cluster_of, carried, reset = _persist_algorithm(db, repo, algorithm, clusters, path_of, fan_in_of)
+        res_report = resolution_report(graph, clusters)
+        cluster_of, carried, reset = _persist_algorithm(
+            db, repo, algorithm, clusters, path_of, fan_in_of,
+            resolution=resolution,
+            internal_weight_by_index=res_report["internal_weight_by_index"],
+            stable_by_index=stable_by_index_for[algorithm],
+        )
         cluster_of_by_algo[algorithm] = cluster_of
         report["algorithms"][algorithm] = {
             "cluster_count": sum(1 for c in clusters if len(c) >= 2),
             "unclustered_count": sum(1 for c in clusters if len(c) < 2),
             "labels_carried_over": carried,
             "labels_reset": reset,
+            "resolution": resolution,
+            "resolution_limit": res_report["resolution_limit"],
+            # None, not a zeroed block, when the check is disabled -- "not
+            # measured" and "nothing was stable" must not read alike.
+            "stability": stability_for.get(algorithm),
+            "cluster_sizes": res_report["cluster_sizes"],
         }
+        if algorithm == "modularity":
+            # Persisted for the primary algorithm only, same reasoning as
+            # cycle_coherence below -- modularity is the leading signal, and
+            # Louvain's own figures stay recoverable from its CodeSubsystem
+            # rows (resolution/internal_weight/stability are stored per row
+            # for both).
+            repo.subsystem_resolution_limit = {
+                **res_report["resolution_limit"],
+                "stability": stability_for.get("modularity"),
+            }
 
     # Cycle-cluster coherence is reported against the primary algorithm
     # (modularity) -- it's the leading signal per I0's design discussion;

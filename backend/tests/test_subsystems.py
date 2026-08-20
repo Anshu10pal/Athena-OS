@@ -34,6 +34,9 @@ from app.services.codebase.subsystems import (
     cluster_modularity,
     compute_subsystems,
     compute_subsystems_hdbscan,
+    resolution_report,
+    stability_probe,
+    stability_report,
     subsystem_column_for,
 )
 
@@ -116,6 +119,104 @@ class TestClusterFunctions:
     def test_modularity_deterministic_across_repeated_calls(self):
         g = self._two_triangles_graph()
         assert cluster_modularity(g) == cluster_modularity(g)
+
+    def test_resolution_changes_the_partition(self):
+        """The whole reason gamma became config and gets recorded per row: the
+        same graph yields different boundaries at different resolutions."""
+        g = nx.path_graph(12)
+        nx.set_edge_attributes(g, 1.0, "weight")
+        coarse = cluster_modularity(g, resolution=0.5)
+        fine = cluster_modularity(g, resolution=4.0)
+        assert len(fine) > len(coarse)
+
+
+class TestResolutionReport:
+    def _weighted_graph(self) -> nx.Graph:
+        g = nx.Graph()
+        for a, b in [(1, 2), (2, 3), (1, 3)]:
+            g.add_edge(a, b, weight=2.0)
+        for a, b in [(4, 5), (5, 6), (4, 6)]:
+            g.add_edge(a, b, weight=0.5)
+        return g
+
+    def test_LOADBEARING_m_is_total_edge_WEIGHT_not_edge_count(self):
+        """Fortunato-Barthelemy's m is total edge weight, and this graph is
+        weighted. A draft of the validation doc computed sqrt(2m) from the
+        edge COUNT in one section and the weight in another, for the same
+        graph, and reported both as the resolution threshold."""
+        import math
+        g = self._weighted_graph()
+        rep = resolution_report(g, [[1, 2, 3], [4, 5, 6]])["resolution_limit"]
+        expected_weight = 3 * 2.0 + 3 * 0.5
+        assert rep["total_edge_weight"] == pytest.approx(expected_weight)
+        # abs=5e-4: the report rounds to 3 decimals for storage, so the
+        # assertion has to be looser than that rounding, not tighter.
+        assert rep["sqrt_2m"] == pytest.approx(math.sqrt(2 * expected_weight), abs=5e-4)
+        # The count is reported too, but must not be what sqrt_2m came from.
+        assert rep["edge_count"] == 6
+        assert rep["sqrt_2m"] != pytest.approx(math.sqrt(2 * 6), abs=5e-4)
+
+    def test_internal_weight_counts_only_intra_cluster_edges(self):
+        g = self._weighted_graph()
+        g.add_edge(3, 4, weight=10.0)  # crosses the two clusters
+        rep = resolution_report(g, [[1, 2, 3], [4, 5, 6]])
+        assert rep["internal_weight_by_index"][0] == pytest.approx(6.0)
+        assert rep["internal_weight_by_index"][1] == pytest.approx(1.5)
+
+    def test_singletons_are_excluded_from_the_cluster_population(self):
+        g = self._weighted_graph()
+        rep = resolution_report(g, [[1, 2, 3], [4, 5, 6], [99]])
+        assert rep["resolution_limit"]["clusters_total"] == 2
+        assert rep["cluster_sizes"] == [3, 3]
+
+
+class TestStabilityCheck:
+    def test_a_cluster_that_survives_the_probe_is_stable(self):
+        clusters = [[1, 2, 3], [4, 5, 6]]
+        probe = [[1, 2, 3], [4, 5, 6]]
+        rep = stability_report(clusters, probe, probe_resolution=2.0)
+        assert rep["stable_by_index"] == {0: True, 1: True}
+        assert rep["stability"]["clusters_stable"] == 2
+        assert rep["stability"]["clusters_dissolved"] == 0
+
+    def test_LOADBEARING_a_cluster_whose_members_scatter_is_not_stable(self):
+        """The point of the check: a grouping found only at one gamma was a
+        partition of convenience, not a structural finding."""
+        clusters = [[1, 2, 3, 4]]
+        probe = [[1, 2], [3, 4]]           # split in the finer partition
+        rep = stability_report(clusters, probe, probe_resolution=2.0)
+        assert rep["stable_by_index"] == {0: False}
+        assert rep["stability"]["stable_fraction"] == 0.0
+
+    def test_singletons_are_not_tested(self):
+        rep = stability_report([[1, 2], [3]], [[1, 2], [3]], probe_resolution=2.0)
+        assert rep["stable_by_index"] == {0: True}
+        assert rep["stability"]["clusters_tested"] == 1
+
+    def test_the_probe_is_the_finer_direction(self):
+        """A lower gamma merges more, so every cluster would trivially land
+        inside some larger one and the test would pass vacuously."""
+        g = nx.path_graph(12)
+        nx.set_edge_attributes(g, 1.0, "weight")
+        base = cluster_modularity(g, resolution=1.0)
+        probe = stability_probe(g, resolution=1.0, multiplier=4.0)
+        assert len(probe) >= len(base)
+
+    def test_stability_and_sqrt_2m_are_independent_verdicts(self):
+        """They disagreed in both directions on every real repo measured
+        (Superset 97% below threshold vs 6% dissolved; Athena-OS 33% vs 67%),
+        which is why the boolean is stored rather than derived."""
+        g = nx.path_graph(12)
+        nx.set_edge_attributes(g, 1.0, "weight")
+        clusters = cluster_modularity(g, resolution=1.0)
+        below = resolution_report(g, clusters)["resolution_limit"]["clusters_below_sqrt_2m"]
+        stable = stability_report(
+            clusters, stability_probe(g, 1.0, 2.0), 2.0)["stability"]["clusters_stable"]
+        # No arithmetic relationship is asserted -- only that both are real
+        # counts over the same population, which is what makes them comparable
+        # and what made the disagreement visible.
+        assert 0 <= below <= len(clusters)
+        assert 0 <= stable <= len(clusters)
 
 
 class TestAlgorithmAgreement:

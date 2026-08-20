@@ -84,8 +84,9 @@ def _module_path_to_candidate_file_paths(module_path: str) -> list:
 
 def find_python_authoritative_entry_modules(repo_root: Path) -> list:
     """Dotted-module-path candidates found in Dockerfile CMD/ENTRYPOINT,
-    Procfile, render.yaml's start command, and pyproject.toml's
-    [project.scripts] -- resolved to file paths by the caller."""
+    Procfile, render.yaml's start command, pyproject.toml's [project.scripts]
+    and setup.py's entry_points console_scripts -- resolved to file paths by
+    the caller."""
     modules = []
 
     for name in _DOCKERFILE_NAMES:
@@ -111,6 +112,52 @@ def find_python_authoritative_entry_modules(repo_root: Path) -> list:
     if pyproject.is_file():
         modules.extend(_scan_pyproject_scripts(_read_text(pyproject)))
 
+    setup_py = repo_root / "setup.py"
+    if setup_py.is_file():
+        modules.extend(_scan_setup_py_console_scripts(_read_text(setup_py)))
+
+    return modules
+
+
+_CONSOLE_SCRIPTS_KEY_RE = re.compile(r"[\"']?(?:console_scripts|gui_scripts)[\"']?\s*[:=]")
+# setuptools' entry-point spec: "name=package.module:function", the only
+# shape a console_scripts value takes (it is a list of these strings; the
+# dict-of-name-to-spec form some projects assume does not exist).
+_ENTRY_POINT_SPEC_RE = re.compile(r"[\w.\-]+\s*=\s*([\w.]+)\s*:\s*\w+")
+
+
+def _scan_setup_py_console_scripts(text: str) -> list:
+    """setup.py's entry_points={"console_scripts": ["name=pkg.mod:fn"]}.
+
+    Exists because [project.scripts] is not where every project declares its
+    CLI. A pyproject.toml may declare `dynamic = ["scripts", "entry-points"]`
+    and defer entirely to setup.py -- Apache Superset does exactly this, so
+    `superset.cli.main`, its real console entry point, was invisible to
+    detection that read only pyproject.
+
+    Text-scanned, not imported or AST-parsed: setup.py is arbitrary
+    executable code, and running a downloaded repo's build script to find its
+    entry points is not a trade this is willing to make. Regex over a bounded
+    region is the same line-based compromise _scan_pyproject_scripts already
+    makes for TOML, and for the same reason (this backend pins Python 3.10,
+    which has no stdlib tomllib).
+
+    Scoped to the region after a console_scripts/gui_scripts key so that the
+    many other `name=module:attr` strings in a real setup.py -- Superset
+    declares a whole block of `sqlalchemy.dialects` in the same dict -- are
+    not mistaken for CLI entry points.
+    """
+    modules = []
+    for key_match in _CONSOLE_SCRIPTS_KEY_RE.finditer(text):
+        region = text[key_match.end():]
+        # Stop at the close of this key's own list/dict. Finding the first
+        # closing bracket is imprecise for a nested value, but a
+        # console_scripts value is a flat sequence of strings by definition,
+        # so the first close is its own -- and over-reading would pull in the
+        # sibling entry-point groups this scoping exists to exclude.
+        end = min((i for i in (region.find("]"), region.find("}")) if i != -1), default=len(region))
+        for spec in _ENTRY_POINT_SPEC_RE.finditer(region[:end]):
+            modules.append(spec.group(1))
     return modules
 
 
