@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { CardPractice } from "../components/CardPractice";
 import Toggle from "../components/Toggle";
 import { api, getToken } from "../lib/api";
 import { DecryptText } from "../lib/fx";
@@ -25,6 +26,7 @@ interface TopicT {
 
 interface ModuleT {
   id: number;
+  code_repo_id: number | null;
   slug: string;
   title: string;
   summary: string;
@@ -480,6 +482,16 @@ export default function ModuleDetail() {
               onResourceError={setError}
             />
           ))}
+        </div>
+      )}
+
+      {/* Comprehension cards, below the topics because they test what the
+          topics taught. Rendered only for modules derived from a repo:
+          `code_repo_id` is null on seed and generated modules, which have no
+          import graph to ask questions about. */}
+      {module && module.code_repo_id != null && (
+        <div className="mt-4">
+          <CardPractice repoId={module.code_repo_id} moduleId={module.id} />
         </div>
       )}
     </div>

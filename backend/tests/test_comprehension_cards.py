@@ -7,6 +7,7 @@ bugs in the previous phase passed tests that checked the intended object and
 never counted the table.
 """
 import pytest
+from fastapi import HTTPException
 
 from app.db.models import ComprehensionCard, Module, Repo
 from app.services.codebase import card_generation, card_grading, card_quality
@@ -379,3 +380,112 @@ class TestCardPersistenceIntegration:
         generate_repo_cards(db_session, repo_a)
         assert db_session.query(ComprehensionCard).filter(
             ComprehensionCard.code_repo_id == 4242).count() == 1
+
+
+class TestGradeCardEndpoint:
+    """The HTTP surface for grading, added when the card UI was built.
+
+    Until then `card_grading.grade_card` was written, tested, and callable only
+    from inside the process -- the same built-but-unreachable shape as the cards
+    themselves. The frontend grades through this route rather than comparing
+    strings locally: `grade_deterministic_card` normalises with
+    `" ".join(text.split()).casefold()`, and a browser doing its own match would
+    agree until someone changed that normalisation, at which point the two would
+    disagree with nothing failing (§17.28).
+    """
+
+    def _repo_with_cards(self, db_session):
+        from app.db.models import CodeFile, CodeImport, Resource, Topic
+        from app.services.codebase.card_persist import generate_repo_cards
+        repo = Repo(host="local", owner="", name="grade-fixture",
+                    local_path="/nonexistent", source_kind="local",
+                    last_ingested_sha="cafe1234")
+        db_session.add(repo)
+        db_session.flush()
+        module = Module(slug="grade-mod", title="pkg", source="codebase",
+                        code_repo_id=repo.id)
+        db_session.add(module)
+        db_session.flush()
+        topic = Topic(module_id=module.id, slug="files-0", title="Files", source="codebase")
+        db_session.add(topic)
+        db_session.flush()
+        files = []
+        for i in range(8):
+            f = CodeFile(repo_id=repo.id, path=f"pkg/mod{i}.js", language="javascript",
+                         content_sha256=f"g{i}", fan_in=8 - i, seed_eligible=(i == 0))
+            db_session.add(f)
+            files.append(f)
+            db_session.add(Resource(topic_id=topic.id, kind="doc", title=f"mod{i}",
+                                    order_index=i, code_repo_id=repo.id,
+                                    code_path=f"pkg/mod{i}.js"))
+        db_session.flush()
+        for i in range(4):
+            db_session.add(CodeImport(repo_id=repo.id, from_file_id=files[i].id,
+                                      to_file_id=files[i + 1].id,
+                                      raw_specifier=f"./mod{i + 1}", resolved=True))
+        db_session.commit()
+        generate_repo_cards(db_session, repo, commit_sha="cafe1234")
+        card = db_session.query(ComprehensionCard).filter(
+            ComprehensionCard.code_repo_id == repo.id).first()
+        assert card is not None, "fixture must produce at least one card"
+        return repo, card
+
+    def test_LOADBEARING_a_correct_answer_grades_correct(self, db_session):
+        from app.api.repos import CardAnswerIn, grade_repo_card
+        repo, card = self._repo_with_cards(db_session)
+        out = grade_repo_card(repo.id, card.id, CardAnswerIn(response=card.answer),
+                              user=None, db=db_session)
+        assert out["correct"] is True
+        assert out["score"] == 100
+        assert out["rationale"]
+
+    def test_LOADBEARING_a_wrong_answer_returns_the_answer_and_rationale(self, db_session):
+        """Getting one wrong must TEACH the edge, not just mark it wrong -- the
+        rationale names the stored fact the answer came from."""
+        from app.api.repos import CardAnswerIn, grade_repo_card
+        repo, card = self._repo_with_cards(db_session)
+        wrong = next(o for o in card.options if o != card.answer)
+        out = grade_repo_card(repo.id, card.id, CardAnswerIn(response=wrong),
+                              user=None, db=db_session)
+        assert out["correct"] is False
+        assert out["score"] == 0
+        assert card.answer in out["rationale"] or out["answer"] == card.answer
+
+    def test_LOADBEARING_grading_matches_grade_card_on_whitespace_and_case(self, db_session):
+        """The §17.28 guard. This is WHY the browser round-trips instead of
+        comparing strings: the normalisation lives in one place, and this pins
+        that the endpoint applies it rather than doing its own comparison."""
+        from app.api.repos import CardAnswerIn, grade_repo_card
+        repo, card = self._repo_with_cards(db_session)
+        noisy = f"   {card.answer.upper()}   "
+        out = grade_repo_card(repo.id, card.id, CardAnswerIn(response=noisy),
+                              user=None, db=db_session)
+        assert out["correct"] is True, (
+            "the endpoint must normalise like grade_deterministic_card does")
+
+    def test_a_card_from_another_repo_is_not_gradeable_through_this_route(self, db_session):
+        from app.api.repos import CardAnswerIn, grade_repo_card
+        repo, card = self._repo_with_cards(db_session)
+        with pytest.raises(HTTPException) as e:
+            grade_repo_card(repo.id + 999, card.id, CardAnswerIn(response=card.answer),
+                            user=None, db=db_session)
+        assert e.value.status_code == 404
+
+    def test_an_unknown_card_is_404_not_500(self, db_session):
+        from app.api.repos import CardAnswerIn, grade_repo_card
+        repo, _ = self._repo_with_cards(db_session)
+        with pytest.raises(HTTPException) as e:
+            grade_repo_card(repo.id, 999_999, CardAnswerIn(response="x"),
+                            user=None, db=db_session)
+        assert e.value.status_code == 404
+
+    def test_the_llm_seam_reports_501_not_a_crash(self, db_session):
+        """A declared-but-unbuilt capability is not a malformed request."""
+        from app.api.repos import CardAnswerIn, grade_repo_card
+        repo, card = self._repo_with_cards(db_session)
+        card.card_source = "llm"
+        db_session.commit()
+        with pytest.raises(HTTPException) as e:
+            grade_repo_card(repo.id, card.id, CardAnswerIn(response="anything"),
+                            user=None, db=db_session)
+        assert e.value.status_code == 501

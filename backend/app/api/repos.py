@@ -15,8 +15,8 @@ from app.db.models import (
     CodeSubsystem, ComprehensionCard, Repo, RepoJob, User,
 )
 from app.services.codebase import (
-    card_generation, card_persist, deletion, edge_weights, findings_queue, jobs,
-    module_mapping, registry, repo_lock,
+    card_generation, card_grading, card_persist, deletion, edge_weights,
+    findings_queue, jobs, module_mapping, registry, repo_lock,
 )
 from app.services.codebase.dir_aggregation import DEFAULT_MAX_GROUPS, aggregate_to_directories
 from app.services.codebase.discovery import TooManyFilesError
@@ -1390,6 +1390,57 @@ def get_repo_cards(
             }
             for c in rows
         ],
+    }
+
+
+class CardAnswerIn(BaseModel):
+    response: str
+
+
+@router.post("/{repo_id}/cards/{card_id}/grade")
+def grade_repo_card(
+    repo_id: int, card_id: int, payload: CardAnswerIn,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Grade one answer against the stored card.
+
+    **The grading rule lives here and only here.** `card_grading.grade_card`
+    normalises with `" ".join(text.split()).casefold()` before comparing, so a
+    client that did its own string match would agree with this endpoint until
+    the day someone changed that normalisation -- at which point a card the
+    backend calls correct would be marked wrong in the browser, or the reverse,
+    with nothing failing. That is §17.28 exactly: a mirrored implementation is a
+    consumer nobody remembers is there. A round trip per answer is invisible to
+    someone reading a question and choosing an option, and it buys one rule with
+    one home.
+
+    Deliberately NOT persisting the result. Attempt history is a separate
+    checkpoint, and writing rows from a viewer that has not been verified yet
+    would mean debugging persistence and presentation together.
+    """
+    card = db.get(ComprehensionCard, card_id)
+    if card is None or card.code_repo_id != repo_id:
+        # Scoped by repo as well as id: a card id from another repo must not be
+        # gradeable through this repo's URL, or the route lies about what it
+        # addresses.
+        raise HTTPException(404, "Card not found for this repo")
+    try:
+        grade = card_grading.grade_card(card, payload.response)
+    except NotImplementedError as e:
+        # The llm source is a declared seam. 501, not 500: the request is well
+        # formed and the capability is declared but unbuilt.
+        raise HTTPException(501, str(e))
+    except ValueError as e:
+        # A card with no stored answer cannot grade anything -- that is a defect
+        # in the card, not in the learner's answer.
+        raise HTTPException(500, str(e))
+    return {
+        "card_id": card.id,
+        "correct": grade.correct,
+        "score": grade.score,
+        "rationale": grade.rationale,
+        "answer": card.answer,
+        "card_source": card.card_source,
     }
 
 

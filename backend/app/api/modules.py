@@ -66,6 +66,13 @@ def get_module(slug: str, user: User = Depends(get_current_user), db: Session = 
         "percent": progress["percent"],
         "state": progress["state"],
         "topic_count": progress["topic_count"],
+        # Which repo this module was derived from, for source="codebase" rows;
+        # null for seed and generated modules. The module page needs it to fetch
+        # comprehension cards, which are served repo-scoped
+        # (GET /api/repos/{id}/cards?module_id=). Without it the page would have
+        # to guess a repo or the cards would need a second, module-scoped route
+        # returning the same rows -- two doors to one table.
+        "code_repo_id": module.code_repo_id,
         "total_minutes": total_minutes,
         "topics": topics_out,
     }
