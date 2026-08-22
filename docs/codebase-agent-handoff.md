@@ -1,5 +1,37 @@
 # Codebase Agent — Status & Handoff (Phases A–H complete; Phase I done through I6; Phases J1 and K1 done)
 
+> ## ⚠ THIS FILE IS PRE-PHASE-6. Read `decisions.md` for anything after 2026-08-19.
+>
+> Everything below describes the atlas through Phases A–K. It is still accurate
+> about the ATLAS — ingest, parse, resolution, ranking, clustering, health — and
+> that is what it is for. It says **nothing** about Phase 6, which is the layer
+> built on top of it, and a reader who stops here will not know that layer exists.
+>
+> **Phase 6 — the graph as a targeting map for reads.** Four modules, all
+> ADDITIVE, none of them changing anything described in this file:
+>
+> | file | what it is |
+> |---|---|
+> | `backend/app/services/codebase/graph_read.py` | The single stable whole-graph read boundary. Typed, uncapped, keeps unresolved edges, fails loudly on schema drift. **Every Phase 6 consumer reads through this and nothing else.** |
+> | `backend/app/services/codebase/atlas_export.py` | Compact whole-graph artifact emitter with a mode switch (whole-graph below ~1,500 files, scoped above). Scoped mode is RETIRED for large repos — see `decisions.md`. |
+> | `backend/app/services/codebase/neighborhood.py` | **The deliverable.** `read_neighborhood(db, repo_id, path)` — a file's imports, importers, blast radius, and optional bounded second hop. |
+> | `backend/tests/test_graph_read.py`, `test_atlas_export.py`, `test_neighborhood.py` | 51 tests, heavily canaried |
+>
+> **`ranking._build_graph` is NOT the Phase 6 read path** and must not become
+> one. It is private, topology-only, and DROPS unresolved edges — which on
+> apache/superset is 56% of all import rows. It still has five callers; migrating
+> them onto `graph_read` is its own deferred checkpoint.
+>
+> **The headline number (checkpoint 3, measured at `a05a0999`):** to understand a
+> file's context, reading everything connected to it versus querying the graph —
+> **0.93x on an isolated file** (the graph costs MORE; this is the honest floor),
+> **15.9x and 53.8x** on files where real work happens, **195x and 293x** on hubs.
+> Pooled **219.7x, 99.5% reduction**. Zero sufficiency misses.
+>
+> Full arc — checkpoints 0 through 4a, the retired scoped artifact, the candidate
+> comparison, the budget-cap decision and the MCP transport gate — is in
+> `decisions.md` under Phase 6. Do not re-derive it from here.
+
 > ## ⚠ Provenance, 2026-08-17: two instrument fixes invalidate graph-derived figures below
 >
 > If you are resuming from this file, read this before trusting any number

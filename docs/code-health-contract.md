@@ -3130,3 +3130,73 @@ test asserted on counts and shapes rather than on whether the question was a
 question. The rule: *for anything generated to be judged by a human, read a
 sample of the output before trusting the metrics over it.* A rejection rate is
 not a quality measure; it is a count of rejections.
+
+### 17.33 The same instrument error three times means it belongs in the tool, not in your memory
+
+Phase 6 cross-checked the graph against `grep` three separate times. Each time
+the same limitation produced phantom failures, and twice it was "fixed" by
+remembering not to do it again.
+
+**Instance 1 (checkpoint 2).** The module name was interpolated into the pattern
+UNESCAPED, so `superset.config` matched the `_` in `from superset_config import
+*`. Five sufficiency failures reported; all five were the regex.
+
+**Instance 2 (same checkpoint).** A loose `import superset` attributed
+`import superset.utils.database` to `superset/__init__.py`. The RESOLVER was
+right and the grep was wrong. Recorded at the time as "grep cannot adjudicate a
+package `__init__`, excluded with reason".
+
+**Instance 3 (checkpoint 3), which is the point.** The benchmark used package
+`__init__.py` files as targets and grep-adjudicated them anyway — after the
+limitation had already been written down. Six misses reported, all six the
+instrument's; one was a match inside a docstring.
+
+The recurrence is the finding. Instances 1 and 2 were corrected by knowing
+better, and knowing better did not survive one checkpoint. The fix that held was
+structural: a `NOT_GREP_ADJUDICABLE` set in the script, with the reason inline,
+so the constraint is enforced by the tool rather than recalled by the operator.
+
+**The rule.** The first time an instrument misleads you, correct the result. The
+second time, write down why. **The third time, stop trusting yourself to
+remember and encode the constraint where it cannot be forgotten** — in the
+script, in a fixture, in an assertion. §17 exists because the instrument is
+where errors live; this section is that lesson applied to §17's own checking.
+
+A corollary worth stating plainly: **an instrument that disagrees with the
+system under test is not evidence against the system.** In all three instances
+the graph was correct and the checker was wrong. Establish which one is broken
+before recording a defect — and canary the instrument against its own broken
+form (unescaped vs escaped produced 10 hits vs 8) so its discrimination is
+demonstrated rather than assumed.
+
+### 17.34 Installing a tool to test something is a change to the thing you were testing
+
+Checkpoint 4a needed an MCP server to prove a transport. `pip install mcp` into
+the project's own venv succeeded — and upgraded **starlette 0.46.2 → 1.6.0**,
+which **breaks fastapi 0.115.12**. The full backend suite was running against
+that venv at the moment the swap landed, so its result was void: the environment
+changed underneath a measurement in flight.
+
+Three distinct failures in one command, worth separating:
+
+1. **A probe mutated production dependencies.** The task was "does the wire
+   work", which needed no project dependency at all.
+2. **A dependency resolver reported success while breaking a constraint.** pip
+   printed `Successfully installed` and, above it, `ERROR: pip's dependency
+   resolver does not currently take into account all the packages that are
+   installed` — a failure rendered as a warning under a success line.
+3. **A running measurement was invalidated silently.** Nothing connected "I
+   installed a package" to "a suite is running against that interpreter". The
+   suite would have reported a number, and that number would have been junk.
+
+**The rules.** Install nothing into a project venv to test something that is not
+the project — use an isolated venv, or write the probe against the standard
+library, which also sharpens the test (a stdlib probe that fails has failed at
+the TRANSPORT, not at a package install). Before installing anything, check what
+is running against that interpreter. And read what a resolver says under its own
+success line: `Successfully installed` is not the same as `pip check` clean.
+
+Recovery, for the record: 13 packages uninstalled, `starlette==0.46.2` restored,
+`pip check` verified clean and `app.main` verified importable, the void suite
+killed and re-run. The probe was rebuilt stdlib-only and worked first time.
+

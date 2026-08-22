@@ -2,6 +2,46 @@
 
 Problems encountered during real builds, in roughly the order they bite you.
 
+---
+
+## ENVIRONMENT CONSTRAINTS — read before running anything
+
+These are the walls this machine has. They are not bugs to fix; they are the
+shape of the environment, and a session that does not know them loses its first
+half hour rediscovering them.
+
+| constraint | what it means in practice |
+|---|---|
+| **No GPU** | Everything is CPU-only. Embeddings, clustering and ranking are sized for that. Do not reach for a GPU path or assume CUDA. |
+| **SSL-intercepting corporate proxy** | Outbound TLS is intercepted. `pip` works. Anything doing its own certificate pinning may not. See the SSL sections below. |
+| **Windows** | Two shells are available and take DIFFERENT syntax: PowerShell (primary) and Git Bash. `git` is not on the Bash tool's PATH, so full suites and git operations run through PowerShell. |
+| **Vite binds IPv6 only** | `localhost:5173` works; `127.0.0.1:5173` is **refused**. Not a server failure. |
+| **Dev servers are started by hand** | backend `:8000` (uvicorn `--reload`), frontend `:5173` (vite). Nothing starts them for you, and they stop when their window closes. |
+
+### NEVER install the `mcp` SDK into the project venv
+**Symptom:** `pip install mcp` reports `Successfully installed` — and fastapi is broken.
+**Cause:** the SDK pulls **starlette 1.6.0**, replacing the pinned **0.46.2**. `fastapi 0.115.12` requires `starlette<0.47.0`. pip prints the conflict as a warning ABOVE its own success line, so it reads as a clean install.
+**Blast radius:** if a test suite is running against that interpreter when the swap lands, its result is void — the environment changed mid-measurement.
+**Fix / prevention:** use an **isolated venv** for MCP work, or write MCP servers **stdlib-only** (MCP over stdio is just JSON-RPC 2.0 in newline-delimited JSON — a working server is about 100 lines with no dependencies). If it has already happened:
+```powershell
+.env\Scripts\python.exe -m pip uninstall -y mcp mcp-types httpx2 httpcore2 sse-starlette jsonschema jsonschema-specifications referencing rpds-py opentelemetry-api truststore cryptography
+.env\Scripts\python.exe -m pip install "starlette==0.46.2"
+.env\Scripts\python.exe -m pip check          # must print: No broken requirements found
+```
+See §17.34 in the code-health contract for the full account.
+
+### stdio MCP transport is immune to the proxy — prefer it
+**Why:** stdio is a **pipe between two local processes**, not a network call. The SSL-intercepting proxy is not in the path at any layer, and no proxy environment variables reach a spawned server. HTTP transport would be exposed to the proxy; stdio is not. Proven end-to-end on this machine 2026-08-22.
+
+### Registering an MCP server here is config-file based, not CLI
+**Symptom:** `claude mcp add` does not exist.
+**Cause:** the `claude` CLI is not installed on this machine — this is the **VSCode extension**.
+**Fix:** create `.mcp.json` at the workspace root (`d:\Athena`) with an `mcpServers` object.
+**Trap:** writing that file with a bash heredoc **collapses escaped backslashes** in Windows paths and yields invalid JSON, which fails registration silently. Write it with `json.dump`, then re-read and parse it to confirm.
+**Note:** MCP servers load at **session start** — a server registered mid-session is not visible until the window is reloaded.
+
+---
+
 ## Python and packages
 
 ### `mmh3` wheel build fails on Python 3.13

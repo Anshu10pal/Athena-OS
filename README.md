@@ -11,14 +11,154 @@ Git repository to find out how that code is actually put together.
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-896%20passing-3fb950)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1%2C171%20passing-3fb950)](#testing)
 [![Cost](https://img.shields.io/badge/running%20cost-%240%2Fmonth-3fb950)](#cost)
 
 </div>
 
 ---
 
+# RESUME HERE — session entry point (updated 2026-08-22)
+
+**What this is.** A local-first workspace with two halves: a learning/practice
+side, and a **codebase agent** that ingests any Git repo and builds a queryable
+graph of it (files, imports, symbols, ranks, subsystems, cycles). The active
+work is Phase 6, which turns that graph into a **targeting map for reads** —
+given a file you are about to change, it hands you the connected set directly
+instead of you grepping around to find it. Everything runs locally with zero
+LLM calls in the graph path.
+
+**Active phase: 6 — Codebase Atlas → graph as targeting map.** Checkpoints 0,
+1a, 1b, 2, 3 are DONE; 4a (MCP transport gate) passed for stdio.
+
+**The number Phase 6 exists to produce** (checkpoint 3, measured on
+apache/superset at SHA `a05a0999` with tiktoken cl100k): to understand a file's
+context, reading every connected file versus querying the graph —
+**0.93x on an isolated file** (the graph costs 8% MORE — this is the honest
+floor and is reported deliberately), **15.9x and 53.8x** on the mid-connected
+files where real work happens, **195.4x and 293.4x** on hubs. Pooled
+**219.7x, a 99.5% reduction**, with **zero sufficiency misses**. The
+distribution is the deliverable, not the pooled figure.
+
+**THE IMMEDIATE NEXT ACTIONS, in order:**
+
+1. **Close checkpoint 4a.** MCP servers load at session start, so the probe
+   registered in `d:\Athena\.mcp.json` is not visible to the session that
+   registered it. **Reload the VSCode window, then ask for the `ping` tool.**
+   If it returns `pong`, 4a is fully closed. Protocol level is already proven
+   (full `initialize` → `tools/list` → `tools/call` round trip, exit 0).
+2. **Then build checkpoint 4b** — the real MCP server exposing
+   `read_neighborhood`. **stdlib-only, or an isolated venv. Never install the
+   `mcp` SDK into `backend/venv`** (see constraints below).
+
+**THE SINGLE MOST IMPORTANT WARNING:** the four Phase 6 source files and their
+three test files were untracked for most of this work. If you are reading this
+from a fresh clone, verify they are present before assuming Phase 6 exists:
+`backend/app/services/codebase/{graph_read,atlas_export,neighborhood}.py` and
+`backend/tests/test_{graph_read,atlas_export,neighborhood}.py`.
+
+---
+
+## CONSTRAINTS — READ BEFORE RUNNING ANYTHING
+
+These are the walls this environment has. A session that does not know them
+loses its first half hour rediscovering them.
+
+| | |
+|---|---|
+| **No GPU** | CPU-only, everything. Do not reach for a CUDA path. |
+| **SSL-intercepting corporate proxy** | Outbound TLS is intercepted. `pip` works. Anything pinning its own certificates may not. |
+| **Windows** | PowerShell (primary) and Git Bash take **different syntax**. `git` is not on the Bash tool's PATH — run git and full test suites through **PowerShell**. |
+| **NEVER `pip install mcp` into `backend/venv`** | It pulls **starlette 1.6.0** over the pinned **0.46.2** and **breaks fastapi 0.115.12**, while printing `Successfully installed`. Use an isolated venv or write MCP servers stdlib-only. Recovery commands in `docs/TROUBLESHOOTING.md`; full account in contract **§17.34**. |
+| **stdio MCP transport is proxy-immune** | It is a **pipe**, not a network call — the proxy is not in the path at any layer. Prefer it over HTTP. Proven on this machine 2026-08-22. |
+| **MCP registration is config-file based** | The `claude` CLI is **not installed**; this is the VSCode extension. Register via `.mcp.json` at the workspace root. Write it with `json.dump`, **not a bash heredoc** — heredocs collapse escaped backslashes in Windows paths and produce invalid JSON that fails silently. |
+| **Vite binds IPv6 only** | `localhost:5173` works; `127.0.0.1:5173` is **refused**. |
+| **Dev servers are started by hand** | backend `:8000` (uvicorn `--reload`), frontend `:5173` (vite). |
+| **Working directory** | `D:\Athena\Athenathena-os` (the git repo). The VSCode workspace root is `d:\Athena`, one level up — that is where `.mcp.json` lives, outside the repo. |
+
+---
+
+## How work is done here — read this before contributing
+
+**[`docs/code-health-contract.md`](docs/code-health-contract.md) §17 is the
+methodology contract, and it governs how work is done in this repo, not just
+what was built.** 39 subsections (17.0 → 17.34, including lettered variants
+like 17.0b and 17.5c), each a recorded instrument failure with its mechanism
+and the rule it produced. The load-bearing ones:
+
+- **§15.1 — a test that cannot fail must say so.** Every fix gets a canary:
+  observe it FAIL on the broken code before trusting it green.
+- **§17.0b — predict before measuring.** A prediction without a named mechanism
+  is intuition and does not count.
+- **§17.5c — denominators travel with rates.** Report the distribution, not the
+  mean.
+- **§17.16 — mark stale figures with provenance; never silently correct them.**
+- **§17.25 — an answer whose completeness the consumer cannot assess is worse
+  than no answer.** This one shaped all of Phase 6.
+- **§17.33 — the same instrument error three times belongs in the tool, not in
+  your memory.**
+
+The habit that matters most: **when a measurement disagrees with the code,
+establish which one is broken before recording a defect.** In this repo the
+instrument has been wrong far more often than the code.
+
+---
+
+## Current state snapshot — 2026-08-22
+
+Stamped so staleness is detectable. If today is much later than this date,
+re-verify before trusting it.
+
+| | |
+|---|---|
+| **Branch** | `codebase-agent/phase4-5-and-682` |
+| **HEAD before this handoff commit** | `106e90b` — "Give comprehension cards their first user surface" |
+| **Backend suite** | **1,171 passed / 1 skipped / 0 failed**, full run 2026-08-22 (24m55s), against superset at `a05a0999`. Green. |
+| **Frontend** | 231 vitest across 18 files + 6 Playwright; `npx tsc --noEmit` clean |
+| **Migrations** | 37, chain intact, head `d9f014c8a26b` |
+| **Superset graph** | re-ingested to `a05a0999`, **6,584 files / 61,559 imports** (was `e2bb33b1`, 6,523 / 60,873) |
+| **Repos in the atlas** | 1 = Athena-OS (280 files), 3 = eslint (1,447), 6 = apache/superset (6,584) |
+
+**Committed in this handoff** — the four Phase 6 modules and their three test
+files, which were untracked until now:
+
+```
+backend/app/services/codebase/graph_read.py      the stable whole-graph read boundary
+backend/app/services/codebase/atlas_export.py    the compact artifact emitter
+backend/app/services/codebase/neighborhood.py    THE DELIVERABLE - read_neighborhood()
+backend/tests/test_graph_read.py                 11 tests
+backend/tests/test_atlas_export.py               17 tests
+backend/tests/test_neighborhood.py               23 tests
+```
+
+**Not in the repo, and deliberately so:** `d:\Athena\.mcp.json` (the MCP
+registration) lives at the VSCode workspace root, one level ABOVE the repo. A
+fresh clone on a new machine will not have it and must recreate it — see the
+constraints table above.
+
+**Phase 6 files that do NOT exist yet:** there is no MCP server for the
+neighbourhood query (that is 4b), no PreToolUse enforcement hook, and no
+migration of `ranking._build_graph`'s five callers onto the read boundary.
+
+---
+
+## Documentation map — what to read, and when
+
+| Read this | When |
+|---|---|
+| [`docs/decisions.md`](docs/decisions.md) | **Start here after this README.** Every phase, every decision, why, and what was rejected. Has a START HERE section at the end with the live phase table and suite state. |
+| [`docs/code-health-contract.md`](docs/code-health-contract.md) | The §17 methodology contract (how to work) and the health-metric definition (what it measures). |
+| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Environment constraints and setup failures, in the order they bite. |
+| [`docs/codebase-agent-handoff.md`](docs/codebase-agent-handoff.md) | Deep implementation notes for the ATLAS (phases A–K). **Pre-Phase-6** — it has a banner saying so. |
+| [`docs/API.md`](docs/API.md) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Endpoint reference and system architecture. |
+| [`docs/external-validation-eslint.md`](docs/external-validation-eslint.md) | Validating the ranking against a third-party repo, including where it failed. |
+| [`docs/ranking-methodology.md`](docs/ranking-methodology.md) · [`docs/calculations-explained.md`](docs/calculations-explained.md) | How the scores are derived. |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Operations. **Pushing to this repo auto-deploys to Render — confirm before pushing.** |
+
+---
+
 ## What this is
+
 
 Two things live in one application, because they solve the same problem at
 different scales.
