@@ -3200,3 +3200,61 @@ Recovery, for the record: 13 packages uninstalled, `starlette==0.46.2` restored,
 `pip check` verified clean and `app.main` verified importable, the void suite
 killed and re-run. The probe was rebuilt stdlib-only and worked first time.
 
+### 17.35 A platform default silently substitutes, and the result is plausible rather than broken
+
+Three instances in one session, which is the threshold for naming a pattern.
+The shape is always the same: a Windows default takes the place of the thing you
+meant, **nothing errors**, and the output is well-formed and wrong. That is the
+§17.25 failure — right structure, corrupted content, undetectable by the
+consumer — arriving through the platform instead of through the code.
+
+**Instance 1 — a heredoc ate the escapes.** Writing `.mcp.json` through a bash
+heredoc collapsed `\` to `\` in Windows paths, producing JSON that was
+syntactically invalid. Registration would have failed **silently**; it was
+caught only because the file was re-read and parsed after writing.
+
+**Instance 2 — SQLite returned a different shape than PostgreSQL.** Raw `text()`
+SQL bypasses the ORM's type coercion, so `last_ingested_at` came back as the
+string `2026-08-13 16:26:07.000000` on SQLite where PostgreSQL returns a
+`datetime`. One field, two shapes, decided by the backend. (Strictly this is a
+type default rather than a codepage, but it is the same pattern and belongs with
+it: the platform quietly substituted, and the caller could not tell.) Fixed by
+normalising to ISO 8601 once, at the read boundary that owns the field.
+
+**Instance 3 — stdio spawned as cp1252 and mangled the MCP wire.** MCP mandates
+UTF-8, but a process spawned on Windows defaults `stdin`/`stdout` to the ANSI
+codepage. `U+2014 EM DASH` (bytes `e2 80 94`) arrived as those three bytes
+decoded as cp1252 — three separate characters. The round trip **succeeded** and
+returned a plausible-looking wrong string.
+
+**The defense is structural, not vigilance.** Set the encoding explicitly at
+every boundary where bytes cross a process or an encoding line:
+
+- `sys.stdin.reconfigure(encoding="utf-8")` and the same for `stdout`, before
+  anything else runs, in any spawned server
+- `encoding="utf-8"` on every file read and write, never the default
+- normalise at the DB read boundary, so one field has one shape regardless of
+  driver
+
+**And test with a non-ASCII payload, because ASCII survives cp1252 and hides the
+bug.** Every one of these passed an ASCII test. The payload that found instance
+3 was, by codepoint so this doc cannot itself be mangled: `U+2014` (em dash),
+`U+00E9` (accented Latin), `U+4E2D U+6587` (CJK), `U+1F600` (emoji, which
+is also the case that catches anything assuming the BMP). Compared by CODEPOINT, not by eye, since the terminal printing the comparison is
+itself cp1252 and will lie about what it received.
+
+**The meta-lesson, and the reason this sits next to §17.33.** The transport gate
+that found instance 3 had two tools: `ping` and `echo`. **A `ping`-only gate
+would have passed clean** — it proves a message goes out and a message comes
+back, which is connectivity, not correctness. `echo` exercises the variable that
+can actually be wrong: it sends data in and compares what returns. A gate must
+exercise the thing that can be wrong, or it certifies the wrong property and
+ships the bug into whatever it was gating.
+
+A useful contrast, recorded because it shows the failure is specifically about
+*silence*: while verifying the fix, the test harness's own `print` of the same
+payload raised `UnicodeEncodeError`. That is the identical encoding mismatch
+behaving correctly — loud, immediate, impossible to miss. The dangerous version
+is the one that returns a string.
+
+

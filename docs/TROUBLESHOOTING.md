@@ -30,6 +30,20 @@ half hour rediscovering them.
 ```
 See §17.34 in the code-health contract for the full account.
 
+### Output looks like `â€”` where you expected `—` — that is cp1252 vs UTF-8
+**Symptom:** a string round-trips "successfully" but comes back with each non-ASCII character replaced by two or three Latin-1-looking ones. `—` becomes `â€”`, `é` becomes `Ã©`. **Nothing raises.**
+**Cause:** Windows defaults to codepage **cp1252**, and a process spawned here gets `cp1252` on `stdin`/`stdout` rather than UTF-8. The UTF-8 bytes of the character (`—` is `e2 80 94`) get decoded one-byte-at-a-time as cp1252, which yields exactly those three characters.
+**Fix — set it explicitly, at every boundary bytes cross:**
+```python
+import sys
+for stream in (sys.stdin, sys.stdout):
+    stream.reconfigure(encoding="utf-8")     # FIRST thing, before any I/O
+open(path, encoding="utf-8")                 # never rely on the default
+```
+**Test it with a non-ASCII payload.** ASCII survives cp1252 unharmed, so an ASCII test passes while the bug is live. Use `U+2014`, `U+00E9`, `U+4E2D U+6587`, `U+1F600` and **compare by codepoint, not by eye** — the terminal printing your comparison is cp1252 too and will misrepresent what it received.
+**Related trap:** a bash heredoc collapses `\` to `\` in Windows paths, so JSON written that way is invalid and fails silently. Use `json.dump`.
+**Full pattern and its three instances: contract §17.35.**
+
 ### stdio MCP transport is immune to the proxy — prefer it
 **Why:** stdio is a **pipe between two local processes**, not a network call. The SSL-intercepting proxy is not in the path at any layer, and no proxy environment variables reach a spawned server. HTTP transport would be exposed to the proxy; stdio is not. Proven end-to-end on this machine 2026-08-22.
 
