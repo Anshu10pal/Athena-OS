@@ -1044,10 +1044,10 @@ codebase agent, ever.** Everything is deterministic local computation.
 
 ## Suite state
 
-- **Backend: 1,171 passed / 1 skipped / 0 failed.** Last FULL run 2026-08-22
-  (24m55s), against superset at SHA `a05a0999`. Green, with no test outstanding
-  and no isolation-only verification pending. This run also confirms the
-  `backend/venv` is intact after the checkpoint-4a starlette incident (§17.34).
+- **Backend: 1,180 passed / 1 skipped / 0 failed.** Last FULL run 2026-08-24
+  (18m27s), against superset at SHA `a05a0999`. Green, with no test outstanding
+  and no isolation-only verification pending. Includes checkpoint 4b's 9 MCP
+  server tests, which are UNCOMMITTED pending an extension-level confirmation.
 - **Frontend: 231 vitest tests across 18 files, all passing**, plus **6
   Playwright tests** (`e2e/`). `npx tsc --noEmit` clean.
 - 37 migrations, chain intact, head `d9f014c8a26b`.
@@ -1132,8 +1132,8 @@ recommendation:**
    capability, and the only one that costs money per run and needs the zero-LLM
    non-negotiable explicitly lifted for that path.
 
-**Done, was outstanding:** the full backend suite has since been run — 1,171
-passed / 1 skipped, 2026-08-22, with nothing verified in isolation only.
+**Done, was outstanding:** the full backend suite has since been run — 1,180
+passed / 1 skipped, 2026-08-24, with nothing verified in isolation only.
 
 ## The habit that matters most here
 

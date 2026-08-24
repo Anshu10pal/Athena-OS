@@ -11,7 +11,7 @@ Git repository to find out how that code is actually put together.
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C171%20passing-3fb950)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1%2C180%20passing-3fb950)](#testing)
 [![Cost](https://img.shields.io/badge/running%20cost-%240%2Fmonth-3fb950)](#cost)
 
 </div>
@@ -113,7 +113,7 @@ re-verify before trusting it.
 |---|---|
 | **Branch** | `codebase-agent/phase4-5-and-682` |
 | **HEAD before this handoff commit** | `106e90b` — "Give comprehension cards their first user surface" |
-| **Backend suite** | **1,171 passed / 1 skipped / 0 failed**, full run 2026-08-22 (24m55s), against superset at `a05a0999`. Green. |
+| **Backend suite** | **1,180 passed / 1 skipped / 0 failed**, full run 2026-08-24 (18m27s), against superset at `a05a0999`. Green. |
 | **Frontend** | 231 vitest across 18 files + 6 Playwright; `npx tsc --noEmit` clean |
 | **Migrations** | 37, chain intact, head `d9f014c8a26b` |
 | **Superset graph** | re-ingested to `a05a0999`, **6,584 files / 61,559 imports** (was `e2bb33b1`, 6,523 / 60,873) |
@@ -147,6 +147,7 @@ migration of `ranking._build_graph`'s five callers onto the read boundary.
 | Read this | When |
 |---|---|
 | [`docs/decisions.md`](docs/decisions.md) | **Start here after this README.** Every phase, every decision, why, and what was rejected. Has a START HERE section at the end with the live phase table and suite state. |
+| [`docs/phase6-graph-as-context.md`](docs/phase6-graph-as-context.md) | **Phase 6 explained for the team** — how the graph is used as context, how a query works, where the token saving comes from, every measured number, and what went wrong on the way. |
 | [`docs/code-health-contract.md`](docs/code-health-contract.md) | The §17 methodology contract (how to work) and the health-metric definition (what it measures). |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Environment constraints and setup failures, in the order they bite. |
 | [`docs/codebase-agent-handoff.md`](docs/codebase-agent-handoff.md) | Deep implementation notes for the ATLAS (phases A–K). **Pre-Phase-6** — it has a banner saying so. |
