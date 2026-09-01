@@ -25,6 +25,7 @@ const TILES: Tile[] = [
   },
   { cat: "practice", to: "/presentation", label: "Presentation Arena", desc: "Deliver to a room that interrupts.", meta: "0 runs" },
   { cat: "practice", to: "/interview", label: "Interview Arena", desc: "Mock interviews that follow up.", meta: "0 sat" },
+  { cat: "practice", to: "/arena", label: "Interview Arena \u00b7 JD", desc: "Paste a job description, get a skill graph.", meta: "new" },
   {
     cat: "reinforce", to: "/review", label: "Review Queue", span2: true,
     desc: "What's due, in the order it's due. Cards come from your own sessions, scheduled by how badly you fumbled them the first time.",

@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import achievements, analytics, auth, briefing, chat, communication, content, interview, missions, modules, oratory, presentation, profile, repos, resources, review, roadmap, roadmaps, topics, vault, voice
+from app.api import achievements, analytics, arena, auth, briefing, chat, communication, content, interview, missions, modules, oratory, presentation, profile, repos, resources, review, roadmap, roadmaps, topics, vault, voice
 from app.core.config import BACKEND_DIR
 from app.db import models  # noqa: F401  (register models)
 
@@ -112,7 +112,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for module in (auth, profile, chat, roadmap, roadmaps, modules, topics, resources, repos, interview, presentation, vault, missions, analytics, voice, briefing, oratory, achievements, review, communication, content):
+for module in (auth, profile, chat, roadmap, roadmaps, modules, topics, resources, repos, interview, arena, presentation, vault, missions, analytics, voice, briefing, oratory, achievements, review, communication, content):
     app.include_router(module.router)
 
 

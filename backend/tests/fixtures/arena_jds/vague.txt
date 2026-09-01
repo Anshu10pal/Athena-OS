@@ -1,0 +1,43 @@
+title: Operations Leader - Prediction Market
+source: https://jobs.lever.co/binance/fba4d48b-ed4a-4616-a57f-b0b3a558bcb5
+retrieved: 2026-09-01
+category: vague (buzzwords, little substance)
+why: specificity ratio 0.13 -- only 2 of
+  15 requirement-shaped lines name a specific technology, tool,
+  named methodology or measurable quantity. The rest are non-specific
+  attributes: "Strong experience in operations, growth, or product
+  operations", "Need to think holistically", "Strong data sense, execution
+  ability, and cross-functional collaboration skills".
+  This is the LOWEST-scoring posting of 1,104 scanned, not a posting that
+  felt vague and was then labelled to fit. The ratio was computed by the rule
+  published in SELECTION.md, which was written before any posting was
+  retrieved and which consults no skill vocabulary -- so the rule cannot have
+  been tuned toward a result the extractor would like.
+what this case tests: honest versus DIShonest degradation, which is the whole
+  point of including it. Few nodes with low confidence is a PASS. Eight
+  confident invented parents is a HARD FAIL, precisely because it clears the
+  structural bar.
+words: 254 -- shortish, so this case overlaps the short case on
+  length. Vagueness and length are independent axes and the categories are not
+  claimed to be disjoint.
+extraction: Lever public postings API, deterministic text extraction, no model
+  in the loop.
+---
+The Binance Wallet team is building a decentralized version of Binance, featuring on-chain infrastructure, self-custody wallets, a DEX, and decentralized Earn and more. We empower users with full control over their assets for seamless token trading across any blockchain. This Web3 initiative expands our strategic landscape and complements our CEX business, offering significant growth potential. Join us and be part of this exciting journey.
+Responsibilities
+Own the overall operations strategy for the Prediction Market business, with a focus on growth, user participation, liquidity, and market health
+Drive end-to-end growth across acquisition, activation, retention, and conversion
+Design and execute mechanisms to improve liquidity, trading activity, and user engagement
+Identify and operate key market categories such as sports, esports, politics, policy, and other event-driven topics
+Work closely with product, marketing, data, and tech teams to launch features, campaigns, and strategic initiatives
+Monitor core metrics, analyze performance, and continuously optimize operations and growth outcomes
+Conduct market and competitor research to identify trends, best practices, and new opportunities
+Build scalable operational frameworks and support team execution
+Requirements
+Strong experience in operations, growth, or product operations
+Must have solid understanding of Prediction Market products and user behavior
+Must be familiar with liquidity management and participation-driving mechanisms
+Need to think holistically — not only category knowledge, but also channels, growth, and conversion
+Good understanding of event-driven markets such as sports, esports, politics, policy, and trending topics
+Strong data sense, execution ability, and cross-functional collaboration skills
+Experience in crypto, betting, gaming, trading, fintech, or similar fast-paced platforms is a strong plus

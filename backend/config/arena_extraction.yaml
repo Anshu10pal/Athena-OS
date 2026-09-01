@@ -1,0 +1,401 @@
+# Interview Arena -- JD extraction tunables.
+#
+# Every threshold in the extraction pipeline lives here rather than as a module
+# constant, per this project's existing convention (config/ranking_weights.yaml,
+# config/subsystem_clustering.yaml, config/edge_weights.yaml). A threshold in
+# code is a decision nobody can find; a threshold here is data with a comment
+# saying where the number came from.
+#
+# The canonicalisation numbers below are NOT guesses. They were derived from a
+# measured sweep over three hand-labelled bands of skill-name pairs before any
+# job description was processed. See docs/arena-canonicalisation.md for the
+# curve and tests/test_arena_canonicalise.py for the pin-set.
+
+# Bump this when the extraction prompt, the cascade, or the weighting rules
+# change. It participates in the idempotency key, so a bump correctly
+# invalidates every cached graph instead of serving a stale one forever.
+# Deliberately NOT derived from a git sha: a prompt edit in an uncommitted
+# working tree must still invalidate.
+extractor_version: "a1"
+
+# ---------------------------------------------------------------------------
+# Canonicalisation: the four-stage cascade.
+#
+# Measured finding that produced this shape: bge-small-en-v1.5 cosine does NOT
+# separate "same skill, different words" from "different skills, one parent".
+# On a 15/12/10-pair reference set the bands overlapped badly --
+#   SAME     min 0.614  median 0.832  max 0.929
+#   SIBLING  min 0.639  median 0.723  max 0.835
+# -- so no single threshold delivers recall at zero false merges. At 0.82 (the
+# value vector_store.py uses for MODULE matching, on much richer text) recall
+# was 60% AND false-merge was still 8%.
+#
+# The residual turned out to be a CLASS, not a gradient: 4 of 6 misses were
+# acronym-or-short-form pairs with zero lexical overlap (CI/CD, K8s, ML,
+# Foundry). An acronym has no semantic relation to its expansion in embedding
+# space, so lowering a threshold can never reach it. Hence stage 2.
+# ---------------------------------------------------------------------------
+canonicalisation:
+  # WITHDRAWN as a decision threshold, kept as a SHADOW metric.
+  #
+  # Enrichment ("{name} -- {the JD sentence it came from}") measured at 0%
+  # false-merge with a DIFFERENT sentence on each side. Under TEMPLATE phrasing
+  # -- the same sentence shape on both sides, which is how JD bullet lists are
+  # actually written -- it inverts to a 92% false-merge rate at 0.76, merging
+  # PostgreSQL with MySQL and Python with Java. Nothing reads this value to make
+  # a decision; it is persisted on review-band suggestions so a
+  # context-duplication-gated version can be evaluated on real JDs.
+  enriched_cosine_threshold: 0.76
+
+  # Stage 3, the ONLY decision branch. Bare skill-name cosine, immune to how the
+  # surrounding sentence is phrased.
+  #
+  # 0.86, not the 0.84 that first measured at zero false merges: the highest
+  # SIBLING pair (Spark/Hadoop) sits at 0.835, leaving 0.84 a 0.005 margin on a
+  # 12-pair sample. Contract section 17.0 is explicit that a threshold set from
+  # a small sample is provisional; a 0.005 margin is not a margin. 0.86 buys
+  # 0.025 and the recall it costs is absorbed by the review band.
+  bare_cosine_threshold: 0.86
+
+  # Stage 4: the honest residual. Pairs in [review_band_low, bare threshold)
+  # are NOT merged -- they are surfaced on the graph-confirmation screen as
+  # one-tap suggestions.
+  #
+  # 0.80 is chosen for PRECISION rather than coverage. Only one sibling pair in
+  # the reference set reaches 0.80, so the band holds mostly real duplicates and
+  # stays short enough to be read. Set it at the old 0.68 and roughly a third of
+  # all sibling pairs land in it -- a band that fills the screen with noise is a
+  # band nobody reviews, which costs the validation path this design depends on.
+  #
+  # Default state is NOT MERGED and merging requires an explicit tap. An
+  # unmerged duplicate is a redundant node the user can see and fix; a false
+  # merge silently destroys a distinction the interview needed to test, and
+  # nothing downstream can notice. Errors of omission are recoverable on the
+  # next screen; errors of commission are not.
+  review_band_low: 0.80
+
+  # Whole-token containment: "Foundry" inside "Palantir Foundry" merges.
+  # Requires the shorter name to be >= this many characters, so "R" does not
+  # merge into "React" and "Go" does not merge into "Google Cloud".
+  containment_min_chars: 5
+
+  # Stage 2 alias table: canonical name -> surface forms that mean the same
+  # thing. Seeded from this repo's OWN content library, which already carries
+  # 52 alias strings across 15 modules/roadmaps (content/modules/*.yaml,
+  # content/roadmaps/*.yaml) -- the authors hit this same wall and solved it
+  # with a curated list rather than a threshold. Extend freely; a missing
+  # alias costs one redundant node the user can merge by hand, which is the
+  # cheap direction to fail in.
+  aliases:
+    "CI/CD": ["continuous integration", "continuous delivery", "continuous deployment",
+              "continuous integration and deployment", "ci cd", "ci/cd pipelines"]
+    "Kubernetes": ["k8s", "kube", "container orchestration"]
+    "Machine Learning": ["ml", "machine-learning", "statistical learning"]
+    "Infrastructure as Code": ["iac", "infra as code"]
+    "Large Language Models": ["llm", "llms", "large language model"]
+    "Retrieval-Augmented Generation": ["rag", "retrieval augmented generation"]
+    "Site Reliability Engineering": ["sre", "site reliability"]
+    "ETL": ["extract transform load", "etl pipelines", "elt"]
+    "REST APIs": ["rest", "restful services", "restful apis", "rest services",
+                  "api development", "web apis", "http apis"]
+    "SQL": ["structured query language", "sql queries", "relational databases",
+            "writing sql", "advanced sql"]
+    "Git": ["version control", "source control", "git and github", "git & github",
+            "revision control"]
+    "Docker": ["containers", "containerization", "containerisation",
+               "docker containers"]
+    "Palantir Foundry": ["foundry", "palantir", "palantir foundry tool"]
+    "Data Structures & Algorithms": ["dsa", "data structures and algorithms",
+                                     "algorithms", "cs fundamentals"]
+    "AWS": ["amazon web services", "aws cloud"]
+    "Python": ["python programming", "python language", "programming in python",
+               "python3", "python 3"]
+    "System Design": ["systems design", "distributed systems", "scalability",
+                      "large scale system design", "architecture design"]
+    "Prompt Engineering": ["prompting", "llm prompting", "prompt design",
+                           "working with llms"]
+    "Unit Testing": ["unit tests", "writing unit tests", "test coverage"]
+    "Communication": ["communication skills", "strong communicator",
+                      "verbal and written communication", "written communication"]
+    "Stakeholder Management": ["managing stakeholders", "stakeholder engagement",
+                               "client management"]
+    "Data Modelling": ["data models", "data modeling", "schema design",
+                       "dimensional modelling"]
+    "TypeScript": ["ts", "typescript/javascript"]
+    "Terraform": ["terraform modules", "hcl"]
+    "Apache Spark": ["spark", "pyspark", "spark sql"]
+    "Apache Kafka": ["kafka", "event streaming"]
+
+# ---------------------------------------------------------------------------
+# Clustering into parent nodes.
+# ---------------------------------------------------------------------------
+clustering:
+  # PRE-REGISTERED before any JD was measured, per the Phase 0 checkpoint.
+  #
+  # A parent with >= 2 children is COHERENT if the mean pairwise bare cosine
+  # among its children is >= this value. 0.64 is the measured
+  # SIBLING|UNRELATED separation point on the reference set (SIBLING min
+  # 0.639, UNRELATED max 0.636) -- the tightest real boundary available. At
+  # 0.64: 92% of sibling pairs retained, 0% of unrelated pairs admitted.
+  #
+  # Mechanism (required by contract 17.0b -- a prediction is evidence only
+  # with a named mechanism): skills that belong under one parent sit above
+  # this line; skills drawn from different parents sit below it.
+  coherence_threshold: 0.64
+
+  # Pass condition for the deterministic clusterer. Escalation to LLM
+  # clustering happens ONLY if this fails, and the failing numbers get
+  # reported rather than the escalation being quietly swapped in.
+  #
+  # 0.80 rather than 1.00 because with 5-9 parents a single mis-grouped skill
+  # would fail an entire run. This tolerates one bad parent in five and fails
+  # at two.
+  min_coherent_parent_fraction: 0.80
+
+  # sklearn AgglomerativeClustering settings. Average linkage on cosine
+  # distance: same family as subsystems.py's approach to "group things by what
+  # they say they are", and average linkage is the one that does not chain
+  # (single) or force equal-diameter blobs (complete).
+  linkage: "average"
+  metric: "cosine"
+
+# ---------------------------------------------------------------------------
+# Node budget -- how many parents a JD is ALLOWED to produce, as a function of
+# how much material it actually contains.
+#
+# This exists because the original acceptance table demanded 5-9 parents with
+# 2-5 children each (10-45 leaf nodes) while also demanding zero hallucinated
+# skills. A sub-200-word JD contains 6-10 real skills; the extra nodes could
+# only come from the model inventing them. The two criteria were in direct
+# conflict on the short and vague cases, which are exactly the cases that
+# matter most.
+#
+# Keyed on post-canonicalisation MENTION COUNT, not word count: a 2,000-word
+# JD that is 90% benefits boilerplate has little more to say than a 150-word
+# one, and word count cannot tell the difference.
+# ---------------------------------------------------------------------------
+node_budget:
+  - max_mentions: 7
+    min_parents: 2
+    max_parents: 4
+    allow_flat: true      # a graph with no children at all is a legitimate
+                          # answer here, not a degraded one
+  - max_mentions: 14
+    min_parents: 3
+    max_parents: 5
+    allow_flat: false
+  - max_mentions: 29
+    min_parents: 5
+    max_parents: 7
+    allow_flat: false
+  - max_mentions: 100000
+    min_parents: 6
+    max_parents: 9
+    allow_flat: false
+
+# Hard structural fail regardless of budget.
+max_children_per_parent: 8
+
+# ---------------------------------------------------------------------------
+# Weight inference. Deterministic Python over the extraction output -- zero LLM
+# calls. An LLM asked to emit a weight produces a number with no derivation,
+# which cannot satisfy "explain this weight to someone who asks".
+#
+# Each signal's contribution is persisted on the node
+# (arena_skill_nodes.weight_signals_json) so a weight can be explained without
+# re-running the extractor.
+# ---------------------------------------------------------------------------
+weighting:
+  # Signal 1: which section the mention appeared in. This is the base; every
+  # other signal is an adjustment on top.
+  #
+  # HEADROOM IS LOAD-BEARING. An earlier version set required: 1.00, equal to
+  # max_weight -- which meant every required skill clamped to 1.00 and signals
+  # 2-5 changed nothing at all for the most important section in the document.
+  # The breakdown still recorded honest per-signal contributions, so the bug
+  # was invisible in the explanation while the weights it explained were all
+  # identical. Caught by test_2_title_presence, which asserted that naming a
+  # skill in the job title raises its weight and found 1.0 > 1.0.
+  #
+  # Bases now sum with the maximum possible bonuses (0.25 + 0.18 + 0.10 + 0.15
+  # = 0.68) to 1.28 for a required skill, so clamping happens only at the
+  # genuine top of the scale: a skill named in the title, repeated, mentioned
+  # early, and carrying an expert qualifier.
+  section_base:
+    required: 0.60
+    responsibilities: 0.42
+    preferred: 0.24
+    nice_to_have: 0.18
+    boilerplate: 0.03
+    unknown: 0.30
+
+  # Signal 2: the skill (or an alias) appears in the job title. A title is the
+  # single most deliberate sentence in a JD, so this is the largest single bonus.
+  title_presence_bonus: 0.25
+
+  # Signal 3: repetition. Log-scaled -- the step from one mention to two says
+  # much more than nine to ten.
+  repetition_bonus_per_log2: 0.09
+  repetition_bonus_cap: 0.18
+
+  # Signal 4: position in the document, earliest mention. Linear in the
+  # fraction of the document remaining, so a skill named in the first
+  # paragraph outranks one named in the last.
+  position_bonus_max: 0.10
+
+  # Signal 5: an attached experience qualifier. "8+ years of Kafka" is a
+  # different claim about importance than "exposure to Kafka".
+  qualifier_bonus:
+    expert: 0.15
+    proficient: 0.08
+    working: 0.00
+    awareness: -0.12
+
+  # Final clamp. Floor is above zero so a boilerplate-only skill still exists
+  # as a node rather than being weighted out of visibility.
+  min_weight: 0.05
+  max_weight: 1.00
+
+# ---------------------------------------------------------------------------
+# Target-tier inference from experience qualifiers. First matching phrase in
+# tier order (expert -> awareness) wins; a mention with no qualifier defaults
+# to `default_tier`.
+#
+# Ordered most-specific-first WITHIN each tier, and the tiers are checked
+# strongest-first, so "advanced" does not shadow "5+ years of advanced".
+# ---------------------------------------------------------------------------
+tiers:
+  order: ["expert", "proficient", "working", "awareness"]
+  default_tier: "working"
+  phrases:
+    expert:
+      - "expert"
+      - "expertise in"
+      - "deep expertise"
+      - "deep experience"
+      - "mastery"
+      - "authority on"
+      - "8+ years"
+      - "9+ years"
+      - "10+ years"
+      - "extensive experience"
+    proficient:
+      - "3+ years"
+      - "4+ years"
+      - "5+ years"
+      - "6+ years"
+      - "7+ years"
+      - "strong"
+      - "advanced"
+      - "proven"
+      - "solid"
+      - "in-depth"
+      - "significant experience"
+    working:
+      - "1+ years"
+      - "2+ years"
+      - "experience with"
+      - "experience in"
+      - "working knowledge"
+      - "hands-on"
+      - "hands on"
+      - "comfortable with"
+      - "proficiency in"
+      - "ability to"
+    awareness:
+      - "familiarity"
+      - "familiar with"
+      - "exposure to"
+      - "awareness of"
+      - "nice to have"
+      - "a plus"
+      - "bonus"
+      - "basic"
+      - "some knowledge"
+      - "understanding of"
+      - "interest in"
+      - "willingness to learn"
+
+# ---------------------------------------------------------------------------
+# JD section detection. Deterministic -- a header line is matched against these
+# phrase lists to label the character range that follows it.
+#
+# `boilerplate` is as load-bearing as the others: without it, "competitive
+# salary" and "we are an equal opportunity employer" contribute skill mentions
+# at `unknown` weight, and the graph fills with things nobody will be
+# interviewed on.
+# ---------------------------------------------------------------------------
+sections:
+  required:
+    - "requirements"
+    - "required"
+    - "required qualifications"
+    - "minimum qualifications"
+    - "basic qualifications"
+    - "must have"
+    - "must-have"
+    - "what you need"
+    - "what you'll need"
+    - "what we're looking for"
+    - "qualifications"
+    - "skills and experience"
+    - "who you are"
+  preferred:
+    - "preferred"
+    - "preferred qualifications"
+    - "desired"
+    - "desirable"
+  nice_to_have:
+    - "nice to have"
+    - "nice-to-have"
+    - "bonus points"
+    - "bonus"
+    - "pluses"
+    - "it's a plus"
+    - "good to have"
+  responsibilities:
+    - "responsibilities"
+    - "what you'll do"
+    - "what you will do"
+    - "the role"
+    - "about the role"
+    - "your role"
+    - "day to day"
+    - "day-to-day"
+    - "in this role"
+    - "your impact"
+  boilerplate:
+    - "about us"
+    - "about the company"
+    - "who we are"
+    - "our mission"
+    - "benefits"
+    - "perks"
+    - "perks and benefits"
+    - "compensation"
+    - "salary"
+    - "equal opportunity"
+    - "eeo"
+    - "diversity"
+    - "how to apply"
+    - "application process"
+    - "why join us"
+    - "our values"
+
+# ---------------------------------------------------------------------------
+# LLM budget. The pipeline is allowed at most this many calls per extraction:
+# one for skill-mention extraction, one for cluster naming. Everything between
+# them is deterministic Python. Exceeded => the run raises rather than silently
+# costing more, because free-tier RPD is the scarce resource and a leak here is
+# invisible until the day it isn't.
+# ---------------------------------------------------------------------------
+llm:
+  max_calls_per_extraction: 2
+  # Gemini first, not Groq. chat_json(fast=True) puts Groq first, whose free
+  # tier TPM (~6k) is exceeded by a long JD plus a structured response;
+  # Gemini 2.5 Flash carries ~250k TPM. Passed as fast=False.
+  use_fast_lane: false
+  # Truncation guard. A JD longer than this is cut with a marker rather than
+  # silently sent, so a 20,000-word paste cannot quietly consume a day's
+  # token budget.
+  max_jd_chars: 24000

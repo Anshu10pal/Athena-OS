@@ -106,3 +106,41 @@ class TopicAddIn(BaseModel):
 
 class ResourceReorderIn(BaseModel):
     resource_ids: list[int]
+
+
+# ---------------- Interview Arena (Phase A) ----------------
+
+
+class ArenaJobTargetIn(BaseModel):
+    title: str = ""
+    jd_text: str
+
+
+class ArenaNodeUpdateIn(BaseModel):
+    id: int
+    canonical_name: Optional[str] = None
+    jd_weight: Optional[float] = None
+    target_tier: Optional[str] = None
+    # 0 means "make this a top-level parent". A sentinel rather than None
+    # because None already means "leave the parent alone" in a PATCH, and the
+    # two are different instructions -- conflating them makes promoting a node
+    # to top level impossible to express.
+    parent_id: Optional[int] = None
+
+
+class ArenaNodeAddIn(BaseModel):
+    canonical_name: str
+    parent_id: Optional[int] = None
+    jd_weight: Optional[float] = None
+    target_tier: Optional[str] = None
+
+
+class ArenaGraphPatchIn(BaseModel):
+    updates: list[ArenaNodeUpdateIn] = []
+    additions: list[ArenaNodeAddIn] = []
+    deletes: list[int] = []
+    confirm: bool = False
+
+
+class ArenaMergeDecisionIn(BaseModel):
+    decision: str  # accepted|rejected

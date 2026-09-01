@@ -16,6 +16,7 @@ const GROUPS = [
       { to: "/communication", label: "Communication Gym", desc: "Write, read, listen, speak" },
       { to: "/presentation", label: "Presentation Arena", desc: "Deliver to a live room" },
       { to: "/interview", label: "Interview Arena", desc: "Sit a mock interview" },
+      { to: "/arena", label: "Interview Arena \u00b7 JD", desc: "Build a skill graph from a job description" },
     ],
   },
   {

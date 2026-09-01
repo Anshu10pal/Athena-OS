@@ -5,6 +5,8 @@ import Layout from "./components/Layout";
 import LevelUpOverlay from "./components/LevelUpOverlay";
 import Chat from "./pages/Chat";
 import Hub from "./pages/Hub";
+import ArenaGraph from "./pages/ArenaGraph";
+import ArenaJobTarget from "./pages/ArenaJobTarget";
 import InterviewArena from "./pages/InterviewArena";
 import Login from "./pages/Login";
 import Missions from "./pages/Missions";
@@ -55,7 +57,13 @@ export default function App() {
           <Route path="/roadmap" element={<Roadmap />} />
           <Route path="/modules/:slug" element={<ModuleDetail />} />
           <Route path="/missions" element={<Missions />} />
+          {/* The legacy MVP interview flow. Kept mounted deliberately: it still
+              feeds the dashboard readiness tile, achievements and the activity
+              streak, and it is a useful side-by-side comparison against the
+              Arena while that is being built. */}
           <Route path="/interview" element={<InterviewArena />} />
+          <Route path="/arena" element={<ArenaJobTarget />} />
+          <Route path="/arena/:id/graph" element={<ArenaGraph />} />
           <Route path="/oratory" element={<OratoryDeck />} />
           <Route path="/presentation" element={<PresentationArena />} />
           <Route path="/vault" element={<Vault />} />

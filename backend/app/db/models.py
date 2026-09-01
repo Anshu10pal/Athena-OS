@@ -1086,3 +1086,201 @@ class RepoJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     started_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)
     finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)
+
+# ---------------- Interview Arena: JD -> confirmed skill graph (Phase A) ----------------
+#
+# Namespaced `arena_*`, NOT `interview_*`. The `interview_sessions` table above
+# belongs to the original MVP interview flow, which is still live and still read
+# by three other modules (analytics.py's readiness tile, achievements.py's
+# unlocks, activity.py's streak feed). Colliding with it would either break
+# those or force a migration of user data into a distinction it was never
+# recorded with. The legacy path also stays useful during development as a
+# side-by-side comparison against this one.
+
+
+class ArenaJobTarget(Base):
+    """One job description, parsed into a skill graph the user then confirms.
+
+    The JD is the source of truth for this module -- deliberately NOT the user's
+    roadmap. Someone may interview for a role they already hold while learning
+    something else entirely, so coupling the two would produce a graph that
+    tests the wrong thing.
+
+    Idempotency is on (user_id, jd_hash, extractor_version), not jd_hash alone:
+
+    - `user_id`, because without it user B pasting user A's JD receives A's
+      hand-edited graph, including A's corrections and A's confirmation.
+    - `extractor_version`, because the extraction prompt and the
+      canonicalisation cascade will change. Keyed on jd_hash alone, the first
+      graph built for a JD would be served forever and a prompt improvement
+      would be invisible to every JD already in the database. This is the same
+      argument the item bank makes for `generator_version`, applied one table
+      earlier.
+    """
+
+    __tablename__ = "arena_job_targets"
+    __table_args__ = (
+        UniqueConstraint("user_id", "jd_hash", "extractor_version",
+                         name="uq_arena_job_target_user_jd_extractor"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    jd_text: Mapped[str] = mapped_column(Text, default="")
+
+    # sha256 over NORMALISED text (collapsed whitespace, casefolded) plus the
+    # title -- not the raw paste. Hashing raw text means one stray newline from
+    # a different copy-paste regenerates the whole graph and loses the user's
+    # edits, which is the opposite of what idempotency is for.
+    jd_hash: Mapped[str] = mapped_column(String(64), index=True)
+    extractor_version: Mapped[str] = mapped_column(String(20))
+
+    # NULL until the user confirms the graph. A session must refuse to start
+    # while this is NULL -- the confirmation screen is this component's only
+    # validation path, so skipping it removes the only check there is.
+    graph_confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)
+
+    # Per-run provenance: latency, LLM call count, provider, mention counts,
+    # hallucinated-span rejections, the node budget that applied, and the
+    # measured cluster coherence. Kept because the acceptance criteria are
+    # per-JD numbers and reconstructing them later means re-running the
+    # extractor against a changed prompt, which measures something else.
+    extraction_metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    nodes: Mapped[list["ArenaSkillNode"]] = relationship(
+        back_populates="job_target", cascade="all, delete-orphan")
+
+
+class ArenaSkillNode(Base):
+    """One skill in the graph: a parent cluster, or a child of one.
+
+    Parents and children are the same table with a self-referential
+    `parent_id`, rather than two tables. The user is allowed to reparent,
+    promote and demote nodes on the confirmation screen, and a two-table model
+    turns every one of those edits into a delete-plus-insert that loses the
+    node's extraction provenance.
+    """
+
+    __tablename__ = "arena_skill_nodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_target_id: Mapped[int] = mapped_column(
+        ForeignKey("arena_job_targets.id"), index=True)
+    parent_id: Mapped[int] = mapped_column(
+        ForeignKey("arena_skill_nodes.id"), nullable=True, default=None, index=True)
+
+    canonical_name: Mapped[str] = mapped_column(String(200))
+
+    # 0.05-1.00. Derived deterministically from five JD signals; see
+    # weight_signals_json for the breakdown that explains it.
+    jd_weight: Mapped[float] = mapped_column(Float, default=0.5)
+    target_tier: Mapped[str] = mapped_column(String(20), default="working")
+
+    # THE EXPLANATION, not a cache of it. {signal: contribution} as computed at
+    # extraction time -- section base, title presence, repetition, position,
+    # qualifier. Persisted because the requirement is "explain a weight to
+    # someone who asks", and a weight you can only explain by re-running the
+    # extractor against a since-changed prompt is not explainable. The values
+    # sum (with the clamp) to jd_weight, which a test pins.
+    weight_signals_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # Every JD surface form that collapsed into this node, e.g.
+    # ["REST APIs", "RESTful services", "API development"]. Shown in the
+    # confirmation UI so a user can see WHAT was merged before accepting it --
+    # a canonical name alone hides the merge, which is the one thing about
+    # canonicalisation a human needs to check.
+    surface_forms_json: Mapped[list] = mapped_column(JSON, default=list)
+
+    # Per-merge provenance: [{surface, method, score}] where method is one of
+    # exact | alias | containment | enriched_cosine | bare_cosine | user.
+    #
+    # `method` is a MONITORING signal, not decoration. Stage 3 of the cascade
+    # is `enriched >= 0.76 OR bare >= 0.84` and the two branches provably catch
+    # different pairs (enrichment lifted the paraphrase cases and DROPPED
+    # "unit testing"/"writing unit tests" from 0.876 to 0.714). If one branch
+    # stops firing entirely on real JDs, the extraction sentences have changed
+    # shape and enrichment is no longer doing what it did on the reference set.
+    # Cheap to record now, not reconstructable later.
+    merge_evidence_json: Mapped[list] = mapped_column(JSON, default=list)
+
+    # The verbatim JD spans this node's mentions came from, with char offsets.
+    # This is the anti-hallucination record: a mention whose span is not
+    # literally present in the JD is rejected at extraction time, and what
+    # survived is kept so the claim is auditable rather than asserted.
+    source_spans_json: Mapped[list] = mapped_column(JSON, default=list)
+
+    # Qdrant point id, once items need semantic dedup against this node
+    # (Phase 2). Nullable and unused in Phase A -- declared now because
+    # backfilling an embedding id across a populated table is strictly worse
+    # than carrying a null column.
+    embedding_id: Mapped[str] = mapped_column(String(64), nullable=True, default=None)
+
+    # llm_extraction | cluster_parent | user_added.
+    #
+    # No Python-side default, deliberately -- the same argument
+    # ComprehensionCard.card_source makes one screen up. A default makes the
+    # field untestable from below: a fixture that forgot to say where a node
+    # came from produces a row indistinguishable from one that meant it, and
+    # `user_edited` correction signal would then be attributed to the model.
+    extraction_source: Mapped[str] = mapped_column(String(20))
+
+    # Free correction signal. The user renaming, reweighting or reparenting a
+    # node is a labelled statement that the extractor got it wrong; logging it
+    # costs a boolean and discarding it costs the only ground truth this
+    # component will ever get.
+    user_edited: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    job_target: Mapped["ArenaJobTarget"] = relationship(back_populates="nodes")
+
+
+class ArenaMergeSuggestion(Base):
+    """A canonicalisation pair that landed in the review band -- ambiguous
+    enough that the cascade refused to decide, similar enough that it is worth
+    asking about.
+
+    Default state is `pending`, which renders as NOT MERGED. Accepting requires
+    an explicit action. The asymmetry is deliberate and is the whole reason this
+    table exists rather than the cascade merging the band itself: an unmerged
+    duplicate is a redundant node the user can see and delete, while a false
+    merge silently destroys a distinction the interview needed to test and
+    leaves nothing downstream able to notice. Pre-selecting the merges would
+    also bias the user toward ratifying the model's grouping instead of
+    interrogating it, which is what the confirmation screen exists to make them
+    do.
+
+    A REJECTED suggestion is the valuable row. It is hand-labelled negative
+    data on exactly the band where the instrument is weakest -- the only such
+    data this module can produce -- and it is what a future retune of
+    review_band_low should be measured against.
+
+    Deliberately no ForeignKey on the two node ids: the user may delete a node
+    while this record must outlive it, same reasoning as RepoDeletionAudit. The
+    names are denormalised for the same reason -- a suggestion whose subject has
+    been deleted must still be readable.
+    """
+
+    __tablename__ = "arena_merge_suggestions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_target_id: Mapped[int] = mapped_column(
+        ForeignKey("arena_job_targets.id"), index=True)
+
+    left_node_id: Mapped[int] = mapped_column(Integer)
+    right_node_id: Mapped[int] = mapped_column(Integer)
+    left_name: Mapped[str] = mapped_column(String(200), default="")
+    right_name: Mapped[str] = mapped_column(String(200), default="")
+
+    # Both branch scores, always, even though only one decided the band. The
+    # pair of numbers is the diagnostic; either alone is not.
+    enriched_cosine: Mapped[float] = mapped_column(Float, default=0.0)
+    bare_cosine: Mapped[float] = mapped_column(Float, default=0.0)
+
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

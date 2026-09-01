@@ -94,6 +94,13 @@ def _migrated_inspector(tmp_path, monkeypatch):
 # asserting over all of it would fail for reasons unrelated to code health.
 CODE_HEALTH_TABLES = ("code_health_snapshots", "code_file_health", "code_files")
 
+# Interview Arena Phase A. Added to this file rather than trusting the
+# create_all-based suite for the same reason the file exists: a column on the
+# model but in no migration is invisible to every other test, and these three
+# tables are brand new so all of their columns are in exactly that category
+# until a real migration run confirms otherwise.
+ARENA_TABLES = ("arena_job_targets", "arena_skill_nodes", "arena_merge_suggestions")
+
 
 class TestMigrationsMatchModels:
     def test_code_health_columns_exist_after_a_real_migration_run(self, tmp_path, monkeypatch):
@@ -167,4 +174,42 @@ class TestMigrationTestIsolation:
         _migrated_inspector(tmp_path, monkeypatch)
         assert dev_file.stat().st_mtime_ns == before, (
             "the configured development database was modified by a migration test"
+        )
+
+
+class TestArenaMigrationsMatchModels:
+    def test_arena_columns_exist_after_a_real_migration_run(self, tmp_path, monkeypatch):
+        inspector = _migrated_inspector(tmp_path, monkeypatch)
+        for table in ARENA_TABLES:
+            assert table in inspector.get_table_names(), f"{table} missing after upgrade head"
+            migrated = {c["name"] for c in inspector.get_columns(table)}
+            declared = {c.name for c in Base.metadata.tables[table].columns}
+            missing = declared - migrated
+            assert not missing, (
+                f"{table}: columns on the model but not in any migration: {sorted(missing)}. "
+                "create_all-based tests cannot see this."
+            )
+
+    def test_the_idempotency_key_is_a_real_unique_constraint(self, tmp_path, monkeypatch):
+        """Not an application-level check. Two concurrent submissions of the same
+        JD -- a double-clicked submit button -- must not produce two graphs, and
+        only the database can promise that."""
+        inspector = _migrated_inspector(tmp_path, monkeypatch)
+        constraints = inspector.get_unique_constraints("arena_job_targets")
+        keys = [set(c["column_names"]) for c in constraints]
+        assert {"user_id", "jd_hash", "extractor_version"} in keys, (
+            f"idempotency key missing; found {keys}. Without extractor_version the "
+            "first graph built for a JD is served forever; without user_id one "
+            "user receives another's edited graph."
+        )
+
+    def test_extraction_source_has_no_server_default(self, tmp_path, monkeypatch):
+        """The seam, same argument as comprehension_cards.card_source. A default
+        makes "the writer forgot" indistinguishable from "the writer meant it",
+        and user_edited correction signal would then be attributed to the model."""
+        inspector = _migrated_inspector(tmp_path, monkeypatch)
+        columns = {c["name"]: c for c in inspector.get_columns("arena_skill_nodes")}
+        assert columns["extraction_source"]["default"] is None, (
+            "extraction_source acquired a server_default; a row can now claim an "
+            "origin no code path gave it"
         )

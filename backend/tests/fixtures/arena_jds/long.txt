@@ -1,0 +1,208 @@
+title: Data Scientist
+source: https://www.usajobs.gov/job/879689500
+retrieved: 2026-09-01
+category: long (>1500 words)
+why: 3487 words. A federal announcement, so the majority of it is
+  non-skill boilerplate -- security clearance, probationary period, veterans'
+  preference, the USA Hire assessment procedure, document requirements,
+  agency contact details. That is the actual stress this case exists for:
+  whether jd_sections labels boilerplate correctly at length and whether the
+  extractor stays out of it. A 3,000-word posting whose every line was about
+  skills would test tokenisation, not section handling.
+stability: the announcement CLOSED 2026-08-13, before retrieval, so its text
+  cannot change under the fixture. The page may eventually be removed; this
+  file plus this header is then the record of what was measured.
+extraction: fetched with curl, converted to text by deterministic tag
+  stripping. NO model in the loop -- the span check requires verbatim text, so
+  a summarised or paraphrased fixture would be both worthless and dishonest.
+  Removed: site chrome (nav, footer, cookie banner), USAJOBS' duplicate
+  mobile/desktop render, the "Help" UI affordance lines, and the trailing
+  site-policy link list after "Fair and transparent". Every remaining line is
+  verbatim from the posting.
+chars: 23900 -- under the 24000 max_jd_chars limit, so this case measures
+  LENGTH handling rather than the truncation path. Truncation needs its own
+  case and does not have one yet.
+---
+Data Scientist
+Department of Agriculture, Animal and Plant Health Inspection Service
+Marketing and Regulatory Programs
+
+Summary
+The Data Scientist position is within an analytical unit, applying scientific and technical findings to risk analyses, policy decisions, operational data management, and analyses. Responsible for organizing, replicating, architecting, distributing, and reporting on PPQ and cooperator mission data, including geospatial and non-geospatial information.
+
+Overview
+Reviewing applications
+Open date: 08/07/2026
+Closed date: 08/13/2026
+Location
+3 vacancies in the following locations:
+Fort Collins, CO
+Raleigh, NC
+No matching locations found.
+Work site options
+Telework eligible
+Yes—as determined by the agency policy.
+Remote job
+No
+Relocation expenses reimbursed
+Yes—You may qualify for reimbursement of relocation expenses in accordance with agency policy.
+Salary
+$111,147 - $154,280 per year
+Pay scale & grade
+GS 13
+Promotion potential
+13
+Learn more about pay scale and grade
+Pay scale and grade determines the salary of the job.
+Work schedule
+Full-time
+Travel Required
+Occasional travel - You may be expected to travel for this position.
+Appointment type
+Permanent
+Occupations and job series
+1560 Data Science Series
+Supervisory status
+No
+Federal service type
+This job is in the Competitive Service
+Represented by a union
+No
+Drug test
+No
+Security clearance
+Not Required
+Position sensitivity and risk
+Moderate Risk (MR)
+Jobs require a
+background check and some require a
+security clearance . The type depends on the job.
+Background check type
+Credentialing
+Suitability/Fitness
+Financial disclosure required
+No
+Some jobs require
+financial disclosure to identify conflicts of interests.
+Announcement number
+DE-13030711-26-PQH
+Control number
+879689500
+This job is open to
+The public
+U.S. Citizens, Nationals or those who owe allegiance to the U.S.
+Career transition (CTAP, ICTAP, RPL)
+Federal employees whose job, agency or department was eliminated and are eligible for priority over other applicants.
+Duties
+The duties may include, but are not limited to:
+Key contributions involve solving technical issues, such as designing data flows and using data systems to create new and modify existing tools for better customer experience.
+Conducts statistical analyses and applies data science methods to support the transition to data-driven initiatives.
+Creates interactive data visualization tools like Tableau, ESRI, R, Python, and Power BI to present analytical results with graphs, charts, dashboards, and other visualizations.
+Follows all data governance, including standards, policies, and procedures and documentation to meet established requirements.
+Offers management technical guidance and recommendations.
+Communicates clearly and professionally with subject matter experts (SME), analysts, other data professionals, and stakeholders
+Identifies problems, determines solutions, tests hypotheses, and evaluates results.
+Works collaboratively with program and management staff to analyze issues, make and implement recommendations, achieve consensus, and deliver informed advice.
+Performs other duties as assigned.
+Requirements
+Conditions of employment
+You must be a US Citizen or US National.
+Individuals who were born male after 12/31/1959 must be Selective Service registered or exempt.
+Subject to satisfactory adjudication of background investigation and/or fingerprint check.
+Successful completion of one-year probationary period, unless previously served. Refer to the Next Steps section for more information.
+Direct Deposit: Per Public Law 104-134 all Federal employees are required to have federal payments made by direct deposit to their financial institution.
+Successfully pass the E-Verify employment verification check. To learn more about E-Verify, including your rights and responsibilities, visit E-Verify at https://www.e-verify.gov/
+All USDA employees are required to be enrolled in Continuous Vetting, which authorizes government agencies to receive notifications of criminal activity on individuals who hold low risk, public trust, or national security positions.
+May be required to successfully complete a probationary and a trial period. Refer to the Next Steps section for more information.
+Qualifications
+Applicants must meet all qualifications and eligibility requirements by the closing date of the announcement, including specialized experience and/or education, as defined below.
+BASIC REQUIREMENT:
+Degree : Mathematics, statistics, computer science, data science or field directly related to the position. The degree must be in a major field of study (at least at the baccalaureate level) that is appropriate for the position.
+OR
+Combination of education and experience: Courses equivalent to a major field of study (30 semester hours) as shown in the paragraph above, plus additional education or appropriate experience. In addition to the basic requirement applicants must also possess:
+FOR THE GS-13 LEVEL: Applicants must have one year of specialized experience (equivalent to the GS-12 level) that may have been obtained in the private or public (local, county, state, Federal) sectors which demonstrates:
+Leading complex data science projects from design through deployment by applying analytical methods such as statistics or machine learning, maintaining high data quality, and coordinating with cross-functional teams to meet organizational needs.
+Building and maintaining large-scale automated workflows to process, manage, and validate complex datasets.
+Cataloging, documenting, and standardizing datasets and workflows to improve accessibility, discoverability, and reuse.
+Clearly communicating analytical work to executives, technical staff, and non-technical stakeholders.
+Note: There is no education substitution for this grade level.
+TRANSCRIPTS are required if:
+This position requires specific coursework or a degree in a specific field to be basically qualified.
+This education must have been successfully completed and obtained from an accredited school, college, or university.
+Experience refers to paid and unpaid experience, including volunteer work done through National Service programs (e.g., Peace Corps, AmeriCorps) and other organizations (e.g., professional, philanthropic, religious, spiritual, community, student, social). Volunteer work helps build critical competencies and can provide valuable training and experience that translates directly to paid employment. You will receive credit for all qualifying experience, including volunteer experience.
+Education
+Please see above for education qualification requirement information.
+Additional information
+Career Transition Assistance Plan (CTAP), Reemployment Priority List (RPL), or Interagency Career Transition Assistance Plan (ICTAP): Visit the OPM website for information on how to apply as a CTAP, RPL, or ICTAP eligible. To exercise selection priority for this vacancy, CTAP/RPL/ICTAP candidates must meet the basic eligibility requirements and all selective factors. CTAP/ICTAP candidates must be rated and determined to be well qualified (or above) based on an evaluation of the competencies listed in the How You Will Be Evaluated section. When assessed through a score-based category rating method, CTAP/ICTAP applicants must receive a rating of at least 85 out of a possible 100.
+First time hires to the federal government normally start at the lowest rate of the salary range for the grade selected
+Locality pay will vary based upon the selectee's duty location. A final salary determination will be made upon selection.
+Reasonable Accommodation (RA) Requests: If you believe you have a disability (i.e., physical or mental), covered by the Rehabilitation Act of 1973 as amended, that would interfere with completing the USA Hire Competency Based Assessments, you will be granted the opportunity to request a RA in your online application. Requests for RA for the USA Hire Competency Based Assessments and appropriate supporting documentation for RA must be received prior to starting the USA Hire Competency Based Assessments. Decisions on requests for RA are made on a case-by-case basis. If you meet the minimum qualifications of the position, after notification of the adjudication of your request, you will receive an email invitation to complete the USA Hire Competency Based Assessments, based on your adjudication decision. You must complete all assessments within 48 hours of receiving the URL to access the USA Hire Competency Based Assessments, if you received the link after the close of the announcement. To determine if you need a RA, please review the Procedures for Requesting a Reasonable Accommodation for Online Assessments here .
+Expand Hide additional information
+Candidates should be committed to improving the efficiency of the Federal government, passionate about the ideals of our American republic, and committed to upholding the rule of law and the United States Constitution.
+Benefits
+A career with the U.S. government provides employees with a comprehensive benefits package. As a federal employee, you and your family will have access to a range of benefits that are designed to make your federal career very rewarding. Opens in a new window Learn more about federal benefits .
+Eligibility for benefits depends on the type of position you hold and whether your position is full-time, part-time or intermittent. Contact the hiring agency for more information on the specific benefits offered.
+How you will be evaluated
+You will be evaluated for this job based on how well you meet the qualifications above.
+Applications will be evaluated in accordance with Office of Personnel Management's (OPM) Delegated Examining Procedures and USDA policy using category rating. This means you will be evaluated based on how well you meet the qualifications listed in this vacancy announcement. Your qualifications will be evaluated based on your application materials (e.g., resume, supporting documents), your responses to the application questionnaire, and your responses to all assessments required for this position.
+Applicants who meet basic minimum qualifications will be placed in one of three categories: Best Qualified, Well Qualified, or Qualified. Within these categories, applicants eligible for veteran's preference will receive selection priority over non-veterans. Category placement will be determined based on applicants' quality of experience and the extent they possess the following competencies (knowledge, skills, abilities (KSAs), and other characteristics):
+Attention to Detail
+Customer Service
+Decision Making
+Flexibility
+Integrity/Honesty
+Interpersonal Skills
+Learning
+Reasoning
+Self-Management
+Stress Tolerance
+Teamwork
+Overstating your qualifications and/or experience in your application materials or application questionnaire may result in your removal from consideration. Cheating on an assessment may also result in your removal from consideration.
+Your application, including the online Assessment Questionnaire, will be reviewed to determine if you meet (a) minimum qualification requirements and (b) the resume supports the answers provided to the job-specific questions. Your resume must clearly support your responses to all the questions addressing experience and education relevant to this position. Those determined to be in the best qualified category will be referred to the selecting official for consideration.
+Note: If, after reviewing your resume and/or supporting documentation, a determination is made that you have inflated your qualifications and or experience, your score may be adjusted to more accurately reflect your abilities, or you may be found ineligible. Please follow all instructions carefully. Errors or omissions may affect your rating. Providing inaccurate information on Federal documents could be grounds for non-selection or disciplinary action up to including removal from the Federal service. Cheating on the online assessment may also result in your removal from consideration.
+To preview the application questionnaire, please visit: https://apply.usastaffing.gov/ViewQuestionnaire/13030711
+Benefits
+A career with the U.S. government provides employees with a comprehensive benefits package. As a federal employee, you and your family will have access to a range of benefits that are designed to make your federal career very rewarding. Opens in a new window Learn more about federal benefits .
+Eligibility for benefits depends on the type of position you hold and whether your position is full-time, part-time or intermittent. Contact the hiring agency for more information on the specific benefits offered.
+Required documents
+Required Documents
+The following documents are required for your applicant package to be complete. Our office cannot be responsible for incompatible software, your system failure or downtime, etc. Encrypted documents will not be accepted. Failure to submit required, legible documents may result in loss of consideration.
+Resume that includes: 1) personal information such as name, address, contact information; 2) education; 3) detailed work experience related to this position as described in the major duties including work schedule, hours worked per week, dates of employment; title, series, grade (if applicable); 4) other qualifications; and 5) supervisors name and phone number for each work period listed and whether or not they may be contacted for reference checks. Resume cannot exceed two pages. Only one resume will be reviewed.
+If education is required or you are using education to qualify, you must submit a copy of your college transcripts. An unofficial copy is sufficient with the application if it includes your name and the necessary course information; however, if you are selected, you will be required to submit official transcripts prior to entering on duty. Education must have been successfully obtained from an accredited school, college or university. If you are using education completed in foreign colleges or universities to meet the qualification requirements, you must show that the education credentials have been evaluated by a private organization that specializes in interpretation of foreign education programs and such education has been deemed equivalent to that gained in an accredited U.S. education program. For further information, visit the following: Foreign Education Evaluation . All transcripts must be in English or include an English translation.
+If claiming veterans' preference, you must submit a DD214, Certificate of Release from Active Duty, which shows dates of service and discharge under honorable conditions. If currently on active duty you must submit a certification of expected discharge or release from active duty service under honorable conditions within 120 days after the date the certification is submitted. The certification must be on the letterhead of the appropriate military branch and include the dates of military service. Veterans' preference must be verified prior to appointment. Without this documentation, you will not receive veteran's preference and your application will be evaluated based on the material(s) submitted.
+If claiming 10-point veterans' preference you must provide the DD214 or certification requirements (see above bullet), plus the proof of entitlement of this preference as listed on the SF-15 Application for 10-point Veterans' Preference. The SF-15 should be included but is not required. Failure to submit these documents could result in the determination that there is insufficient documentation to support your claim for 10-point preference. For more information on veterans' preference visit FEDSHIREVETS
+Surplus or displaced employees eligible for CTAP, RPL, or ICTAP priority must provide: proof of eligibility (RIF separation notice, notice of proposed removal for declining a transfer of function or directed reassignment to another commuting area, notice of disability annuity termination), SF-50 documenting separation (as applicable), last performance appraisal that is at least fully successful or its equivalent, and your most recent SF-50 noting position, grade level, and duty location with your application per 5 CFR 330.
+Worker's Compensation Separation: Agency certification of inability to place employee AND Notification of Separation OR Separation SF-50.
+Disability Annuity Termination: Notification from OPM of disability annuity termination AND Separation SF-50 of the last position held. Military Reserve or National Guard Technician Special Disability Retirement Annuity under 5 U.S.C. 8337(h) or 8456: Certification of special disability retirement annuity from a military department or National Guard Bureau AND Separation SF-50 of the last position held.
+How to Apply
+Please read the entire announcement and all the instructions before you begin an application. To apply and be considered for this position, you must complete all required questionnaires, assessments, and required documentation as specified in the How to Apply and Required Documents section. The complete application package must be submitted by 11:59 PM (ET) on the closing date of the announcement to receive consideration.
+Resume cannot exceed two pages.
+The application process is as follows:
+1: Create a USAJOBS account (if you do not already have one) at www.usajobs.gov. It is recommended that as part of your profile you set up automatic email notification to be informed when the status of your application changes. If you choose not to set up this automatic notification, then you will have to log into your USAJOBS account to check on the status of your application.
+2: Create a Resume with USAJOBS or upload a Resume into your USAJOBS account. You may want to customize your resume to ensure it documents duties and accomplishments you have gained that are directly related to this position in order to verify that qualifications are met. In addition, your resume must support your responses to the online questionnaire (you may preview the online questionnaire by clicking on the link at the end of the How You Will Be Evaluated section of the job announcement).
+3: Click "Apply Online" and follow the prompts to complete the Occupational Questionnaire and attach any additional documents that may be required. You can update your application or documents anytime while the announcement is open. Simply log into your USAJOBS account and click on "Application Status." Click on the position title, and then select "Update Application" to continue.
+4: If you are required to take the USA Hire Competency Based Assessments, you will be notified after submitting your application. The notification will be provided in your application submission screen and via email. The notification will include your unique assessment access link to the USA Hire system and the completion deadline. Additionally, in USAJOBS you can click "Track this application" to return to your assessment completion notice.
+5: Access USA Hire using your unique assessment link. Access is granted through your USAJOBS login credentials.Review all instructions prior to beginning your assessments. You will have the opportunity to request a testing accommodation before beginning the assessments should you have a disability covered under the Rehabilitation Act of 1973 as amended.
+6: Set aside at least 1-2 hours to take the USA Hire Assessments; however, most applicants complete the assessments in less time. If you need to stop the assessments and continue later, you can re-use your unique assessment link.
+7: Your responses to the USA Hire Assessments will be reused for one year (in most cases) from the date you complete an assessment. If future applications you submit require completion of the same assessments, your responses will be automatically reused.
+Visit the USA Hire Applicant Resource Center for practice assessments and assessment preparation resources at https://support-usahire.opm.gov/hc/en-us .
+To update your application, including supporting documentation: During the announcement open period, return to your USAJOBS account, find your application record, and click Edit my application . This option will no longer be available once the announcement has closed.
+To view the announcement status or your application status : Click on this: https://www.usajobs.gov/Help/how-to/application/status/ . Your application status page is where you can view your application status, USA Hire assessment completion status, and review your notifications sent by the hiring agency regarding your application.
+NOTE : Please verify that documents you are uploading from USAJOBs transfer into the Agency's staffing system as there is a limitation to the number of documents that can be transferred. However, once in the Agency's staffing system, you will have the opportunity to upload additional documents. Uploaded documents must be less than 5MB and in one of the following document formats: GIF, JPG, JPEG, PNG, RTF, PDF, TXT or Word (DOC or DOCX). Do not upload Adobe Portfolio documents because they are not viewable. Only one resume will be reviewed. Applicants who submit a resume that exceeds two pages will be removed from consideration.
+Agency contact information
+MRP Human Resources
+Phone
+612-336-3227
+Email
+MRP.Application.Help@usda.gov
+Address
+Animal and Plant Health Inspection Service
+USDA APHIS MRPBS
+250 Marquette Avenue, Suite 410
+Minneapolis, MN 55401
+US
+Next steps
+If you set up your USAJOBS account to send automatic email notifications, your will receive an email acknowledging: 1) the submission of your online Occupational Questionnaire and resume was successful, 2) if you were referred to the selecting official for consideration, and 3) if you were selected or not selected. Your application will be reviewed to verify that you meet the eligibility and qualification requirements for the position prior to issuing referral lists to the selecting official. If further evaluation or interviews are required, you will be contacted. Log in to your USAJOBS account to check your application status. We expect to make a final job offer approximately 40 days after the deadline for applications.
+Multiple positions may be filled from this announcement. This announcement may also be used to fill additional like vacancies, including vacancies elsewhere within the agency or other USDA organizations.
+As a condition of employment for accepting this position, you will be required to serve a 1-year probationary period during which we will evaluate your fitness and whether your continued employment advances the public interest. In determining if your employment advances the public interest, we may consider: your performance and conduct; the needs and interests of the agency; whether your continued employment would advance organizational goals of the agency or the Government; and whether your continued employment would advance the efficiency of the Federal service. Upon completion of your probationary period your employment will be terminated unless you receive certification, in writing, that your continued employment advances the public interest.
+Under the Fair Chance Act , agencies are not allowed to request information about an applicant's criminal history until a conditional offer of employment has been made, except as allowed for access to classified information; assignment to national security duties or positions; acceptance or retention in the armed forces; or recruitment of a Federal law enforcement officer. An applicant may submit a complaint or any other information related to an organization's alleged noncompliance with the Fair Chance Act. The complaint must be submitted within 30 calendar days of the date of the alleged noncompliance. To make a Fair Chance Act inquiry or complaint, send an email with the appropriate information to MRP.Fairchance@usda.gov , subject line: Fair Chance Act.

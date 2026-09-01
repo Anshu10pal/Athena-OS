@@ -8,6 +8,7 @@ const COMMANDS = [
   { label: "Open Roadmap", path: "/roadmap" },
   { label: "Daily Missions", path: "/missions" },
   { label: "Start an Interview", path: "/interview" },
+  { label: "Interview from a Job Description", path: "/arena" },
   { label: "Oratory Deck — speak", path: "/oratory" },
   { label: "Analyze a Presentation", path: "/presentation" },
   { label: "Search Knowledge Vault", path: "/vault" },

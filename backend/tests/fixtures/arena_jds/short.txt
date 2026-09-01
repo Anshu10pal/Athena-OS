@@ -1,0 +1,38 @@
+title: Growth Campaign Manager - CIS
+source: https://jobs.lever.co/binance/c461e6fd-cbf6-4884-bd61-42d45ac5436e
+retrieved: 2026-09-01
+category: short (<200 words)
+why: 80 words, a COMPLETE posting rather than a truncated one -- a
+  posting cut down to fit would test truncation, not brevity. Selected
+  mechanically: of 1,104 Lever-hosted postings scanned, 10 came in under 200
+  words; this is the shortest of those that is in English.
+declared exclusion: five shorter candidates (45-96 words, Match Group Japan)
+  were excluded because their body text is Japanese. That is a VALIDITY
+  constraint -- an English-language extractor cannot be measured on Japanese
+  prose -- and not a screening for how the extractor might behave, which the
+  selection rules forbid. Recording the exclusion so the choice is checkable.
+corpus note: this is the case where the pre-declared threshold nearly failed to
+  be satisfiable at all. Across 1,983 postings on 13 Greenhouse-hosted company
+  boards the MINIMUM was 506 words and nothing fell under 400. Sub-200-word
+  postings exist only on boards that omit the legal/benefits boilerplate most
+  large employers attach. See SELECTION.md.
+specificity_ratio: 0.31 (incidental -- not what this case tests)
+extraction: Lever public postings API, `descriptionPlain` plus the plain text
+  of each list block. Deterministic; no model in the loop, because the span
+  check requires verbatim text.
+---
+Responsibilities
+Plan and execute integrated marketing campaigns.
+Coordinate GTM launches across multiple functions.
+Manage campaign timelines and execution.
+Work closely with Community, Product, CRM, Paid and regional teams.
+Localize global campaigns for the local market.
+Monitor campaign performance and recommend optimizations.
+Ensure consistent execution quality across all initiatives.
+Requirements
+3–5 years in Growth or Integrated Marketing.
+Strong project management skills.
+Data-driven mindset.
+Experience managing integrated marketing campaigns.
+Excellent stakeholder management and execution skills.
+Native Russian and strong English communication skills.

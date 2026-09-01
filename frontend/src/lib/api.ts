@@ -735,3 +735,76 @@ export async function streamChat(
     }
   }
 }
+// ---------------- Interview Arena (Phase A) ----------------
+//
+// Namespaced `arena`, not `interview`: /api/interview is the original MVP flow,
+// still mounted and still feeding the dashboard readiness tile, achievements
+// and the activity streak. Keeping both lets the two be compared side by side.
+
+export type {
+  ArenaGraphT,
+  MergeSuggestionT,
+  SkillNodeT,
+  TargetTier,
+} from "./arenaGraphEdits";
+
+import type { ArenaGraphT, EditSet } from "./arenaGraphEdits";
+
+export interface ArenaJobTargetSummaryT {
+  id: number;
+  title: string;
+  created_at: string | null;
+  graph_confirmed_at: string | null;
+  extractor_version: string;
+  node_count: number;
+}
+
+export interface ArenaReadinessT {
+  confirmed: boolean;
+  confirmed_at: string | null;
+  node_count: number;
+  pending_merge_suggestions: number;
+  can_start: boolean;
+  blocking_reason: string | null;
+}
+
+export const arenaCreateJobTarget = (title: string, jdText: string) =>
+  api<ArenaGraphT>("/api/arena/job-target", {
+    method: "POST",
+    body: JSON.stringify({ title, jd_text: jdText }),
+  });
+
+export const arenaGetJobTarget = (id: number) =>
+  api<ArenaGraphT>(`/api/arena/job-target/${id}`);
+
+export const arenaListJobTargets = () =>
+  api<ArenaJobTargetSummaryT[]>("/api/arena/job-targets");
+
+/** One PATCH for the whole accumulated edit set. The user can rename several
+ *  nodes, reparent one and delete another, see the result, and still abandon
+ *  the lot — which matters because this screen is the module's only validation
+ *  path and a user afraid to experiment on it will not validate anything. */
+export const arenaPatchGraph = (id: number, edits: EditSet, confirm = false) =>
+  api<ArenaGraphT & { edits_applied: number }>(`/api/arena/job-target/${id}/graph`, {
+    method: "PATCH",
+    body: JSON.stringify({ ...edits, confirm }),
+  });
+
+/** Accept or reject one review-band merge suggestion. A rejection is the
+ *  valuable outcome to record — hand-labelled negative data on exactly the
+ *  band where the instrument is weakest. */
+export const arenaDecideMerge = (
+  targetId: number,
+  suggestionId: number,
+  decision: "accepted" | "rejected",
+) =>
+  api<ArenaGraphT>(`/api/arena/job-target/${targetId}/merge-suggestion/${suggestionId}`, {
+    method: "POST",
+    body: JSON.stringify({ decision }),
+  });
+
+/** The Start-interview gate reads the SERVER's answer rather than re-deriving
+ *  the rule client-side. Two copies of a gate is one too many, and the copy
+ *  that drifts is always the one on screen. */
+export const arenaReadiness = (id: number) =>
+  api<ArenaReadinessT>(`/api/arena/job-target/${id}/readiness`);
