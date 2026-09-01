@@ -18,7 +18,36 @@ Git repository to find out how that code is actually put together.
 
 ---
 
-# RESUME HERE — session entry point (updated 2026-08-22)
+# RESUME HERE — session entry point (updated 2026-09-01)
+
+**Correction, 2026-09-01 (§17.16 — marked, not silently fixed):** this
+section said 4b was "BUILT and COMMITTED, awaiting one extension-level
+confirmation." That confirmation has since happened — see the phase line
+below. Corrected here rather than overwritten.
+
+**Correction, 2026-08-26 (§17.16 — marked, not silently fixed):** this
+section previously said the next action was "close 4a, then build 4b." Both
+were already done by the time that text was written — 4a closed at both the
+protocol and extension layers 2026-08-22 (committed 2026-08-23, `d7a5054`),
+and 4b built and committed 2026-08-24 (`6ae89c8`). The text below is
+corrected to match `docs/decisions.md` and `docs/phase6-graph-as-context.md`,
+which were already accurate; only this front-door section had drifted.
+
+**Pattern-in-formation, noted 2026-09-01 — not yet a §17 subsection.** That
+is now **three** instances of this front door understating progress, all in
+the same direction and from the same cause — a figure copied forward without
+being re-verified against the thing it describes:
+
+1. the resume section still saying "build 4b" after 4b was built (2026-08-26);
+2. the Playwright count still saying 6 after a 2-test file landed (2026-08-26);
+3. this line still saying "awaiting confirmation" after it was confirmed.
+
+Three instances is where §17.33 says to stop trusting memory and encode the
+constraint in the tool. It is recorded here rather than promoted because the
+fix is not yet obvious — the honest options are a check that re-derives these
+figures rather than restating them, or accepting the README as a pointer and
+moving live state entirely into `decisions.md`. **If this recurs, that is a
+fourth instance and it warrants proper naming.**
 
 **What this is.** A local-first workspace with two halves: a learning/practice
 side, and a **codebase agent** that ingests any Git repo and builds a queryable
@@ -29,7 +58,12 @@ instead of you grepping around to find it. Everything runs locally with zero
 LLM calls in the graph path.
 
 **Active phase: 6 — Codebase Atlas → graph as targeting map.** Checkpoints 0,
-1a, 1b, 2, 3 are DONE; 4a (MCP transport gate) passed for stdio.
+1a, 1b, 2, 3 are DONE; 4a (MCP transport gate) is CLOSED at both layers; **4b
+(the real MCP server) is CLOSED at both layers as of 2026-09-01** — the
+extension-layer confirmation ran on the Linux VM and every field matched the
+protocol proof exactly (258 importers, 22 imports, 51 unresolved, 25 enriched
++ 233 additional paths, `a05a0999`, budget 9,000 not applied). **Checkpoint 5
+— the PreToolUse enforcement hook — is the last piece of Phase 6.**
 
 **The number Phase 6 exists to produce** (checkpoint 3, measured on
 apache/superset at SHA `a05a0999` with tiktoken cl100k): to understand a file's
@@ -40,16 +74,22 @@ files where real work happens, **195.4x and 293.4x** on hubs. Pooled
 **219.7x, a 99.5% reduction**, with **zero sufficiency misses**. The
 distribution is the deliverable, not the pooled figure.
 
-**THE IMMEDIATE NEXT ACTIONS, in order:**
+**THE IMMEDIATE NEXT ACTION:**
 
-1. **Close checkpoint 4a.** MCP servers load at session start, so the probe
-   registered in `d:\Athena\.mcp.json` is not visible to the session that
-   registered it. **Reload the VSCode window, then ask for the `ping` tool.**
-   If it returns `pong`, 4a is fully closed. Protocol level is already proven
-   (full `initialize` → `tools/list` → `tools/call` round trip, exit 0).
-2. **Then build checkpoint 4b** — the real MCP server exposing
-   `read_neighborhood`. **stdlib-only, or an isolated venv. Never install the
-   `mcp` SDK into `backend/venv`** (see constraints below).
+**Checkpoint 5 — the PreToolUse enforcement hook.** The last piece of Phase 6,
+and the one that decides whether any of it is real in practice: it makes the
+graph get consulted *before* a read rather than only when someone remembers to
+ask. Without it the saving is theoretical — a tool nobody invokes saves
+nothing. **Open design decision, deliberately not defaulted into: nudge (soft
+suggestion, overridable) vs strict (blocks the first raw source read of a
+session and redirects it to the graph).** Decide that before building.
+
+**If you are on a new machine**, `.mcp.json` is not in the repo and must be
+recreated first — it lives at the VSCode workspace root, outside the repo. On
+this Linux VM it is `/home/hack-t36/Athena/.mcp.json`, registering
+`athena-graph` against `backend/venv/bin/python` and
+`backend/mcp_graph_server.py`. MCP servers load at session start, so a
+newly-registered server is invisible until the window is reloaded.
 
 **THE SINGLE MOST IMPORTANT WARNING:** the four Phase 6 source files and their
 three test files were untracked for most of this work. If you are reading this
@@ -114,7 +154,7 @@ re-verify before trusting it.
 | **Branch** | `codebase-agent/phase4-5-and-682` |
 | **HEAD before this handoff commit** | `106e90b` — "Give comprehension cards their first user surface" |
 | **Backend suite** | **1,180 passed / 1 skipped / 0 failed**, full run 2026-08-24 (18m27s), against superset at `a05a0999`. Green. |
-| **Frontend** | 231 vitest across 18 files + 6 Playwright; `npx tsc --noEmit` clean |
+| **Frontend** | 231 vitest across 18 files + 8 Playwright across 7 files; `npx tsc --noEmit` clean |
 | **Migrations** | 37, chain intact, head `d9f014c8a26b` |
 | **Superset graph** | re-ingested to `a05a0999`, **6,584 files / 61,559 imports** (was `e2bb33b1`, 6,523 / 60,873) |
 | **Repos in the atlas** | 1 = Athena-OS (280 files), 3 = eslint (1,447), 6 = apache/superset (6,584) |

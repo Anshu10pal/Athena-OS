@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hack-t36/Athena/Athena/athena-os/backend/venv/bin/python",
+            "args": [
+              "/home/hack-t36/Athena/Athena/athena-os/backend/scripts/athena_read_hook.py"
+            ],
+            "timeout": 10,
+            "statusMessage": "Checking the graph before reading source..."
+          }
+        ]
+      }
+    ]
+  }
+}

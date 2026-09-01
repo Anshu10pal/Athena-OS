@@ -3257,4 +3257,37 @@ payload raised `UnicodeEncodeError`. That is the identical encoding mismatch
 behaving correctly — loud, immediate, impossible to miss. The dangerous version
 is the one that returns a string.
 
+**Instance 4 — the enforcement of this section was itself platform-fragile.**
+Found 2026-08-26, migrating this project to a Linux VM. The negative-control
+canary for instance 3 (`test_LOADBEARING_the_canary_fails_without_the_
+reconfigure`) proved the fix load-bearing by **deleting** the
+`reconfigure(encoding="utf-8")` call and asserting the round trip came back
+mangled — trusting the OS to supply a bad default in the fix's absence. That
+premise is Windows-specific. On this Linux VM's `C.UTF-8` locale,
+`sys.stdin`/`sys.stdout` are UTF-8 **by default**, undisturbed. Deleting the
+call changed nothing, the round trip came back correct, and the canary
+**failed** — not because the fix regressed (it was untouched and still runs in
+the real server) but because the test's premise depended on a dangerous
+platform default that does not exist on this machine. Exactly the §15.1
+failure mode in miniature: an assertion that cannot discriminate proves
+nothing, and this one had been proving nothing for anyone running on Linux
+since the day it was written.
+
+**The rule, restated one level up.** A canary that relies on a platform
+default to *produce* the failure it tests for is not portable, and it does
+not fail loudly when the platform stops cooperating — it just quietly stops
+discriminating, passes clean, and the next person to trust it inherits a gate
+that certifies nothing. The fix is the same discipline as the rest of this
+section, applied to the test itself: **construct the corrupting condition
+deterministically instead of borrowing it from the environment.** The
+rewritten canary forces the child's `stdin` to decode as `cp1252` explicitly
+— a property of the fix under test, not of the host — while leaving `stdout`
+correctly UTF-8 so the corrupted reply is still readable and the harness
+cannot crash for a reason unrelated to what is under test. Canaried again
+under §17.33's discipline: the corrupting condition was proven real
+independently (`NON_ASCII_PATH.encode("utf-8").decode("cp1252") !=
+NON_ASCII_PATH`) before trusting it end-to-end, and the assertion was
+temporarily inverted and observed to fail for the right reason before being
+reverted. Full account: `backend/tests/test_mcp_graph_server.py`.
+
 

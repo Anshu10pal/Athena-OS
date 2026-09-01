@@ -451,16 +451,30 @@ and model imports.
 ## 9. Status and what is next
 
 **Done:** checkpoint 0 (gate) · 1a (boundary) · 1b (emitter) · 2 (neighbourhood
-query) · 3 (benchmark) · 4a (MCP transport gate).
+query) · 3 (benchmark) · 4a (MCP transport gate) · **4b (the graph MCP server)**.
 
-**In progress — checkpoint 4b:** the graph MCP server is built, 9 tests green,
-registered in `.mcp.json`. Protocol level proven; the cwd bug is fixed and
-verified from the directory that broke it. **Awaiting an extension-level
-confirmation after a VSCode window reload** before it is committed.
+**Checkpoint 4b — CLOSED 2026-09-01, at both layers.** The server is built and
+committed (`6ae89c8`), 9 tests green, stdlib-only, registered in `.mcp.json`.
+Protocol level was proven first; the cwd bug is fixed and verified from the
+directory that broke it. The **extension-level confirmation** then ran on the
+Linux VM — a real `neighborhood` call through the MCP client, for
+`superset/models/core.py` on `apache/superset` — and **every field matched the
+protocol proof exactly**: 258 importers, 22 imports, 51 unresolved, 25 enriched
++ 233 additional paths (= 258, no path dropped), snapshot `a05a0999`, budget
+9,000 with `applied: false`. The server's own log confirmed it resolved the
+real 6,584-node graph rather than an empty database, and reported
+`stdin=utf-8 stdout=utf-8`, so the §17.35 reconfigure holds on Linux too.
 
-**Next — checkpoint 5:** the PreToolUse enforcement hook, so the graph is
-consulted *before* a read rather than only when asked. Without it the saving is
-theoretical: a tool nobody invokes saves nothing.
+Both machines are now represented: the server was built on Windows and closed
+on Linux, and the two agree.
+
+**Next — checkpoint 5, the last piece of Phase 6:** the PreToolUse enforcement
+hook, so the graph is consulted *before* a read rather than only when asked.
+Without it the saving is theoretical: a tool nobody invokes saves nothing. One
+design decision precedes the build — **nudge** (soft, overridable suggestion)
+versus **strict** (blocks the first raw source read of a session and redirects
+it to the graph). Strict demonstrates the mechanism provably; nudge never
+breaks an existing workflow. Not defaulted into.
 
 **Deferred, with reasons:**
 
@@ -474,6 +488,25 @@ theoretical: a tool nobody invokes saves nothing.
 
 **Open question:** whether Superset's 56% unresolved edges explain part of its
 reachability ceiling. An investigation to run, not a finding made.
+
+**A partial data point on that question, from ONE file (2026-09-01).** The 4b
+extension-layer confirmation queried `superset/models/core.py`, which reports
+**51 unresolved imports**. Inspected individually, all 51 are **third-party or
+stdlib** — `sqlalchemy` ×10 on one line, `typing` ×5, `contextlib` ×4,
+`flask` ×3, plus `numpy`, `pandas`, `sshtunnel`, `flask_appbuilder`,
+`marshmallow`, `logging`, `datetime` and friends. **On this file, unresolved
+means external**: no first-party Superset structure is being silently dropped,
+and the resolver is behaving correctly rather than failing quietly.
+
+**What this does and does not establish.** It is **one file out of 6,584**, and
+a deliberately atypical one — a hub with a heavy third-party surface. It is not
+a repo-level answer and must not be quoted as one. What it does is change the
+*shape* of the question worth asking: from "how much of Superset's real
+internal structure is invisible to the graph" toward "**unresolved-means-
+external held here — is that repo-wide, or a property of this file?**" Those
+need different investigations, and the second is much cheaper to run: classify
+the unresolved specifiers repo-wide against a known-external list rather than
+re-deriving reachability. **Worth doing later; blocking nothing.**
 
 ---
 

@@ -6,7 +6,7 @@ this was built). The server returns FILE PATHS and RAW IMPORT SPECIFIERS from
 arbitrary repositories; on Windows a spawned process defaults its streams to
 cp1252, and without an explicit reconfigure every non-ASCII path is corrupted.
 
-Two things about that test are deliberate and easy to get wrong:
+Three things about that test are deliberate and easy to get wrong:
 
   * It sends RAW UTF-8 (`ensure_ascii=False`). With json's default the payload
     is escaped to \\uXXXX before it reaches the stream, the bytes on the wire are
@@ -14,6 +14,12 @@ Two things about that test are deliberate and easy to get wrong:
     first version of this canary did exactly that and proved nothing.
   * It compares by CODEPOINT, never by glyph, because the terminal rendering the
     comparison is cp1252 too and will misreport what it received.
+  * The negative-control canary (`test_LOADBEARING_the_canary_fails_without_
+    the_reconfigure`) FORCES the corrupting condition (stdin decoded as
+    cp1252) rather than deleting the fix and hoping the platform default is
+    bad. A first version deleted the call instead, which is Windows-specific:
+    on a Linux box with a UTF-8 locale, stdin/stdout are UTF-8 by default even
+    undisturbed, so deleting the call proves nothing there. §17.35, instance 4.
 """
 import json
 import os
@@ -116,20 +122,74 @@ class TestUtf8Canary:
         assert out["imports"]["unresolved"][0]["spec"] == NON_ASCII_SPEC
 
     def test_LOADBEARING_the_canary_fails_without_the_reconfigure(self, seeded, tmp_path):
-        """Observe the failure, per §15.1. The broken copy must live BESIDE the
-        real server: it does `sys.path.insert(0, Path(__file__).parent)` to find
-        `app`, so a copy elsewhere dies on import and would fail for a reason
-        that has nothing to do with encoding."""
+        """Observe the failure, per §15.1 -- constructed DETERMINISTICALLY, not
+        borrowed from a platform default (§17.35, instance 4: the enforcement
+        of §17.35 was itself platform-fragile). The original version deleted
+        the reconfigure call and trusted the OS to supply a bad default in its
+        place -- true on Windows (cp1252), false on Linux under a UTF-8 locale
+        (`C.UTF-8` here), where stdin/stdout are UTF-8 even undisturbed.
+        Deleting the call on this machine changes nothing, so the old version
+        of this canary could not fail here and proved nothing (§15.1) -- a
+        canary that relies on a platform default to produce the failure it
+        tests for is not portable, and silently stops discriminating on any
+        platform whose default happens to be safe.
+
+        The fix: force the CHILD's stdin decoder to cp1252 explicitly, on
+        purpose, independent of this machine's actual default. That is a
+        property of the FIX under test (does the server's own reconfigure
+        call protect it against a bad decoder), not a property of the
+        platform running the test. stdout is deliberately left correctly
+        UTF-8 (not disabled) so the corrupted reply is still well-formed bytes
+        the harness can read -- the failure under test is 'wrong content,
+        plausible reply', per §17.35's own description of the original
+        incident, not 'the process falls over', and a crash would prove the
+        wrong thing.
+
+        The broken copy must live BESIDE the real server: it does
+        `sys.path.insert(0, Path(__file__).parent)` to find `app`, so a copy
+        elsewhere dies on import and would fail for a reason that has nothing
+        to do with encoding.
+        """
         db_path, rid = seeded
+
+        # Canary the canary (§17.33): prove the corrupting condition is real
+        # BEFORE trusting it, independent of any subprocess or platform. If
+        # this payload's UTF-8 bytes happened to round-trip cleanly through a
+        # cp1252 decode, forcing cp1252 below would demonstrate nothing.
+        corrupted_locally = NON_ASCII_PATH.encode("utf-8").decode("cp1252")
+        assert corrupted_locally != NON_ASCII_PATH, (
+            "the chosen payload round-trips cleanly through cp1252 -- it "
+            "cannot demonstrate the corruption this canary exists to catch")
+
         src = SERVER.read_text(encoding="utf-8")
-        # SURGICAL: disable the reconfigure CALL and change nothing else. An
+        # SURGICAL: replace the reconfigure block and change nothing else. An
         # earlier version sliced from the block to the next landmark and
         # swallowed an unrelated line, so the broken server died on NameError
         # -- failing for a reason that had nothing to do with encoding. A
         # canary that fails for the wrong reason proves nothing.
-        call = '_stream.reconfigure(encoding="utf-8")'
-        assert src.count(call) == 1, "the reconfigure call moved; canary stale"
-        broken_src = src.replace(call, "pass  # disabled by canary")
+        block = (
+            'for _stream in (sys.stdin, sys.stdout):\n'
+            '    try:\n'
+            '        _stream.reconfigure(encoding="utf-8")\n'
+            '    except Exception:  # pragma: no cover - non-reconfigurable stream\n'
+            '        pass'
+        )
+        assert src.count(block) == 1, "the reconfigure block moved; canary stale"
+        # DETERMINISTIC corruption, not a deleted call: stdin is forced to
+        # decode as cp1252 (wrong, on every platform) while stdout stays
+        # UTF-8 (correct, so the reply is readable and the harness cannot
+        # crash for a reason unrelated to what is under test).
+        broken_block = (
+            'try:\n'
+            '    sys.stdin.reconfigure(encoding="cp1252")\n'
+            'except Exception:  # pragma: no cover - non-reconfigurable stream\n'
+            '    pass\n'
+            'try:\n'
+            '    sys.stdout.reconfigure(encoding="utf-8")\n'
+            'except Exception:  # pragma: no cover - non-reconfigurable stream\n'
+            '    pass'
+        )
+        broken_src = src.replace(block, broken_block)
 
         broken = BACKEND / "_mcp_utf8_canary_tmp.py"
         broken.write_text(broken_src, encoding="utf-8")
@@ -139,15 +199,16 @@ class TestUtf8Canary:
         finally:
             broken.unlink(missing_ok=True)
 
-        # Without the reconfigure the path arrives mangled, so it matches no
-        # file in the graph. Either it errors on the lookup or it returns a
-        # different path -- both are the corruption; neither is a clean answer.
+        # With stdin forced to decode as cp1252, the path arrives mangled, so
+        # it matches no file in the graph. Either it errors on the lookup or
+        # it returns a different path -- both are the corruption; neither is
+        # a clean answer.
         mangled = is_err is True or (
             isinstance(out, dict) and out["file"]["p"] != NON_ASCII_PATH)
         assert mangled, (
-            "the server returned the correct path WITHOUT the utf-8 "
-            "reconfigure -- this canary cannot discriminate and the gate is "
-            "meaningless")
+            "the server returned the correct path even with stdin FORCED to "
+            "decode as cp1252 -- this canary cannot discriminate and the "
+            "gate is meaningless")
 
 
 class TestServerContract:
