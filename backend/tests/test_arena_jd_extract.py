@@ -181,3 +181,52 @@ class TestFragmentFilterUnchanged:
                                       "Teamwork", "ETL pipelines"])
     def test_keeps_real_skills(self, real):
         assert not is_fragment(real)
+
+
+class TestSpanLengthInstructionMatchesTheConstant:
+    """One source of truth for the quote length.
+
+    A literal in the prompt text and a constant in code is two sources of truth,
+    and the prompt is the one that drifts -- nothing imports it, so nothing
+    notices. These pin the substitution instead of the number.
+    """
+
+    def test_the_prompt_has_no_hardcoded_word_count(self):
+        from app.services.arena.jd_extract import EXTRACTION_PROMPT
+        assert "{max_words}" in EXTRACTION_PROMPT, (
+            "the span-length instruction stopped reading SPAN_MAX_WORDS"
+        )
+
+    def test_the_built_prompt_carries_the_constant(self, monkeypatch):
+        from app.services.arena import jd_extract as m
+
+        captured = {}
+
+        def fake_chat_json(messages, fast=True, retries=2):
+            captured["prompt"] = messages[-1]["content"]
+            return {"mentions": []}
+
+        monkeypatch.setattr("app.core.llm.chat_json", fake_chat_json)
+        jd = "Requirements\nStrong Python experience is required for this role.\n"
+        m.extract_mentions(jd, "Engineer", segment(jd))
+        assert f"at most {m.SPAN_MAX_WORDS} words" in captured["prompt"]
+        assert "{max_words}" not in captured["prompt"], "placeholder left unsubstituted"
+
+
+class TestSpanLengthIsMonitored:
+    def test_mean_span_words_is_reported(self, monkeypatch):
+        from app.services.arena import jd_extract as m
+
+        def fake_chat_json(messages, fast=True, retries=2):
+            return {"mentions": [
+                {"skill": "Python", "span": "Strong Python experience", "kind": "technical"},
+                {"skill": "SQL", "span": "Advanced SQL required", "kind": "technical"},
+            ]}
+
+        monkeypatch.setattr("app.core.llm.chat_json", fake_chat_json)
+        jd = "Requirements\nStrong Python experience. Advanced SQL required.\n"
+        result = m.extract_mentions(jd, "Engineer", segment(jd))
+        # The prompt asks for <= 8 words; this records what actually arrived, so
+        # a model drifting back toward sentence-length spans is visible.
+        assert result.mean_span_words == pytest.approx(3.0)
+        assert result.as_json()["mean_span_words"] == pytest.approx(3.0)

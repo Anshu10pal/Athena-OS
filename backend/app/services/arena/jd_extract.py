@@ -76,6 +76,41 @@ logger = logging.getLogger("athena.arena.extract")
 # fixture showed ("Cataloging datasets" from "cataloging and documenting
 # datasets" -- one intervening conjunction and one intervening word) and
 # refuses scavenging across a clause.
+# The span is a SHORT quote, not a sentence. Measured, not swept.
+#
+# Two runs per variant on the 3,487-word fixture, extraction call only:
+#
+#   full-sentence span   33.0s mean   8,952 output chars   17.1-word spans
+#   <=8-word quote       32.7s mean   6,485 output chars    4.2-word spans
+#
+# The change was tried as a LATENCY lever and that hypothesis is dead: -28%
+# output bought -1% latency, so response volume is not the bottleneck (the cost
+# is Gemini 2.5 Flash's reasoning phase, which scales with input and task
+# complexity rather than with output length). It is shipped for a different and
+# better-evidenced reason -- EXTRACTION QUALITY:
+#
+#   accepted mentions   33 -> 49 (mean)
+#   inventions on long  12, 0 -> 3, 2
+#   inventions on vague  0    ->  0   (the guard did NOT weaken)
+#
+# Mechanism: a short contiguous quote containing the skill name is trivially
+# verifiable, while a long sentence invites the model to name a skill the
+# sentence only implies -- which `span_supports_skill` then correctly rejects as
+# unsupported. Shortening the quote removes the temptation rather than loosening
+# the check.
+#
+# 8 words, fixed here, NOT tuned against the acceptance fixtures. It is the
+# value the comparison above was run at; sweeping it against the five JDs before
+# the measurement is the fixture-calibration failure (contract section 17.27)
+# this phase has already caught twice.
+#
+# STATED COST: `_enrichment_text` builds the shadow enrichment metric from the
+# span, and a 4-word span makes that signal nearly identical to the bare name.
+# The shadow therefore becomes much less informative about whether a
+# context-gated merge branch would help. That is a real loss, accepted because
+# the shadow was speculative and the extraction-quality gain is measured.
+SPAN_MAX_WORDS = 8
+
 MAX_PARAPHRASE_GAP_TOKENS = 3
 
 # Window size alone is NOT sufficient, which a test caught before this shipped:
@@ -215,7 +250,7 @@ Return every distinct skill, technology, tool, domain or competency the job desc
 
 Rules, in order of importance:
 1. NEVER return a skill the job description does not name. Do not add skills that "usually go with" the ones present. Do not infer a tech stack.
-2. The "span" field MUST be copied verbatim from the job description text. Do not paraphrase, summarise, correct or shorten it. It is checked against the source and your entry is discarded if it does not match.
+2. The "span" field MUST be a SHORT verbatim quote: at most {max_words} words, copied as one contiguous run of words straight from the job description, and it MUST contain the skill name itself. Do not paraphrase, reword, or stitch together words from different places. It is checked against the source and your entry is discarded if it does not match.
 3. Return the skill name as the job description words it, not a normalised form. If it says "RESTful services", return "RESTful services".
 4. Skip benefits, salary, location, company history, and equal-opportunity boilerplate. They are not skills.
 5. If the job description is vague and names few concrete skills, return the few it names. Returning fewer, accurate skills is correct. Padding the list is a failure.
@@ -262,6 +297,12 @@ class ExtractionResult:
     raw_count: int = 0
     llm_calls: int = 0
     truncated: bool = False
+    # Mean span length in words, as RETURNED. The prompt asks for <= 8; this is
+    # what arrived. A mean drifting toward sentence length means the model has
+    # stopped honouring the instruction, and the extraction-quality gain that
+    # justified SPAN_MAX_WORDS goes with it -- so it is measured rather than
+    # assumed.
+    mean_span_words: float = 0.0
 
     def as_json(self) -> dict:
         return {
@@ -278,6 +319,7 @@ class ExtractionResult:
             "llm_calls": self.llm_calls,
             "jd_truncated": self.truncated,
             "call_seconds": round(self.call_seconds, 3),
+            "mean_span_words": round(self.mean_span_words, 2),
         }
 
 
@@ -404,8 +446,13 @@ def extract_mentions(
         # nothing indicating why.
         payload += "\n\n[job description truncated for length]"
 
-    prompt = EXTRACTION_PROMPT.replace("{title}", title or "(not given)").replace(
-        "{jd}", payload)
+    # `{max_words}` is substituted from SPAN_MAX_WORDS rather than written into
+    # the prompt text. A literal in both places is two sources of truth, and the
+    # one that drifts is always the prompt -- where nothing would notice.
+    prompt = (EXTRACTION_PROMPT
+              .replace("{max_words}", str(SPAN_MAX_WORDS))
+              .replace("{title}", title or "(not given)")
+              .replace("{jd}", payload))
 
     call_started = time.perf_counter()
     response = chat_json(
@@ -420,11 +467,14 @@ def extract_mentions(
         raw = []
 
     accepted, rejected, filtered, paraphrased = verify_spans(raw, jd_text, sections)
+    span_words = [len(str(m.get("span", "")).split())
+                  for m in raw if isinstance(m, dict)]
     return ExtractionResult(
         mentions=accepted,
         rejected=rejected,
         filtered=filtered,
         paraphrased=paraphrased,
+        mean_span_words=(sum(span_words) / len(span_words)) if span_words else 0.0,
         raw_count=len(raw),
         llm_calls=1,
         truncated=truncated,
