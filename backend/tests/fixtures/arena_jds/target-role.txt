@@ -1,0 +1,39 @@
+title: Machine Learning Engineer (Staff & Principal)
+source: https://job-boards.greenhouse.io/tubitv/jobs/7702258
+retrieved: 2026-09-02
+category: held-out -- target-role slot
+why: senior ML engineering with deep-learning and recommender-systems
+  vocabulary, deliberately chosen to be STRUCTURALLY DIFFERENT from the Palantir
+  posting (which is infrastructure/deployment ops). Role-flavour diversity is
+  the point of this slot.
+coverage-gap-stated: with this fixture the five are 80w, 254w, 3487w, ~450w and
+  ~350w. There is NO fixture in the 500-1500 word band, so the middle latency
+  tier is unexercised and both held-out fixtures fall in the same (<500w) tier.
+  Recorded as a known hole rather than discovered later. If the run looks clean
+  on both held-out fixtures the gap is acceptable; the fix if it is ever
+  doubted is a SIXTH fixture, never swapping one of these.
+extraction: pasted verbatim by the reviewer from the live posting. No model in
+  the loop.
+---
+About the Role:
+
+The Machine Learning team at Tubi drives the innovation behind personalized user experiences. With the largest inventory in the industry and hundreds of millions of viewers, we tackle problems in the space of recommendations, search, content understanding and ads optimization that shape the future of streaming.
+
+We are seeking a highly skilled Machine Learning Engineer to contribute to transformative projects in video personalization. In this role, you will design and implement advanced algorithms and systems to improve our personalization strategy. As a senior technical expert, you will tackle complex problems in machine learning at scale, collaborating closely with cross-functional teams to develop and optimize machine learning-driven solutions.
+
+What You'll Do:
+
+- Lead the design, development, and implementation of advanced recommendation systems and algorithms for a global audience
+- Conduct deep dives into algorithmic components and systems, ensuring that models are optimized for both performance and scalability across multiple regions and product areas
+- Build and deploy high-impact robust ML pipelines, including data extraction, feature development, model training, testing, and deployment
+- Continuously monitor, evaluate, and optimize the performance of deployed models, ensuring they meet business goals and provide high-quality user experiences.
+- Work closely with Product, Engineering, and Data Science teams to align on product requirements, set expectations, and deliver machine learning-driven solutions that improve user engagement
+
+Your Background:
+
+- 8+ years of industry experience building production Machine Learning systems
+- MSc or Ph.D. in Computer Science, Machine Learning, Statistics, Mathematics, or a related field
+- Experience with deep learning technologies for recommendation systems, including TensorFlow, PyTorch, or similar frameworks
+- Proficiency in building and deploying full-stack machine learning pipelines: data extraction, data mining, model training, feature development, testing, and deployment.
+- Solid understanding of statistical concepts such as hypothesis testing, regression analysis, and performance evaluation metrics for machine learning.
+- Ability to deep dive into individual components and systems, as well as understand the overall architecture of machine learning solutions.

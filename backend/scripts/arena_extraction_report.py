@@ -46,11 +46,10 @@ from app.services.arena.config import load_config  # noqa: E402
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "arena_jds"
 
-# The pre-registered acceptance criteria. Target and hard-fail, as agreed at the
-# Phase 0 checkpoint. Structural bounds are read from the node budget, because
-# the whole point of that budget is that a short JD is allowed fewer parents.
 # Pre-registered acceptance criteria. Pinned at the Phase 0 checkpoint and
-# amended once, by measurement, for latency -- see LATENCY_TIERS.
+# amended once, by measurement, for latency -- see LATENCY_TIERS. Structural
+# bounds are read from the node budget, because the whole point of that budget
+# is that a short JD is allowed fewer parents.
 CRITERIA = """
 PRE-REGISTERED ACCEPTANCE CRITERIA
 
@@ -524,7 +523,17 @@ def main() -> int:
         print(f"No .txt fixtures found in {FIXTURE_DIR}.")
         return 1
 
+    # Per-fixture results are printed AS EACH FIXTURE COMPLETES, and a failure
+    # on one fixture no longer destroys the others.
+    #
+    # Learned the expensive way: the first real acceptance run measured four of
+    # five fixtures successfully (24 live model calls), then the fifth raised
+    # when the Gemini daily quota ran out -- and because printing happened after
+    # the whole loop, EVERY completed result was lost. 24 calls of a
+    # rate-limited free tier, for nothing. Measure-then-print is the wrong shape
+    # for anything whose inputs cost quota.
     all_rows: list[list[dict]] = []
+    failures: list[tuple[str, str]] = []
     for path in files:
         raw = path.read_text(encoding="utf-8")
         # Fixtures carry a provenance header above a `---` separator (source URL,
@@ -539,11 +548,20 @@ def main() -> int:
             for line in header.splitlines():
                 if line.lower().startswith("title:"):
                     title = line.split(":", 1)[1].strip()
-        print(f"\n  measuring {path.name} x{args.runs} ...")
-        all_rows.append(measure_repeated(db, title, body.strip(), path.name,
-                                         runs=args.runs))
-
-    for rows in all_rows:
+        print(f"\n  measuring {path.name} x{args.runs} ...", flush=True)
+        try:
+            rows = measure_repeated(db, title, body.strip(), path.name,
+                                    runs=args.runs)
+        except Exception as exc:  # noqa: BLE001 -- recorded, not swallowed
+            # Named and carried, never silently skipped: a fixture that could
+            # not be measured is reported in the summary as NOT MEASURED, which
+            # is a different statement from "measured and passed".
+            failures.append((path.name, f"{type(exc).__name__}: {exc}"))
+            print(f"    FAILED -- {type(exc).__name__}: {str(exc)[:200]}", flush=True)
+            print("    (this fixture is NOT MEASURED; the others are unaffected)",
+                  flush=True)
+            continue
+        all_rows.append(rows)
         print_aggregate(rows)
 
     print(f"\n{'=' * 78}")
@@ -564,11 +582,15 @@ def main() -> int:
               f"{cell('latency', '{:.0f}s'):>14}")
 
     measured = len(all_rows)
-    print(f"\n  {measured} of 5 fixtures measured, {args.runs} runs each.")
+    print(f"\n  {measured} of {len(files)} fixtures measured, {args.runs} runs each.")
+    if failures:
+        print("\n  NOT MEASURED (a fixture that could not be run is not a fixture")
+        print("  that passed):")
+        for name, why in failures:
+            print(f"    - {name}: {why[:160]}")
     if measured < 5:
-        print("  NOT a complete acceptance run -- the reviewer's two held-out JDs")
-        print("  and/or the public fixtures are missing.")
-    return 0
+        print("\n  NOT a complete acceptance run.")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

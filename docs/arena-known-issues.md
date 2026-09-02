@@ -48,6 +48,37 @@ Consequences, in order of how much they cost:
    first provider's failure — usually the informative one — is discarded, so
    the traceback names the wrong cause.
 
+### ESCALATED 2026-09-02 — this stopped being theoretical and blocked the Arena acceptance run
+
+The first real five-fixture acceptance run died on fixture five, and the failure
+is this issue, exactly as described above:
+
+- **Gemini** returned `429 — You exceeded your current quota` (daily RPD spent
+  by the run itself: 4 fixtures x 3 runs x 2 calls = 24 successful calls, plus
+  development).
+- **Groq** returned `404 — The model llama-3.3-70b-versatile does not exist`.
+  It has been **decommissioned**: the key lists 14 models and no `llama-3.3-*`
+  chat model at all (see KI-4).
+- **The traceback named GROQ.** For `fast=False` the order is
+  `[gemini, groq]`, so `raise last_err` surfaced the LAST provider's error and
+  discarded Gemini's — which was the informative one. Bullet 3 above,
+  verbatim, on real data.
+
+**And it defeated the mitigation built on top of it.** The acceptance protocol
+discards and re-runs any rate-limited run rather than counting it as a failure
+(`measure_repeated` / `_is_rate_limited` in
+`scripts/arena_extraction_report.py`). That classifier inspected the raised
+exception, saw Groq's `404 model_not_found`, correctly concluded "not a rate
+limit", and raised instead of retrying. **A caller cannot classify a failure the
+shared client attributes to the wrong provider**, so no amount of care at the
+call site fixes this.
+
+Consequence for sequencing: this is no longer only a Voice-Migration-Phase-1
+instrumentation item. It is on the critical path of the Arena acceptance
+measurement, and the measurement cannot be trusted to complete or to report its
+own reason for not completing until the classification and attribution are
+fixed.
+
 Minimum fix when the owning phase reaches it: classify the exception (429 with
 `retry-after` vs 429-quota vs other), retry the same provider with bounded
 backoff on the first, and surface a distinguishable signal on the second. Do
@@ -164,3 +195,47 @@ all Arena network egress goes through `app.core.llm`, and the module creates no
 HTTP client of its own. Stated as a residual rather than hidden: this means
 Arena Phase A cannot be validated against a real proxy independently of that
 debt.
+
+---
+
+## KI-4 — `llama-3.3-70b-versatile` no longer exists on Groq; the app has had no working fallback provider
+
+**Found 2026-09-02, during the Arena acceptance run. Affects the WHOLE
+application, not the Arena. Not fixed here — the model choice is an app-wide
+decision and `app/core/llm.py` is shared infrastructure.**
+
+`app/core/llm.py` pins Groq to `llama-3.3-70b-versatile`. That model returns:
+
+```
+404 - The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.
+```
+
+Confirmed against `GET /openai/v1/models` with the project's own key: **14
+models available, and no `llama-3.3-*` chat model among them.** The chat-capable
+ones are `openai/gpt-oss-120b`, `openai/gpt-oss-20b` and
+`openai/gpt-oss-safeguard-20b` (plus embedding/guard/whisper models).
+
+**What this means, and why nobody noticed:**
+
+- `FAST_ORDER` and `STREAM_ORDER` both put Groq FIRST. So every
+  `chat(fast=True)` call — intent detection, scoring, oratory evaluation,
+  communication grading, MCQ generation, the Arena's cluster naming — has been
+  paying a failed round trip to Groq and silently falling through to Gemini.
+- Which means **the application has effectively had ONE provider, not two, for
+  however long the model has been gone.** The fallback that exists to survive a
+  Gemini quota exhaustion was itself dead, so the first Gemini 429 is now a hard
+  failure rather than a degradation.
+- KI-1 is why this was invisible: a permanent `404 model_not_found` and a
+  transient blip are handled identically, logged at `warning`, and never
+  surfaced.
+
+This is the §17.35 shape again — a platform default silently substituted (one
+provider standing in for two) and the result was plausible rather than broken.
+
+**Decision needed, not taken here:** which Groq model replaces it, if any. The
+free-tier candidates on this key are `openai/gpt-oss-120b` (larger, slower) and
+`openai/gpt-oss-20b` (smaller, faster). Changing it alters behaviour for every
+module that uses the fast lane, so it belongs to whoever owns
+`app/core/llm.py` — not to Arena Phase A. Arena's only Groq dependency is the
+cluster-naming call, which was moved to the fast lane deliberately and can be
+moved back to Gemini in one line if the decision is to drop Groq entirely.
