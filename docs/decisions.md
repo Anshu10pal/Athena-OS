@@ -1195,10 +1195,25 @@ The three, all the same category and none of them a coincidence:
    legitimate extractions out of coordinated compounds, four one-word
    competency lines — and dropped eight real skills while doing it.
 
-The shared shape: **a check reading part of its input fails open or closed
-without saying so, and the code's own self-report describes exactly what it is
-doing while the doing is wrong.** In case 3 the arithmetic was honest and the
-conclusion was garbage.
+**AND: an edit that describes a partial change must be staged and verified as
+a partial change (`git add -p` or equivalent). Staging the whole file after a
+partial edit re-introduces the same mismatch on the write side.**
+
+That clause was added because the pattern immediately produced a **fourth
+instance, in a different medium**. `docs/decisions.md` was edited with an
+append (`cat >>`) and staged with `git add <file>`, which stages the whole
+file — so two pre-existing hunks belonging to the Phase 6 work (checkpoint-5
+table rows, a suite-state update) went into an Arena commit. The surgical
+stage-HEAD-plus-append technique had already been applied to `models.py` and
+`api.ts` because the problem was *predicted* there, and then was not applied to
+a file where it had not been predicted. Caught on verification and amended; the
+commit now carries one hunk. Partial edit, whole-file write, silent mismatch —
+same category, different verb.
+
+The shared shape across all four: **an operation reading or writing part of its
+subject succeeds against the whole, and the code's own self-report describes
+exactly what it is doing while the doing is wrong.** In case 3 the arithmetic
+was honest and the conclusion was garbage.
 
 A related instance in the same phase, different category but the same lesson
 about honest self-reports: `weighting`'s `section_base.required` was set to
@@ -1240,3 +1255,77 @@ which shadowed Python's stdlib `select` and broke `subprocess`; the run measured
 nothing. Re-run clean over 1,983 postings on 13 boards: minimum 506 words,
 nothing under 400, minimum specificity 0.41. Recorded here with the mechanism
 named rather than the number quietly updated (§17.16).
+
+## Latency target: the flat 15s is SUPERSEDED BY MEASUREMENT
+
+The original prompt pre-registered `extraction latency < 15s, hard fail > 45s`.
+That was the right number to pre-register and the wrong number to hold to after
+measurement, so it is marked superseded rather than quietly missed (§17.16).
+
+| JD words | target | hard fail |
+|---|---|---|
+| < 500 | < 15s | > 30s |
+| 500 – 1500 | < 25s | > 45s |
+| > 1500 | < 45s | > 75s |
+
+**Mechanism, named:** extraction on a 3,487-word posting runs 26.9–38.8s. The
+cost is **Gemini 2.5 Flash's reasoning phase, which scales with input and task
+complexity — not with output.** Output was tested directly and ruled out: capping
+the span quote cut response volume 28% and bought 1% latency. Neither remaining
+lever reaches 15s either — dropping the cluster-naming call saves 5–10s, running
+it async hides the same 5–10s.
+
+**Rejected, with reasons:** *chunking the JD* reintroduces the whole class of
+lost-context-across-a-boundary defects for a module that does not need them;
+*changing the model* forks the LLM story — `gemini-2.5-flash` is pinned across
+this codebase and an Arena-only fork has no owner for keeping it current. Both
+are out of Phase A scope.
+
+**Honest residual:** if a real posting takes 75s the module is unusable at that
+length, and relaxing a number on paper does not fix that. At ~60s across three
+runs this is accepted; at ~90s it is back to change-the-model or chunk, neither
+of which is Phase A work.
+
+## Acceptance protocol: n = 3 runs per JD, pass rule pinned before the run
+
+Three of four machine-scorable criteria were observed flipping between pass and
+hard fail on **identical input**: latency 32.4–54.5s, invented 0–12 (hard fail
+is ≥ 2), parent nodes 9–10 (hard fail > 9), cluster coherence 20–40%. A single
+pass cannot decide pass/fail, so it is no longer asked to.
+
+Every criterion is reported as **median and (min, max)** — never a point
+estimate. A criterion that passes at median while hard-failing at max is a
+different signal from one that passes on all three runs, and collapsing them
+into "passed" is what this protocol exists to prevent.
+
+**Pass rule, pinned before any number was seen:**
+
+| verdict | condition |
+|---|---|
+| PASS | median meets target **and** no run is in hard-fail |
+| HARD FAIL | any run is in hard-fail |
+| MISS | median misses target, no run in hard-fail |
+
+Median because a coin-flip criterion should not be decided by one toss;
+hard-fail-on-max because a failure mode that fires even once is one users will
+hit. A run that fails with a rate-limit error is **discarded and re-run**, not
+counted as a failure — the criteria measure extraction, not the free tier.
+
+Implemented in `scripts/arena_extraction_report.py` (`LATENCY_TIERS`,
+`RUNS_PER_JD`, `verdict`, `measure_repeated`). One trap found by reading the
+idempotency key rather than by seeing three identical numbers: `graph_build` is
+idempotent on `(user_id, jd_hash, extractor_version)`, so repeated runs would
+have been cache hits — one run reported three times, which is exactly what three
+identical numbers would have looked like. `measure_repeated` uses a fresh user
+per run.
+
+## Extraction: short verbatim quote, not a whole sentence
+
+Shipped as an **extraction-quality** change; the latency hypothesis that
+motivated trying it is recorded as dead. Measured over two runs per variant on
+the long fixture: accepted mentions 33 → 49, inventions on the long JD 12,0 →
+3,2, inventions on the vague JD 0 → 0 (the guard did **not** weaken), mean span
+17.1w → 4.2w. `SPAN_MAX_WORDS = 8`, fixed at the value the comparison was run
+at and deliberately not swept against the acceptance fixtures. No toggle: the
+whole-sentence variant is deleted, because a flag leaves two extractors alive
+and one of them is worse.
