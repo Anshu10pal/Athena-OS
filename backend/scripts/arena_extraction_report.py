@@ -278,7 +278,13 @@ def measure_repeated(db, title: str, jd_text: str, label: str,
             db.add(user)
             db.commit()
             try:
-                out.append(measure(db, user.id, title, jd_text, f"{label} run{i + 1}"))
+                row = measure(db, user.id, title, jd_text, label)
+                # The run index is a separate field, not part of the label. The
+                # aggregate header reads rows[0]["label"] and would otherwise
+                # title the whole table "long.txt run1" -- a table mislabelled
+                # as one of its own rows.
+                row["run"] = i + 1
+                out.append(row)
                 break
             except Exception as exc:  # noqa: BLE001 -- classified below, not swallowed
                 if _is_rate_limited(exc) and attempts < max_retries:
@@ -392,7 +398,7 @@ def print_aggregate(rows: list[dict]) -> None:
     for name in r0["skill_names"]:
         print(f"    - {name}")
     if r0["rejected_detail"]:
-        print(f"\n  INVENTED, run 1 ({r0['rejected']})")
+        print(f"\n  INVENTED, run {r0.get('run', 1)} ({r0['rejected']})")
         for item in r0["rejected_detail"]:
             print(f"    - {item.get('skill')!r}: {item.get('reason')}")
     if r0["filtered_detail"]:
