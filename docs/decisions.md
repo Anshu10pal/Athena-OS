@@ -1160,3 +1160,83 @@ recorded as open that was closed, and a backend feature recorded as unbuilt that
 had shipped a day later. One of those wrong claims was produced by an audit
 inside this same session. **A reported defect is not evidence a defect exists,
 and a recorded gap is not evidence a gap exists.**
+---
+
+# Interview Arena — Phase A (2026-09-01)
+
+New module, namespaced `arena_*` on branch `arena/phase-a`. JD in, confirmed
+skill graph out. The legacy `/api/interview` flow stays mounted: it still feeds
+analytics, achievements and the activity streak, and it is a useful side-by-side
+against the new pipeline.
+
+## The rule this phase earned
+
+**Check code that operates on a PARTIAL view of its input has now failed three
+times in one phase. Future check code must either operate on whole-name input,
+or carry a test asserting the check fires on a case where the partial view
+would have missed it.**
+
+The three, all the same category and none of them a coincidence:
+
+1. **`jd_sections._match_label`** tested `phrase in candidate` — a bare
+   substring anywhere in the line. `"Competitive salary and free snacks."`
+   became a boilerplate *header* via "salary", and `"We are an equal
+   opportunity employer."` another. A false header silently relabels everything
+   below it and shifts every downstream weight. This is the exact failure the
+   module was written to prevent, and the matcher had the hole.
+2. **`canonicalise.normalise`** singularised only the FINAL token, so
+   `"Kubernetes"` became `kubernete` while `"Kubernetes operations"` became
+   `kubernetes operation`. The same word compared unequal depending on its
+   position; containment silently stopped firing and only a lucky bare-cosine
+   hit merged the pair. Found by a live run, not by a unit test.
+3. **`jd_extract.verify_spans`** required the skill name to be a literal
+   substring of its span, and imposed a 12-character span floor. On the long
+   fixture it reported **8 hallucinations of which zero were inventions** — four
+   legitimate extractions out of coordinated compounds, four one-word
+   competency lines — and dropped eight real skills while doing it.
+
+The shared shape: **a check reading part of its input fails open or closed
+without saying so, and the code's own self-report describes exactly what it is
+doing while the doing is wrong.** In case 3 the arithmetic was honest and the
+conclusion was garbage.
+
+A related instance in the same phase, different category but the same lesson
+about honest self-reports: `weighting`'s `section_base.required` was set to
+1.00, equal to `max_weight`, so every required skill clamped and four of five
+signals could not move the output. The per-signal breakdown still reconciled to
+the stored weight, so the explainability check passed while every explained
+weight was identical. **Being able to explain a number is not the same as the
+number being informative** — §17.0b's "a prediction is evidence only with a
+named mechanism" has a corollary: the mechanism must also be live.
+`test_arena_weighting.py::TestEachSignalCanMoveTheFinalWeight` now asserts, per
+signal, that there is an input where changing only that signal moves the FINAL
+weight by ≥ 0.02. Verified by reintroducing the defect: four assertions fire,
+two of which no previous test caught.
+
+## Pre-registered, before any JD was measured
+
+- **Canonicalisation** is a four-stage cascade, not a threshold — measured, the
+  SAME/SIBLING bands overlap and no single threshold delivers recall at zero
+  false merges. Bare cosine ≥ 0.86 decides; [0.80, 0.86) is surfaced to the
+  user as suggestions defaulting to NOT merged.
+- **Context enrichment was WITHDRAWN** as a decision branch: under template
+  phrasing (adjacent bullets sharing a sentence shape, i.e. how JD bullet lists
+  are actually written) it reaches a 92% false-merge rate at 0.76, merging
+  PostgreSQL with MySQL. Kept as a shadow metric that decides nothing.
+- **Cluster coherence** ≥ 0.64 mean pairwise cosine per parent, ≥ 80% of
+  parents. Escalation to LLM clustering happens only on failure, with the
+  failing numbers reported. It has already failed on the long fixture (20% and
+  40% across two runs) and has NOT been silently switched.
+- **Node budget** keyed on post-canonicalisation mention count, not word count:
+  a short JD honestly yielding 2–4 parents is a PASS. A vague JD producing 8
+  confident invented parents is a HARD FAIL, precisely because it clears the
+  structural bar.
+
+## Retraction
+
+An earlier report in this phase claimed "1,641 postings scanned, zero meet
+either threshold." **Withdrawn.** A helper script had been named `select.py`,
+which shadowed Python's stdlib `select` and broke `subprocess`; the run measured
+nothing. Re-run clean over 1,983 postings on 13 boards: minimum 506 words,
+nothing under 400, minimum specificity 0.41. Recorded here with the mechanism
+named rather than the number quietly updated (§17.16).

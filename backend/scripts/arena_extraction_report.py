@@ -53,7 +53,10 @@ CRITERIA = """
 PRE-REGISTERED ACCEPTANCE CRITERIA (agreed before any JD was measured)
 
   skills correctly extracted     target >= 85%   hard fail < 70%      [YOUR JUDGEMENT]
-  hallucinated skills            target 0        hard fail >= 2       measured via span check
+  hallucinated skills            target 0        hard fail >= 2       span not in JD, OR
+                                                                      span does not support
+                                                                      the skill name
+  paraphrase rate                no target -- a SIGNAL, reported per JD, not a criterion
   parent nodes                   per node budget (short JD may honestly yield 2-4)
   children per parent            target 2-5      hard fail > 8
   duplicate nodes surviving      target 0        hard fail >= 2       [YOUR JUDGEMENT]
@@ -141,6 +144,9 @@ def measure(db, user_id: int, title: str, jd_text: str, label: str) -> dict:
         "rejected_detail": extraction.get("rejected_detail", []),
         "filtered": extraction.get("filtered", 0),
         "filtered_detail": extraction.get("filtered_detail", []),
+        "paraphrased": extraction.get("paraphrased", 0),
+        "paraphrase_rate": extraction.get("paraphrase_rate", 0.0),
+        "paraphrased_detail": extraction.get("paraphrased_detail", []),
         "extract_seconds": extraction.get("call_seconds", 0.0),
         "naming_seconds": clustering.get("naming_call_seconds", 0.0),
         "nodes": len(rows),
@@ -196,6 +202,9 @@ def print_result(r: dict) -> None:
 
     print(f"\n  PIPELINE DETAIL")
     print(f"    mentions returned by model   {r['mentions_raw']}")
+    print(f"    paraphrased (accepted)       {r['paraphrased']}"
+          f"  rate {r['paraphrase_rate']:.0%}"
+          f"{'   <- watch this rate across JDs' if r['paraphrase_rate'] > 0.25 else ''}")
     print(f"    fragments filtered out       {r['filtered']}"
           f"{'   <- prompt quality, NOT hallucination' if r['filtered'] else ''}")
     print(f"    extraction call              {r['extract_seconds']:.1f}s")

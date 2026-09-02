@@ -40,10 +40,69 @@ from app.services.arena.jd_sections import Section, header_at, label_at
 
 logger = logging.getLogger("athena.arena.extract")
 
-# A span shorter than this cannot locate a mention usefully -- "Go" as a span
-# matches half the document and tells us nothing about which sentence the skill
-# came from, which is what the span is FOR (section attribution and enrichment).
-MIN_SPAN_CHARS = 12
+# MIN_SPAN_CHARS IS GONE, DELIBERATELY.
+#
+# It was 12, and it was wrong in a way no single number can fix. Measured on the
+# long fixture (a federal announcement): it rejected "Teamwork", "Flexibility",
+# "Reasoning" and "Learning" -- four genuine one-word competency lines -- and
+# reported them as HALLUCINATIONS, so the extractor was penalised for the
+# checker's defect while four real skills were silently dropped.
+#
+# A length floor is a proxy for "is this a real skill", and there are now two
+# checks that answer that question directly: `is_fragment` (is the NAME a
+# nameable thing) and `span_supports_skill` (does the quoted text actually
+# support the claim). A proxy kept alongside the real measurements only
+# contributes its own error.
+#
+# Federal postings have one-word competency lines; Greenhouse postings have
+# twenty-word aspirational sentences. Any fixed floor is wrong for one of them,
+# and a JD-adaptive floor would be a third proxy for a question already
+# answered twice.
+#
+# STATED TRADE, not hidden: without the floor the guard weakens from "a full
+# sentence containing this skill exists in the document" to "this skill string
+# exists in the document". Pure invention is still caught -- a model claiming
+# Kubernetes for a JD that never says Kubernetes still fails. What is no longer
+# caught by THIS check is a skill that appears somewhere irrelevant, e.g. in the
+# company blurb; section attribution is what handles that, and it is a weight
+# question rather than an existence question. `span_chars` is recorded per
+# mention so a suspiciously-short-span RATE is visible per JD instead of being
+# pre-empted by a floor.
+
+# How much longer than the skill itself the matching window in the span may be,
+# in tokens. This is what stops the paraphrase check from accepting tokens
+# scavenged from across a long sentence: "data science" must not be accepted
+# from "data pipelines for science teams". 3 admits the real pattern the long
+# fixture showed ("Cataloging datasets" from "cataloging and documenting
+# datasets" -- one intervening conjunction and one intervening word) and
+# refuses scavenging across a clause.
+MAX_PARAPHRASE_GAP_TOKENS = 3
+
+# Window size alone is NOT sufficient, which a test caught before this shipped:
+#
+#   "Cataloging datasets"  <- "cataloging [and documenting] datasets"   legitimate
+#   "data science"         <- "data [pipelines for] science teams"      fabricated
+#
+# Both have exactly two intervening tokens, so no gap threshold can separate
+# them. What separates them is COORDINATION: the legitimate case pulls one
+# branch out of a coordinated compound ("cataloging and documenting X" contains
+# the skill "cataloging X"), while the fabricated case welds together tokens
+# modifying different heads across a prepositional phrase.
+#
+# So a gap is permitted only when it contains a coordinator. Deliberately a
+# tiny closed list rather than a POS tagger -- the alternative is a parser
+# dependency for one rule, on CPU, on a request path.
+#
+# STATED RESIDUAL: this rejects legitimate paraphrases whose gap carries no
+# coordinator, e.g. skill "cloud infrastructure" from span "cloud-native
+# infrastructure". Those land in `invented`, inflating the very count this work
+# exists to make honest. Mitigation: every rejection records its span, so the
+# count is inspectable rather than merely reported, and reading a sample of the
+# output is the rule (contract section 17.32) rather than trusting the number.
+# If the five-JD run shows this firing on real paraphrases, the fix is a
+# separate `paraphrase_weak` bucket -- NOT widening this rule, which would
+# re-admit the fabricated compound.
+_COORDINATORS = frozenset({"and", "or", "&", "and/or", ",", "plus", "as", "well"})
 
 # Cap on mentions accepted from one response. A model that returns 400 "skills"
 # for a 200-word JD has failed in a way that should not become 400 database rows
@@ -93,6 +152,63 @@ def is_fragment(skill: str) -> bool:
         return True
     return False
 
+def span_supports_skill(skill: str, span: str) -> tuple[bool, str]:
+    """Does the quoted span actually support this skill name?
+
+    Returns (supported, how) where `how` is "literal" or "paraphrase".
+
+    ASYMMETRIC, and that asymmetry is the whole point.
+
+      skill is a shortening of the span   -> PASS
+        "Cataloging datasets" from "cataloging and documenting datasets".
+        Honest extraction: the model named the skill inside a compound clause.
+
+      span is a shortening of the skill   -> FAIL
+        skill "cataloging and documenting datasets" pointing at a span reading
+        "cataloging datasets". That is the model summarising, or inventing a
+        longer claim than the text supports, and pointing at nearby text.
+
+    A SYMMETRIC check cannot tell those apart, which is exactly where the next
+    silent defect would have hidden: legitimate paraphrase and fabricated
+    compound look identical under a bag-of-tokens comparison.
+
+    The window bound is the second guard. Ordered-subsequence alone would accept
+    "data science" from "data pipelines for science teams" -- tokens present, in
+    order, scavenged across a clause. Requiring the match to fit inside
+    len(skill_tokens) + MAX_PARAPHRASE_GAP_TOKENS refuses that while admitting
+    one or two intervening words.
+    """
+    s_norm = _norm_ws(skill).casefold()
+    p_norm = _norm_ws(span).casefold()
+    if not s_norm or not p_norm:
+        return False, "empty"
+    if s_norm in p_norm:
+        return True, "literal"
+
+    s_tok = s_norm.split()
+    p_tok = p_norm.split()
+    # Reverse direction is NOT a pass. Checked explicitly rather than left to
+    # fall through, so the failure has its own name in the rejection record.
+    limit = len(s_tok) + MAX_PARAPHRASE_GAP_TOKENS
+
+    for start in range(len(p_tok)):
+        matched = 0
+        gap_tokens: list[str] = []
+        for token in p_tok[start:start + limit]:
+            if token == s_tok[matched]:
+                matched += 1
+                if matched == len(s_tok):
+                    # A gap is only legitimate if it coordinates. See
+                    # _COORDINATORS for why window size alone is not enough.
+                    if not gap_tokens or any(g.strip(",;") in _COORDINATORS
+                                             for g in gap_tokens):
+                        return True, "paraphrase"
+                    break  # try a later start; this window is a scavenge
+            elif matched > 0:
+                gap_tokens.append(token)
+    return False, "unsupported"
+
+
 EXTRACTION_PROMPT = """You are extracting the skills a candidate will be assessed on, from one job description.
 
 Return every distinct skill, technology, tool, domain or competency the job description names. For EACH one, return the verbatim sentence or bullet it appears in, copied exactly from the job description.
@@ -131,6 +247,13 @@ class ExtractionResult:
     # inside its own span. This is the number the acceptance criterion
     # ("hallucinated skills: 0, hard fail >= 2") is about.
     rejected: list[dict] = field(default_factory=list)
+    # PARAPHRASED: accepted, and a SUBSET of `mentions` rather than a rejection.
+    # The skill name is a shortening of its span rather than a literal
+    # substring. Its RATE is the signal -- near-zero means the model is quoting
+    # literally; high on some JDs and not others means it is behaving
+    # differently on those, which is what you want to see before it becomes a
+    # defect several phases later.
+    paraphrased: list[dict] = field(default_factory=list)
     # FILTERED: the span was genuine but the "skill" was a sentence fragment
     # ("Building", "large warehouses"). A real defect, and a DIFFERENT one --
     # counting it as a hallucination would make a prompt-quality problem look
@@ -147,6 +270,10 @@ class ExtractionResult:
             "rejected_detail": self.rejected[:20],
             "filtered": len(self.filtered),
             "filtered_detail": self.filtered[:20],
+            "paraphrased": len(self.paraphrased),
+            "paraphrase_rate": (round(len(self.paraphrased) / len(self.mentions), 4)
+                                if self.mentions else 0.0),
+            "paraphrased_detail": self.paraphrased[:20],
             "raw_count": self.raw_count,
             "llm_calls": self.llm_calls,
             "jd_truncated": self.truncated,
@@ -162,20 +289,36 @@ def verify_spans(
     raw_mentions: list[dict],
     jd_text: str,
     sections: list[Section],
-) -> tuple[list[Mention], list[dict]]:
+) -> tuple[list[Mention], list[dict], list[dict], list[dict]]:
     """Keep only mentions whose span is literally present in the JD, and whose
     skill name is a nameable thing rather than a sentence fragment.
 
-    Returns (accepted, hallucinated, filtered) -- three lists, because the two
-    failure modes are different and the acceptance criterion is about the first. Rejection reasons are recorded per item so a
-    hard-fail count can be explained rather than merely reported -- "the model
-    invented a sentence" and "the model returned an empty skill name" are both
-    rejections and are not the same problem.
+    Returns (accepted, invented, filtered, paraphrased) -- FOUR lists, because
+    four genuinely different things happen and collapsing any two of them makes
+    a number that cannot be acted on:
+
+      accepted     usable mentions
+      invented     span not in the document, or the span does not support the
+                   skill name. THIS is the "hallucinated skills" criterion.
+      filtered     the span was real but the "skill" was a sentence fragment
+                   ("Building", "large warehouses"). A prompt-quality problem,
+                   not an invention problem.
+      paraphrased  ACCEPTED, and a subset of `accepted`. The skill name is a
+                   shortening of its span rather than a literal substring.
+                   Tracked because its rate is a signal about how the model is
+                   behaving on a given JD.
+
+    The earlier two-way split reported 8 "hallucinations" on the long fixture of
+    which zero were inventions -- four were legitimate compound-clause
+    extractions and four were one-word competency lines killed by a length
+    floor. A count that mixes those is worse than no count, because it will be
+    believed.
     """
     haystack = _norm_ws(jd_text).casefold()
     accepted: list[Mention] = []
     rejected: list[dict] = []
     filtered: list[dict] = []
+    paraphrased: list[dict] = []
 
     for item in raw_mentions[:MAX_MENTIONS]:
         if not isinstance(item, dict):
@@ -190,11 +333,6 @@ def verify_spans(
         if is_fragment(skill):
             filtered.append({"skill": skill, "reason": "not a nameable skill (fragment)"})
             continue
-        if len(span) < MIN_SPAN_CHARS:
-            rejected.append({"skill": skill, "span": span,
-                             "reason": f"span shorter than {MIN_SPAN_CHARS} chars"})
-            continue
-
         needle = _norm_ws(span).casefold()
         position = haystack.find(needle)
         if position < 0:
@@ -206,14 +344,23 @@ def verify_spans(
                              "reason": "span not found in the job description"})
             continue
 
-        # The skill name itself must also appear inside its own span. Catches the
-        # subtler failure: a real sentence quoted correctly, with a skill name
-        # attached that the sentence does not contain. That passes a
-        # span-only check while still being an invention.
-        if _norm_ws(skill).casefold() not in needle:
+        # Does the quoted text support the claim? Asymmetric -- see
+        # span_supports_skill. A real sentence quoted correctly with a skill
+        # name the sentence does not support is still an invention, and it
+        # passes a span-only check.
+        supported, how = span_supports_skill(skill, span)
+        if not supported:
             rejected.append({"skill": skill, "span": span[:160],
-                             "reason": "skill name not present within its own span"})
+                             "reason": "span does not support the skill name "
+                                       "(the claim is broader than the quote)"})
             continue
+        if how == "paraphrase":
+            # ACCEPTED, and counted. Bucket size is a per-JD signal about
+            # extraction behaviour: near-zero means literal quoting; a rate that
+            # is high on some JDs and not others means the model is doing
+            # something different on those, and that difference is worth seeing
+            # now rather than as a defect three phases from now.
+            paraphrased.append({"skill": skill, "span": span[:160]})
 
         # Offset in NORMALISED space maps only approximately back to the raw
         # document. Re-find the skill in the raw text to get a usable offset for
@@ -229,7 +376,7 @@ def verify_spans(
             section_header=header_at(sections, offset),
         ))
 
-    return accepted, rejected, filtered
+    return accepted, rejected, filtered, paraphrased
 
 
 def extract_mentions(
@@ -272,11 +419,12 @@ def extract_mentions(
         logger.warning("extraction response had no 'mentions' list; treating as empty")
         raw = []
 
-    accepted, rejected, filtered = verify_spans(raw, jd_text, sections)
+    accepted, rejected, filtered, paraphrased = verify_spans(raw, jd_text, sections)
     return ExtractionResult(
         mentions=accepted,
         rejected=rejected,
         filtered=filtered,
+        paraphrased=paraphrased,
         raw_count=len(raw),
         llm_calls=1,
         truncated=truncated,

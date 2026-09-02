@@ -120,6 +120,42 @@ recorded as having been done manually.
 
 ---
 
+## KI-3 — two files carry a whole-file CRLF conversion in the working tree
+
+**Not an Arena problem and not in scope for this phase.** Filed so the next
+person in this worktree sees the pattern named instead of rediscovering it.
+
+`backend/app/db/models.py` and `frontend/src/lib/api.ts` are modified in the
+working tree with **no content change at all** — `git diff --ignore-all-space`
+shows only the Arena additions (199 and 74 lines). HEAD has zero CRLF lines;
+the worktree copies have 1,088 and 737. Something — most plausibly a Windows
+editor, given this project's dev environment — rewrote the line endings of both
+files.
+
+Consequence, and why it is worth a note: a plain `git add` on either file
+commits that line-ending change and makes the diff read as a 1,200-line
+rewrite, which destroys reviewability for whatever real change is in there.
+
+**Mitigation used for the Arena commit** (repeatable):
+
+```
+# stage HEAD's bytes plus the appended lines, leaving the worktree untouched
+git show HEAD:<path>            # -> head text
+# blob = head text + the appended lines, LF throughout
+git hash-object -w --stdin < blob
+git update-index --cacheinfo 100644,<sha>,<path>
+```
+
+The Arena commit's diff for those two files is `198+/0-` and `73+/0-` as a
+result, and the CRLF change stayed in the working tree where it was found.
+
+**Real fix, out of Arena scope:** a `.gitattributes` at the repo root with
+`* text=auto eol=lf`, which stops this recurring for everyone. It belongs to
+whoever owns the editor doing it — the same person the other ~70 pre-existing
+working-tree modifications belong to.
+
+---
+
 ## Not filed here
 
 The `verify=False` in `app/core/llm.py` is pre-existing, explicitly out of
