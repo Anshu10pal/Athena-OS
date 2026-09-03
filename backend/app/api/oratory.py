@@ -23,6 +23,12 @@ CRUTCH_CANDIDATES = {"like", "basically", "actually", "literally", "so", "right"
 HEDGES = ["i think", "i guess", "maybe", "sort of", "kind of", "probably", "i feel like", "not sure"]
 WEAK_WORDS = {"very", "really", "thing", "things", "stuff", "good", "nice", "a lot"}
 HEDGING = ["maybe", "probably", "perhaps", "kind of", "sort of", "i think", "i guess", "i feel like"]
+# Imported rather than re-worded: two copies of this message disagreed with each
+# other before 2026-09-03, and a message duplicated per call site is a message
+# that drifts. Phase 3 moves the transcription itself behind a shared service;
+# this is the message half of the same problem.
+from app.api.voice import _NOT_INSTALLED_STT  # noqa: E402
+
 _whisper = None
 
 
@@ -60,7 +66,7 @@ async def analyze(
     try:
         from faster_whisper import WhisperModel
     except ImportError:
-        raise HTTPException(501, "Local STT not installed. Run: pip install faster-whisper")
+        raise HTTPException(501, _NOT_INSTALLED_STT)
     if _whisper is None:
         _whisper = WhisperModel("base", device="cpu", compute_type="int8")
 

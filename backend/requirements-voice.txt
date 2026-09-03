@@ -1,6 +1,0 @@
-# Optional local voice stack (CPU-friendly). Install only when you reach the voice phase:
-#   pip install -r requirements-voice.txt
-faster-whisper==1.1.1
-edge-tts==7.2.8
-piper-tts==1.2.0
-soundfile==0.13.1

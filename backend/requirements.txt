@@ -29,3 +29,33 @@ platformdirs==4.11.0
 # Codebase agent (dependency-cluster detection, HDBSCAN on symbol embeddings)
 hdbscan==0.8.44
 scikit-learn==1.7.2
+
+# Voice stack. MERGED IN from the former requirements-voice.txt, 2026-09-03.
+#
+# It used to be an optional extras file, and that produced exactly the failure
+# mode an optional extras file produces: three modules (voice.py, oratory.py,
+# communication.py) imported these libraries at request time, none of them were
+# installed, and every voice endpoint in the application returned 501 or
+# silently degraded -- discoverable only by calling the endpoint. The baseline
+# in docs/voice-known-issues.md records all five.
+#
+# The trade is deliberate: install size and cold-start cost, in exchange for the
+# app either booting with voice working or failing at BUILD, never at a user's
+# first request.
+faster-whisper==1.1.1
+edge-tts==7.2.8
+# 1.7.0, NOT the 1.2.0 that was pinned in the old extras file. That pin was
+# UNINSTALLABLE on this runtime: piper-tts 1.2.0 requires
+# piper-phonemize~=1.1.0, which publishes no distribution for Python 3.12
+# (every version caps at <3.12) and this project pins python-3.12.8. So the
+# Piper TTS fallback in voice.py did not merely lack a voice file -- it could
+# never have been installed here at all, which is why the extras file being
+# optional hid a dead pin for as long as it did.
+#
+# 1.7.0 dropped the piper-phonemize dependency: it needs onnxruntime (already
+# present via fastembed) plus pathvalidate, so the transitive graph is SMALLER
+# than the broken pin's would have been. The synthesize() API changed across
+# this range, so voice.py's fallback call site needs checking -- Phase 4 work,
+# reported not silently patched.
+piper-tts==1.7.0
+soundfile==0.13.1
