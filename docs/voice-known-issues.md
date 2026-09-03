@@ -62,6 +62,39 @@ no audio is a 200 or a 503. Do not widen the handler.
 
 ---
 
+### Phase 6 status: PARTIALLY closed, and the distinction matters
+
+**Do not read "voice works now" as "VKI-1 is fixed."** Two different things
+happened and only one of them was a fix.
+
+What changed is that the defect **no longer fires on the primary path**.
+`_synthesize` previously returned `b""` because TTS was not installed at all, so
+every listening passage served HTTP 200 with silence. TTS now works, so the
+failure branch is not reached in normal operation.
+
+What did **not** change is the code path. `app/api/communication.py::_synthesize`
+still ends in `return b""`, `listening_passage` still branches on empty bytes,
+and the endpoint still answers **200 with no audio** when synthesis fails. The
+defect is dormant, not removed. Anything that breaks TTS — missing weights on a
+fresh deploy, a Kokoro load failure with a weightless Piper behind it (see
+VKI-5, now more likely) — puts the original behaviour straight back.
+
+One correction to how this is often described, since the point of this note is
+future readers: the `except` is **no longer bare**. Phase 4 gave it
+`exc_info=True`, so a failure is now logged with its exception and an operator
+can tell a blocked proxy from a missing package. That was half of VKI-1's
+minimum fix, acquired for free by routing through the shared interface. The
+remaining half — **200 versus 503** — is untouched and is what keeps this issue
+open. Serving a 200 with no audio is the plausible-rather-than-broken shape;
+the caller cannot detect it, and the frontend renders a listening exercise with
+nothing to listen to.
+
+**Still open. Closing it is a decision about the endpoint's contract, not a
+voice-stack change**, which is why six phases of voice work correctly did not
+close it.
+
+---
+
 ## VKI-2 — the TTS fallback turns a listening test into a reading test, guarded only by a comment
 
 **Owner: a Communication Gym task. NOT the voice migration.** Related to VKI-1
@@ -200,6 +233,38 @@ command fetches them at build time (docs/DEPLOYMENT.md).
 
 ---
 
+### Phase 6 escalation: same issue, higher consequence
+
+**The issue did not change; what sits behind it did.** With edge-tts deleted,
+Piper is the ONLY fallback.
+
+    before Phase 6:  ships weightless, deployment must fetch
+                     -> if the fetch fails, edge-tts still answers (over the network)
+    after  Phase 6:  ships weightless, deployment must fetch
+                     -> if the fetch fails, THERE IS NO FALLBACK AT ALL
+
+That is a strictly worse failure mode reached by a strictly better decision, and
+both halves are worth stating. Deleting the network engine was right — it is
+what makes the offline guarantee real. The cost is that the local stack now has
+no third leg, so a build whose fetch step fails silently produces a service
+where Kokoro is the single point of failure for all speech.
+
+What keeps this from being silent rather than merely bad:
+
+- `engine_status()` reports the unready engine instead of claiming health, and
+  `/api/voice/engines` exposes it.
+- `scripts/fetch_models.sh` fetches the voice file with a pinned SHA256, so a
+  corrupted or substituted download fails the build rather than the request.
+- `tests/test_voice_bake.py::test_both_tts_engines_report_ready_with_egress_blocked`
+  fails if **either** engine is not genuinely ready offline — it asserts set
+  equality against `ENGINE_ORDER`, so a silently-dropped engine cannot pass it.
+
+**Not fixed here.** The 60 MB voice file is still not committed, for the reason
+it never was: git keeps a binary forever. What has changed is the price of the
+build step failing, and that price is now recorded rather than inferred.
+
+---
+
 ## VKI-6 — Chat and the legacy interview page received filler-stripped transcripts for an unknown period
 
 **Owner: a data-quality question for whoever owns those surfaces. NOT the voice
@@ -271,6 +336,17 @@ often the answer.
 
 ---
 
+### Phase 6 status: confirmed unchanged
+
+One line, as the mechanism cannot change: the Phase 4 fixture still round-trips
+through the Phase 5 offline-enforced stack — `test_voice_bake.py` transcribes
+the committed Kokoro audio with egress blocked and the word-count-plus-anchor
+gate still passes — and numeral normalisation is a property of Whisper's
+decoder, untouched by where its weights are stored. VKI-7 stands exactly as
+filed, against Arena Phase B.
+
+---
+
 ## VKI-8 — Kokoro-on-CPU latency is not production-ready, and STREAMING WILL NOT FIX IT
 
 **Owner: Interview Arena voice. Re-measured 2026-09-03 under the Phase 5
@@ -331,6 +407,9 @@ conclusion never depended on the error, but the figures did.)*
 
 **What remains open for Arena, revised:**
 
+- **Measure onnxruntime intra-op thread count FIRST.** See VKI-9 — this is an
+  hour of work that can invalidate everything below it, so it is not one option
+  among several, it is the thing to do before choosing among them.
 - **Switch the primary to Piper**, at a quality cost that has not been measured.
   Cheapest by far: no new dependency, no new weights, one env var. Blocked on a
   quality comparison nobody has run.
@@ -351,17 +430,6 @@ upper bound.
 
 ---
 
-## VKI-7 — confirmed unchanged under the Phase 5 configuration
-
-One line, as the mechanism cannot change: the Phase 4 fixture still round-trips
-through the Phase 5 offline-enforced stack — `test_voice_bake.py` transcribes
-the committed Kokoro audio with egress blocked and the word-count-plus-anchor
-gate still passes — and numeral normalisation is a property of Whisper's
-decoder, untouched by where its weights are stored. VKI-7 stands exactly as
-filed, against Arena Phase B.
-
----
-
 ## Phase 6 open item — the Render cross-check is still outstanding
 
 **Not a Phase 5 residual; an open Phase 6 item.** The network-blocked assertion
@@ -373,3 +441,47 @@ service loading models with no fetch in its network log.
 Until that happens, the claim is "the code cannot fetch, verified locally" and
 not "the deploy does not fetch, observed". Those are different claims and only
 the first is currently supported. It lands whenever the next deploy does.
+
+---
+
+## VKI-9 — Kokoro's thread count has never been tuned, and it gates the Arena voice decision
+
+**Filed as the CHEAPEST test available, and it must run before Arena voice
+chooses between Kokoro and Piper.**
+
+Every Kokoro latency figure in VKI-8 was measured at onnxruntime's default
+intra-op thread count. Nobody set it. `onnxruntime` also reported only
+`['AzureExecutionProvider', 'CPUExecutionProvider']` on this machine, so there
+is no accelerator involved and thread count is the main lever left.
+
+**The measurement:** Kokoro RTF on target hardware at intra-op threads of
+**1, 2, 4, 8**, on the same 673-char passage and 76-char question VKI-8 pins,
+n=3, median with (min, max) — the same protocol, so the numbers are comparable
+to the ones already filed.
+
+**Why it is high leverage rather than an optimisation chore.** VKI-8's central
+conclusion is that Kokoro's RTF of 1.71 forbids streaming synthesis: the
+synthesiser falls behind playback and stalls mid-utterance. That conclusion is
+load-bearing for the whole Arena voice design.
+
+> **If any thread configuration produces RTF < 1, streaming synthesis
+> re-enters the design space and VKI-8's design implications change
+> materially.**
+
+A Kokoro that streams is a different engine, product-wise, from one that makes a
+candidate wait 9 seconds before every question — and it would remove the reason
+to consider trading voice quality for Piper's speed at all.
+
+**Stated as a hypothesis with a named mechanism, not a finding.** The mechanism
+is that ONNX matmul kernels parallelise across intra-op threads and the default
+may not be using the available cores. It may also do nothing: quantised int8
+kernels can be memory-bandwidth-bound, in which case more threads buy little.
+Both outcomes are useful and neither is known today.
+
+**Sequencing, and this is the point of filing it:** run this BEFORE the
+Kokoro-vs-Piper decision, not after. Choosing an engine on numbers taken at an
+untuned default risks trading away voice quality to solve a problem that a
+configuration line already solved. One hour of work standing in front of a
+decision that is expensive to reverse.
+
+**Cost:** ~1 hour. **Blocks:** the Arena voice phase.

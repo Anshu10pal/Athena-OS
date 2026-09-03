@@ -2206,3 +2206,49 @@ narrowing to egress — `connect`, `connect_ex`, `create_connection`,
 negative from a test harness reads as a product defect and sends the reader
 looking in the wrong place, which is a more expensive failure than a false
 positive.
+
+## Positive pattern: ISOLATE BEFORE REPORTING
+
+**When a measurement produces a number that could have come from more than one
+source, isolate the source before reporting the number — otherwise the number
+measures nothing.**
+
+The instance, from Phase 6. The offline verification counted network connection
+attempts per endpoint, and four of five endpoints showed zero. `oratory/analyze`
+showed **six**.
+
+Six attempts is a publishable-looking number. Reported as-is it would have said
+"the offline guarantee holds everywhere except oratory/analyze", which is a
+specific, plausible, actionable and **entirely wrong** claim. The endpoint runs
+two unrelated things that touch the network in different ways: model loading,
+which must never fetch, and LLM scoring, which must. A raw count over the whole
+request cannot tell them apart.
+
+Isolating: the attempts traced to `app/api/oratory.py:175`, a `chat_json` call
+with `prompts.ORATORY_EVAL`. Re-run with `chat_json` stubbed — **status 200,
+0 connection attempts**, full metrics, correct transcript. The model-fetch count
+is genuinely zero on every endpoint.
+
+**That isolation is what made "zero fetches" mean anything.** Without it the
+claim would have been either false ("all endpoints fetch nothing") or uselessly
+vague ("mostly zero"). With it the claim is exact: zero fetches on the model
+path, and the only network traffic is the LLM call that is supposed to be there.
+
+The general form:
+
+1. A number that can arise from several mechanisms is not evidence about any one
+   of them.
+2. Suppressing the confound (stub, block, disable) and re-measuring is usually
+   cheap — this cost one extra run.
+3. Do it BEFORE reporting, not after someone questions the figure. A number
+   published without isolation has to be retracted; a number published with it
+   survives.
+
+**Relationship to the named defect classes:** this is the constructive twin of
+*check-that-cannot-fail*. That class is about assertions that cannot come out
+false; this is about measurements that cannot come out meaningful. Both fail the
+same way — they produce output that looks like evidence and is not — and both
+are caught by asking what result would distinguish the claim from its opposite.
+
+Compare §17.32 (read the output, not the counts): the same discipline applied to
+a different artefact. Reading "6" and stopping is the failure mode in both.
