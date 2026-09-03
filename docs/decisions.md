@@ -1611,3 +1611,72 @@ cold-bank interview session consumes an entire user-day of budget on Gemini.
 Groq's measured 1,000 RPD is 50x that. The Phase B ordering question is no
 longer "which provider is primary" but "is Gemini viable as a primary at all",
 bounded by the 8,000 TPM finding that keeps it on the long-context call.
+
+## Phase A acceptance measurement — COMPLETE, 5 fixtures x 3 runs, 2026-09-03
+
+Pinned to **Groq (`openai/gpt-oss-120b`)**, not the shipped Gemini-first path.
+Gemini's measured 20 requests/day cannot carry a 30-call protocol; Groq's 1,000
+can. **Caveat, load-bearing: extraction QUALITY is the model-dependent part, so
+criterion 1 here is Groq's accuracy, not the shipped path's.** Structural
+criteria are provider-independent and do transfer.
+
+| fixture | words | skills | parents | invented | latency | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| short | 80 | 14 `(11-16)` | 5 `(4-6)` | **0** | 12.9s | **PASS** |
+| foundry-fde | 452 | 17 `(15-18)` | 6 | **0** | 7.8s | MISS |
+| vague | 254 | 19 `(15-21)` | 6 | **0** | 29.7s | MISS |
+| target-role | 324 | 22 `(19-24)` | 7 `(7-8)` | **0** | 31.8s | **HARD FAIL** |
+| long | 3487 | 19 `(18-23)` | 7 | **0** | 58.7s | **HARD FAIL** |
+
+### What the fixes bought
+
+- **`invented` is 0 on every fixture and every run.** It was 0-12 on
+  foundry-fde before. The taxonomy fix (nominalisations reclassified as
+  `unverified` rather than hallucinations, with a stem anchor keeping unrelated
+  names out) closed criterion 2 completely. `unverified` and `paraphrase` rates
+  both came back at 0% on Groq, which is itself informative: this model quotes
+  literally rather than nominalising, so the class the fix was built for did not
+  even arise here. It will on Gemini.
+- **The `short.txt` parent-count HARD FAIL was indeed a false failure.** With
+  per-run bands it now reads `median 5 (min 4, max 6) ok`, bands
+  `[(3,5),(5,7),(3,5)]` — run 2 legitimately earned a wider band.
+- **Latency improved sharply** where it was worst: foundry-fde 45.6s -> 7.8s.
+- **The fragment filter now fires**, and skill lists are materially cleaner
+  (foundry-fde 36 skills of which ~16 were junk, now 17).
+
+### The two failures are BOTH clustering, not extraction
+
+1. **`max children per parent` MISSes on four of five fixtures** — median 7-8
+   against a 2-5 target, hard fail >8. Every fixture sits at or just under the
+   cap, which is the shape of a clusterer producing one oversized group rather
+   than several balanced ones.
+2. **The coherence gate failed on ALL FIVE fixtures** (medians 33-75% against
+   an 80% bar). Per the pre-registration this means escalation to LLM
+   clustering is warranted — reported, not silently switched.
+
+`target-role` hard-failed on parent count (8 on run 1, band max 7) and `long`
+on latency (65.2s on run 2, bar 60s). Neither is an extraction defect.
+
+**So the honest diagnosis: extraction is now in reasonable shape and CLUSTERING
+is the weak component.** That is a different conclusion from the one the first
+run supported, and it points at exactly one pre-registered next action rather
+than at another extractor iteration.
+
+### Held out no longer
+
+`target-role.txt` has now been measured and is spent. Its 24-skill list is
+dominated by genuine ML vocabulary (PyTorch, TensorFlow, recommendation
+systems, ML pipelines, model training, feature development, hypothesis testing,
+regression analysis) with four degree fields (Computer Science, Data Science,
+Mathematics, Statistics) that the filter deliberately does not remove — see the
+`is_fragment` comment for why that trade is the right direction.
+
+### Read the output, not the counts (§17.32)
+
+The vague fixture returned `crypto`, `betting`, `gaming`, `fintech` — which
+looked like invented domain inference against a 0-invented count. Checked
+against the fixture: all four are in its final requirements line, *"Experience
+in crypto, betting, gaming, trading, fintech, or similar fast-paced platforms
+is a strong plus."* The suspicion was wrong and the guard was right. **The vague
+JD degraded HONESTLY**: 19 skills all traceable to the document, 6 parents, zero
+inventions — which is the PASS condition that case was written to test.

@@ -292,8 +292,16 @@ def _is_rate_limited(exc: BaseException) -> bool:
     return any(marker in text for marker in RATE_LIMIT_MARKERS)
 
 
+# Groq's binding constraint is 8,000 TOKENS per minute on a leaky bucket, not
+# requests per day. A long-fixture extraction call is roughly 6,000 tokens, so a
+# token-bucket 429 needs ~45s of refill before a retry can succeed. 20s was
+# tuned for Gemini's request cap and is too short here; 3 attempts at 45s covers
+# a full bucket refill twice over.
+RATE_LIMIT_BACKOFF_SECONDS = 45
+
+
 def measure_repeated(db, title: str, jd_text: str, label: str,
-                     runs: int = RUNS_PER_JD, max_retries: int = 2) -> list[dict]:
+                     runs: int = RUNS_PER_JD, max_retries: int = 3) -> list[dict]:
     """`runs` independent measurements of the same JD.
 
     A FRESH USER PER RUN, deliberately. `graph_build` is idempotent on
@@ -323,9 +331,10 @@ def measure_repeated(db, title: str, jd_text: str, label: str,
             except Exception as exc:  # noqa: BLE001 -- classified below, not swallowed
                 if _is_rate_limited(exc) and attempts < max_retries:
                     attempts += 1
-                    print(f"    run{i + 1}: rate-limited, discarding and retrying "
-                          f"({attempts}/{max_retries})")
-                    time.sleep(20)
+                    print(f"    run{i + 1}: rate-limited, discarding and retrying in "
+                          f"{RATE_LIMIT_BACKOFF_SECONDS}s ({attempts}/{max_retries})",
+                          flush=True)
+                    time.sleep(RATE_LIMIT_BACKOFF_SECONDS)
                     continue
                 raise
     return out
@@ -400,17 +409,32 @@ def print_aggregate(rows: list[dict]) -> None:
         (f"latency (flat: <{lat_target:g}s / fail >{lat_hard:g}s)",
          [round(r["latency"], 1) for r in rows],
          lambda v: v < lat_target, lambda v: v > lat_hard),
-        # Indexed by position so each run is judged against its OWN band.
-        ("parent nodes" + bands_note, list(range(len(rows))),
-         lambda i: parent_ok_flags[i], lambda i: not parent_ok_flags[i]),
         ("max children per parent", [r["max_children"] for r in rows],
          lambda v: v <= 5, lambda v: v > max_children_cap),
         ("LLM calls", [r["llm_calls"] for r in rows],
          lambda v: v <= 2, lambda v: v > 4),
     ]
     verdicts = {}
+
+    # PARENT NODES is evaluated here rather than through `verdict`, because it
+    # is the one criterion whose target differs PER RUN: the allowed band comes
+    # from that run's own mention count. Routing it through the median helper
+    # meant passing indices as "values", whose median is a float -- which then
+    # indexed a list and raised. Caught by running it.
+    #
+    # The pinned rule collapses cleanly here: if every run sits inside its own
+    # band there is nothing to miss, and if any run sits outside its own band
+    # that is a hard fail. So there is no MISS state for this criterion.
+    counts = [r["parents"] for r in rows]
+    bad_runs = [i + 1 for i, ok_flag in enumerate(parent_ok_flags) if not ok_flag]
+    parent_verdict = "HARD FAIL" if bad_runs else "PASS"
+    verdicts["parent nodes"] = parent_verdict
+    print(f"    {'parent nodes' + bands_note:<44} "
+          f"median {_median(counts):g}  (min {min(counts):g}, max {max(counts):g})  "
+          + (f"HARD FAIL on run(s) {bad_runs}" if bad_runs else "ok"))
+
     for name, values, ok, hard in checks:
-        if name.startswith("parent nodes"):
+        if False:
             # Judged on indices (each against its own band) but REPORTED as the
             # parent counts -- reporting indices would be a table describing its
             # own loop variable.
@@ -558,6 +582,10 @@ def main() -> int:
                         help=f"measurements per JD (default {RUNS_PER_JD}; the "
                              "protocol is pinned at 3 and lowering it makes the "
                              "pass rule undecidable)")
+    parser.add_argument("--provider", choices=("gemini", "groq"), default="gemini",
+                        help="pin all runs to one provider. gemini is the shipped "
+                             "extraction path; groq has 50x the daily request "
+                             "ceiling (1000 vs 20) but is not what ships.")
     parser.add_argument("--smoke", action="store_true",
                         help="one small built-in JD, single run, live model -- "
                              "verifies wiring, NOT acceptance")
@@ -575,9 +603,20 @@ def main() -> int:
     # per-fixture failure handling reports as NOT MEASURED -- a true statement,
     # unlike a mixed-provider median.
     from app.core.config import settings as _settings
-    _settings.GROQ_API_KEY = ""
-    print(f"  PROVIDER PINNED: gemini only (groq key blanked for this run, so a\n"
-          f"  quota exhaustion fails loudly instead of silently switching model).\n")
+    if args.provider == "gemini":
+        _settings.GROQ_API_KEY = ""
+    else:
+        _settings.GEMINI_API_KEY = ""
+    print(f"  PROVIDER PINNED: {args.provider} only (the other key is blanked for this\n"
+          f"  run, so a quota exhaustion fails loudly instead of silently switching\n"
+          f"  model and turning n=3 into a mixed-provider median).")
+    if args.provider == "groq":
+        print("  NOTE: groq is NOT the shipped extraction path. Extraction ships\n"
+              "  gemini-first, and extraction QUALITY is the model-dependent part --\n"
+              "  so criterion 1 from this run is groq's accuracy, not the shipped\n"
+              "  path's. Structural criteria (parents, children, calls, invented /\n"
+              "  unverified counts) are provider-independent and do transfer.")
+    print()
 
     db = _session()
 
