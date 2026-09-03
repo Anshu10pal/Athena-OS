@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import platformdirs
@@ -27,6 +28,46 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 # `%LOCALAPPDATA%` relative to the working directory, possibly right back
 # inside an analysable tree. platformdirs handles this correctly per-OS.
 APP_DATA_ROOT = Path(platformdirs.user_data_dir("athena-codebase-agent", appauthor=False))
+
+
+# ALL model weights live HERE, inside the repo directory, and that location is
+# not a preference -- it is what Render's filesystem semantics allow.
+#
+# Verified against Render's own docs rather than assumed (the assumption that
+# this project ships in a Docker image was carried across four filed items
+# before anyone checked; see decisions.md, the unresolved-premise class):
+#
+#   * The build command's filesystem DOES carry into the runtime -- it must,
+#     since `pip install -r requirements.txt` at build and `uvicorn` at start
+#     is the documented shape.
+#   * Persistent disks are NOT accessible during the build command ("these
+#     commands run on separate compute").
+#   * The runtime filesystem is otherwise EPHEMERAL: "any changes you make to a
+#     service's local files are lost every time the service redeploys or
+#     restarts."
+#
+# What the docs do NOT say is whether build-time writes OUTSIDE the project
+# directory (~/.cache, /tmp) reach the runtime. Betting the closure of KI-2 and
+# VKI-4 on an undocumented behaviour would be the same class of defect those
+# items describe, so weights go somewhere documented to exist at runtime: the
+# service's own source directory.
+#
+# This also matters more than "one download" on the free tier: a RUNTIME fetch
+# is re-paid on every cold start after a spin-down, because the ephemeral
+# filesystem is restored to its post-build state. A build-time fetch is paid
+# once per deploy.
+MODELS_DIR = Path(os.environ.get("MODELS_DIR", str(BACKEND_DIR / "models")))
+
+# When true (the default), every model loader is told it may NOT reach the
+# network -- `local_files_only` / offline flags rather than a warm cache we hope
+# for. That is the difference between "it did not download this time" and "it
+# cannot download", and only the second is testable.
+#
+# KI-2's decision was that the app "either boots working or fails at build,
+# never at a user's first request". Defaulting this to true is what implements
+# that: a checkout that skipped scripts/fetch_models.sh fails loudly and
+# actionably instead of silently fetching 316 MB on someone's first click.
+MODELS_OFFLINE = os.environ.get("MODELS_OFFLINE", "1") not in ("0", "false", "False")
 
 
 class Settings(BaseSettings):

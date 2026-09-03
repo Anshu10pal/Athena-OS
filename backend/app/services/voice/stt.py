@@ -29,6 +29,7 @@ import logging
 import threading
 from typing import Optional
 
+from app.core.config import MODELS_DIR, MODELS_OFFLINE
 from app.services.voice import NOT_INSTALLED_STT
 
 logger = logging.getLogger("athena.voice.stt")
@@ -40,6 +41,13 @@ logger = logging.getLogger("athena.voice.stt")
 MODEL_SIZE = "base"
 DEVICE = "cpu"
 COMPUTE_TYPE = "int8"
+
+# Project-relative, and OFFLINE-ENFORCED by default. `download_root` puts the
+# weights inside the repo directory (the only place Render documents as present
+# at runtime) and `local_files_only` makes a runtime fetch IMPOSSIBLE rather
+# than merely unnecessary -- which is what turns VKI-4 from "the cache happened
+# to be warm" into a property a test can assert.
+WHISPER_DOWNLOAD_ROOT = str(MODELS_DIR / "whisper")
 
 # ---------------------------------------------------------------------------
 # THE VERBATIM CONFIG. Do not change any of these four without reading
@@ -104,7 +112,13 @@ def _get_model():
                 raise STTUnavailable() from exc
             logger.info("loading faster-whisper %s (%s/%s)",
                         MODEL_SIZE, DEVICE, COMPUTE_TYPE)
-            _model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE)
+            _model = WhisperModel(
+                MODEL_SIZE,
+                device=DEVICE,
+                compute_type=COMPUTE_TYPE,
+                download_root=WHISPER_DOWNLOAD_ROOT,
+                local_files_only=MODELS_OFFLINE,
+            )
     return _model
 
 

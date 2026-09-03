@@ -29,6 +29,7 @@ from typing import Optional
 import numpy as np
 from fastembed import TextEmbedding
 
+from app.core.config import MODELS_DIR, MODELS_OFFLINE
 from app.db.models import CodeSymbol
 
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
@@ -39,7 +40,13 @@ _model: Optional[TextEmbedding] = None
 def _get_model() -> TextEmbedding:
     global _model
     if _model is None:
-        _model = TextEmbedding(model_name=EMBEDDING_MODEL)
+        # Same project-relative cache as vector_store.py, and passed for the
+        # same reason: FastEmbed reads no env var for it. Two call sites, one
+        # cache directory -- the alternative is two copies of an 80 MB model in
+        # two locations, neither of which survives a Render restart.
+        _model = TextEmbedding(model_name=EMBEDDING_MODEL,
+                               cache_dir=str(MODELS_DIR / "fastembed"),
+                               local_files_only=MODELS_OFFLINE)
     return _model
 
 

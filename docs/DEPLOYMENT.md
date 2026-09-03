@@ -9,7 +9,24 @@ ATHENA OS is designed local-first. These notes are for when you eventually want 
   ```
   python-3.12.x
   ```
-- Build command: `pip install -r requirements.txt`
+- Build command: `pip install -r requirements.txt && bash scripts/fetch_models.sh`
+  - **The second half is not optional.** `fetch_models.sh` downloads every model
+    weight — Kokoro TTS, the Piper fallback voice, faster-whisper, and
+    FastEmbed's `bge-small-en-v1.5` — into `backend/models/`, verifying each
+    against a pinned SHA256 before trusting it.
+  - It runs at **build**, which is the point: the runtime is offline-enforced
+    (`MODELS_OFFLINE` defaults on), so a missing weight fails the build loudly
+    rather than triggering a ~316 MB download on some user's first request. That
+    closes `arena-known-issues.md` KI-2 and `voice-known-issues.md` VKI-4.
+  - Weights land inside the **project directory** deliberately. Render's docs
+    confirm the build filesystem carries into the runtime and that the runtime
+    filesystem is otherwise ephemeral, but do **not** document whether
+    build-time writes outside it (`~/.cache`, `/tmp`) survive — and FastEmbed's
+    own default was `/tmp/fastembed_cache`, which is cleared under a running
+    service.
+  - On the free tier this matters more than once-per-deploy: the ephemeral
+    filesystem is restored to its post-build state on every cold start, so a
+    *runtime* fetch is re-paid after every spin-down.
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 - Environment variables (Dashboard → Environment):
   - `GEMINI_API_KEY`
@@ -56,6 +73,16 @@ ATHENA OS is designed local-first. These notes are for when you eventually want 
 7. **Logging** — Render captures stdout but consider structured logs
 
 ## Docker (optional, for self-hosting)
+
+**The buildpack path above is the single supported deployment shape.** Worth
+stating plainly, because it was not: an instruction to "bake model weights into
+the Docker image" was carried across four separate filed items — a voice
+migration hard constraint, KI-2, VKI-4, and a phase go-ahead — before anyone
+checked that this project has no Dockerfile and deliberately does not want one.
+See `decisions.md`, the unresolved-premise defect class.
+
+If you do containerize, the equivalent of the build command above is a `RUN`
+step invoking `scripts/fetch_models.sh`, with `MODELS_OFFLINE` left on.
 
 A `Dockerfile` and `docker-compose.yml` aren't included by default because the project deliberately avoids Docker dependence. If you want to containerize:
 

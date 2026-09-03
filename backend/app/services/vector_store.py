@@ -7,7 +7,7 @@ from typing import Optional
 
 from qdrant_client import QdrantClient
 
-from app.core.config import settings
+from app.core.config import MODELS_DIR, MODELS_OFFLINE, settings
 
 COLLECTION = "athena_memory"
 MODULES_COLLECTION = "athena_modules"
@@ -18,7 +18,20 @@ def client() -> QdrantClient:
     global _client
     if _client is None:
         _client = QdrantClient(path=settings.QDRANT_PATH)
-        _client.set_model("BAAI/bge-small-en-v1.5")
+        # cache_dir is PROJECT-RELATIVE, and it has to be passed here because
+        # FastEmbed honours no environment variable for it -- not
+        # FASTEMBED_CACHE_PATH, not HF_HOME, not XDG_CACHE_HOME. Only this
+        # constructor argument. That is why KI-2 could not be closed by
+        # configuration and needed a code change.
+        #
+        # Its default was WORSE than the ~80 MB runtime download KI-2 records:
+        # measured, it cached to /tmp/fastembed_cache, and /tmp is not merely
+        # ephemeral across deploys but plausibly cleared under the running
+        # service -- so bge-small-en-v1.5 was being re-fetched on cold starts
+        # rather than once.
+        _client.set_model("BAAI/bge-small-en-v1.5",
+                          cache_dir=str(MODELS_DIR / "fastembed"),
+                          local_files_only=MODELS_OFFLINE)
     return _client
 
 

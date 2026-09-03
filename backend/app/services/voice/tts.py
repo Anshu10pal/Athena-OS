@@ -46,6 +46,7 @@ import threading
 import wave
 from typing import Optional
 
+from app.core.config import MODELS_DIR
 from app.services.voice import NOT_INSTALLED_TTS
 
 logger = logging.getLogger("athena.voice.tts")
@@ -70,14 +71,15 @@ ENGINE_ENV_VAR = "TTS_ENGINE"
 # Weight locations. Overridable so Phase 5's image can put them anywhere, with
 # defaults pointing at the local `models/` directory an operator populates via
 # scripts/fetch_voice_models.sh.
-_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))))
+# Derived from the ONE model root in app.core.config rather than re-deriving a
+# path from __file__ -- four loaders resolving "the models directory"
+# independently is four chances to disagree.
 KOKORO_MODEL_PATH = os.environ.get(
-    "KOKORO_MODEL_PATH", os.path.join(_BACKEND_DIR, "models", "kokoro-v1.0.int8.onnx"))
+    "KOKORO_MODEL_PATH", str(MODELS_DIR / "kokoro-v1.0.int8.onnx"))
 KOKORO_VOICES_PATH = os.environ.get(
-    "KOKORO_VOICES_PATH", os.path.join(_BACKEND_DIR, "models", "voices-v1.0.bin"))
+    "KOKORO_VOICES_PATH", str(MODELS_DIR / "voices-v1.0.bin"))
 PIPER_VOICE_PATH = os.environ.get(
-    "PIPER_VOICE", os.path.join(_BACKEND_DIR, "models", "piper", "en_US-lessac-medium.onnx"))
+    "PIPER_VOICE", str(MODELS_DIR / "piper" / "en_US-lessac-medium.onnx"))
 
 # Kokoro voice used when a caller passes nothing, or passes an edge-tts voice
 # name (e.g. "en-US-AriaNeural") that Kokoro does not know. Mapping every legacy
