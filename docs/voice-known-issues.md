@@ -257,41 +257,76 @@ often the answer.
 
 ---
 
-## VKI-8 — Kokoro-on-CPU latency is not production-ready for interview turns
+## VKI-8 — Kokoro-on-CPU latency is not production-ready, and STREAMING WILL NOT FIX IT
 
-**Owner: Interview Arena voice, whenever it becomes a phase. Filed against
-Arena's inheritance list, not just here.** Measured in Phase 4, not acted on.
+**Owner: Interview Arena voice. Re-measured 2026-09-03 under the Phase 5
+configuration; the conclusion got sharper and one of the three options I
+originally listed is now ruled out.**
 
-| text | engine | latency |
-|---|---|---|
-| one sentence (32 chars) | kokoro | 5.5 s |
-| one sentence (32 chars) | edge | 1.0 s |
-| listening passage (673 chars) | kokoro | **62.5 s** |
+Measured offline, model already warm, so these are synthesis times and not load
+times:
 
-**What the migration did and did not deliver.** The voice migration closes
-edge-tts as a liability — a network call to Microsoft, duplicated across two
-call sites, with a fallback that had never worked. It does **not** deliver a
-real-time voice-interview capability, and the 62.5 s figure is why.
+| text | synthesis | audio produced | **real-time factor** |
+|---|---:|---:|---:|
+| 673-char passage | 67.8 s | 39.7 s | **1.71×** |
+| 72-char question | 8.5 s | 4.0 s | **2.12×** |
 
-**The projection, stated as a projection.** At Arena question length — roughly
-30–100 characters per question, perhaps 500 for a follow-up probe — the same
-architecture on the same model projects to **3–10 seconds of TTS per turn**.
-That sits at the edge of a 2–4 second interview-turn budget for the shortest
-questions and outside it for anything longer, with no headroom for a probe.
-This is extrapolation from three measurements at one text length, not a measured
-per-question figure; the point is the order of magnitude, and the order of
-magnitude is the problem.
+**The number that matters is the real-time factor, not the seconds.** RTF > 1
+means synthesis is *slower than playback*. At 1.7–2.1× on this hardware, Kokoro
+cannot generate audio as fast as a listener consumes it.
 
-**The consequence for Arena.** Arena voice **cannot assume Kokoro-as-configured
-is production-ready.** One of these is a required design decision *before* Arena
-voice ships, and it is a Phase B/C decision for Arena rather than this
-migration's to make:
+**That rules out streaming synthesis as a standalone fix**, which was the first
+of the three options originally filed here. Streaming converts total latency
+into time-to-first-audio, and it works only when the synthesiser keeps *ahead*
+of playback. At RTF 1.7 it falls behind immediately and the audio stalls
+mid-sentence — worse for a candidate mid-interview than a straightforward wait.
+Recorded as a withdrawal rather than edited away: the original option list was
+written from seconds alone, before RTF was measured.
 
-- **streaming synthesis** — begin playback on the first sentence while the rest
-  synthesises, which turns total latency into time-to-first-audio;
-- **a smaller variant** — Kokoro publishes fp16 (169 MB) and the int8 already in
-  use; a genuinely smaller model or a different one may be needed;
-- **something else** — including accepting a slower turn, if the product can.
+**Phase 5 did not change the latency.** The 62.5 s originally filed was the
+whole `listening/passage` endpoint (LLM + TTS) on a 673-char passage; TTS alone
+on 673 chars now measures 67.8 s. Same order, no improvement — pinning weights
+and enforcing offline loading closed a *correctness* defect, not a performance
+one, and nothing in Phase 5 claimed otherwise.
 
-Filed here because this is where the number was discovered. Filed against
-Arena because that is where it forces a choice.
+**What remains open for Arena, revised:**
+
+- **A faster model or quantisation.** int8 is already the smallest published
+  Kokoro variant, so this likely means a different model.
+- **Thread/session tuning, untested.** onnxruntime's default intra-op thread
+  count may not be using the available cores; this is the cheapest thing to
+  check and it has *not* been checked. Stated as a hypothesis with a named
+  mechanism, not a finding.
+- **Accepting a slower turn**, if the product can — an 8.5 s pause before each
+  spoken question is a product decision, not a bug.
+- **Streaming, only in combination with something that gets RTF below 1.** Not
+  on its own.
+
+A 72-char question costing 8.5 s sits well outside a 2–4 s interview-turn
+budget. The projection originally filed here (3–10 s per turn) was right at its
+upper bound.
+
+---
+
+## VKI-7 — confirmed unchanged under the Phase 5 configuration
+
+One line, as the mechanism cannot change: the Phase 4 fixture still round-trips
+through the Phase 5 offline-enforced stack — `test_voice_bake.py` transcribes
+the committed Kokoro audio with egress blocked and the word-count-plus-anchor
+gate still passes — and numeral normalisation is a property of Whisper's
+decoder, untouched by where its weights are stored. VKI-7 stands exactly as
+filed, against Arena Phase B.
+
+---
+
+## Phase 6 open item — the Render cross-check is still outstanding
+
+**Not a Phase 5 residual; an open Phase 6 item.** The network-blocked assertion
+is pinned locally (`tests/test_voice_bake.py`, zero connection attempts while
+loading every model). What has *not* happened is confirmation in the real
+environment: a Render deploy running the documented build command, then the
+service loading models with no fetch in its network log.
+
+Until that happens, the claim is "the code cannot fetch, verified locally" and
+not "the deploy does not fetch, observed". Those are different claims and only
+the first is currently supported. It lands whenever the next deploy does.

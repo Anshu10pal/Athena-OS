@@ -2100,3 +2100,65 @@ in the commit that files the rule against exactly that. Caught on reading
 `git status` before committing. The index was cleared and every path staged
 explicitly. It also swept up an untracked `app/core/llm.py.bak` left behind by
 earlier mutation testing, which is its own small lesson about `-A`.
+
+## Three refinements to the defect taxonomy, from Phase 5
+
+### The unresolved premise has a SECOND-ORDER form: resolved for one component, not the set
+
+The class as filed says: verify the target of an instruction exists before
+writing the instruction against it. Phase 5 found the stronger form —
+**when the target exists, verify it accepts the shape of instruction you plan
+to give it.**
+
+`HF_HOME` exists and *is* honoured by faster-whisper. It is not honoured by
+FastEmbed, which reads no environment variable at all and takes only a
+`cache_dir` constructor argument. So "point the cache at a project-relative
+path via env var" was a premise that resolved for one library in the set and
+silently failed for the other.
+
+Why this is the dangerous form: the env-var approach would have **shipped**.
+Tests pass under a warm cache, and the failure surfaces only on the cold-start
+path — which is precisely when it costs the most. KI-2 would have been filed as
+closed and the defect would have reappeared in Arena Phase B, on a cold Render
+container, on a user's first JD submission.
+
+**Operational consequence:** a runtime-model-fetch defect must be filed
+**per library**, never per cache directory. Different libraries respect
+different mechanisms, and pooling them under "cache location" is what created
+this near-miss.
+
+### Positive pattern: prefer the STRUCTURAL guarantee over the measurement
+
+Every runtime-fetch defect in this project has had the shape *"the download
+didn't happen this time"* — including one where a probe warmed the cache mid-
+measurement and was caught only by reading the output.
+
+`local_files_only=True` inverts the invariant. It changes the assertion from
+**"the code did not fetch"** to **"the code cannot fetch."** The second survives
+changes to test infrastructure, cache state, machine, and network conditions;
+the first is a statement about one run.
+
+**The general rule: when a defect is "X happened when it shouldn't have", look
+first for the flag that makes X structurally impossible, and only then for the
+assertion that measures whether X happened.** A measurement of an absence is
+only as good as the conditions it was taken under.
+
+### The socket blocker is an instance of check-that-cannot-fail, not a new class
+
+Filed under the existing class rather than as a fourth.
+
+The Phase 5 network blocker replaced `socket.socket` outright, which broke
+asyncio's own event-loop self-pipe (`socket.socketpair`) and produced three
+failures **indistinguishable from real fetch attempts**. It blocked *more* than
+it claimed.
+
+The symmetry is the lesson: an over-broad guard and an under-narrow guard both
+fail silently, and only measurement discriminates between them. Fixed by
+narrowing to egress — `connect`, `connect_ex`, `create_connection`,
+`getaddrinfo` — and adding a guard test asserting local socket construction and
+`asyncio.run` still work while blocked.
+
+**Test infrastructure needs the same discipline as production code.** A false
+negative from a test harness reads as a product defect and sends the reader
+looking in the wrong place, which is a more expensive failure than a false
+positive.
