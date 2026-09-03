@@ -54,9 +54,17 @@ CRITERIA = """
 PRE-REGISTERED ACCEPTANCE CRITERIA
 
   skills correctly extracted     target >= 85%   hard fail < 70%      [YOUR JUDGEMENT]
-  hallucinated skills            target 0        hard fail >= 2       span absent, OR span
-                                                                      does not support the
-                                                                      skill name
+  hallucinated skills            target 0        hard fail >= 2       span absent from the JD,
+                                                                      OR the skill shares no
+                                                                      content word with its
+                                                                      own span
+  unverified (accepted)          no target -- a SIGNAL. Anchored to a real span but not
+                                 literally derivable from it (verb-to-noun nominalisation
+                                 and the like). NOT counted as hallucination: the skill IS
+                                 in the document, only its morphology differs. Measurement
+                                 showed the legitimate and fabricated cases of this class
+                                 are lexically indistinguishable, so the claim of a
+                                 discrimination is dropped rather than faked.
   parent nodes                   per node budget (a short JD may honestly yield 2-4)
   children per parent            target 2-5      hard fail > 8
   duplicate nodes surviving      target 0        hard fail >= 2       [YOUR JUDGEMENT]
@@ -235,6 +243,9 @@ def measure(db, user_id: int, title: str, jd_text: str, label: str) -> dict:
         "paraphrased": extraction.get("paraphrased", 0),
         "paraphrase_rate": extraction.get("paraphrase_rate", 0.0),
         "paraphrased_detail": extraction.get("paraphrased_detail", []),
+        "unverified": extraction.get("unverified", 0),
+        "unverified_rate": extraction.get("unverified_rate", 0.0),
+        "unverified_detail": extraction.get("unverified_detail", []),
         "extract_seconds": extraction.get("call_seconds", 0.0),
         "naming_seconds": clustering.get("naming_call_seconds", 0.0),
         "nodes": len(rows),
@@ -421,6 +432,8 @@ def print_aggregate(rows: list[dict]) -> None:
 
     print("\n  SIGNALS (no target -- reported so a change in behaviour is visible)")
     for name, key, fmt in (("paraphrase rate", "paraphrase_rate", "{:.0%}"),
+                           ("unverified (accepted)", "unverified", "{:.0f}"),
+                           ("unverified rate", "unverified_rate", "{:.0%}"),
                            ("mean span words", "mean_span_words", "{:.1f}"),
                            ("fragments filtered", "filtered", "{:.0f}"),
                            ("review-band suggestions", "suggestions", "{:.0f}"),
@@ -455,6 +468,12 @@ def print_aggregate(rows: list[dict]) -> None:
               f"-- real spans, not nameable skills")
         for item in r0["filtered_detail"]:
             print(f"    - {item.get('skill')!r}")
+    if r0["unverified_detail"]:
+        print(f"\n  UNVERIFIED (accepted, run {r0.get('run',1)}, {r0['unverified']}) -- "
+              f"anchored to a real span but not literally derivable from it")
+        for item in r0["unverified_detail"]:
+            print(f"    - {item.get('skill')!r} <- {item.get('span')!r}")
+
     if r0["paraphrased_detail"]:
         print(f"\n  PARAPHRASED (accepted), run 1 ({r0['paraphrased']})")
         for item in r0["paraphrased_detail"]:
@@ -545,6 +564,21 @@ def main() -> int:
     args = parser.parse_args()
 
     print(CRITERIA)
+
+    # PIN THE PROVIDER. This became necessary the moment KI-4 was fixed.
+    #
+    # With a working Groq behind Gemini, a mid-run Gemini 429 now falls through
+    # SILENTLY (KI-1 -- the fallback logs at warning and swaps). The n=3
+    # protocol would then quietly become "some runs on Gemini, some on Groq"
+    # with nothing in the output saying so, which is not n=3 of one instrument.
+    # Blanking the Groq key makes an exhausted Gemini RAISE instead, which the
+    # per-fixture failure handling reports as NOT MEASURED -- a true statement,
+    # unlike a mixed-provider median.
+    from app.core.config import settings as _settings
+    _settings.GROQ_API_KEY = ""
+    print(f"  PROVIDER PINNED: gemini only (groq key blanked for this run, so a\n"
+          f"  quota exhaustion fails loudly instead of silently switching model).\n")
+
     db = _session()
 
     if args.smoke:

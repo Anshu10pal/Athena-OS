@@ -139,6 +139,60 @@ MAX_PARAPHRASE_GAP_TOKENS = 3
 # re-admit the fabricated compound.
 _COORDINATORS = frozenset({"and", "or", "&", "and/or", ",", "plus", "as", "well"})
 
+# Crude deterministic stemmer. Not a linguistics project -- it exists only to
+# ANCHOR a skill name to its span, and it is applied to both sides so its errors
+# cancel. Deliberately not a real stemmer (no Porter, no NLTK): a dependency for
+# one anchoring test on a CPU request path is not worth it.
+_SUFFIXES = ("ations", "ation", "ments", "ment", "ings", "ing", "ions", "ion",
+             "ers", "er", "ed", "es", "s")
+
+
+def stem(token: str) -> str:
+    t = token.lower()
+    for suf in _SUFFIXES:
+        if t.endswith(suf) and len(t) - len(suf) >= 4:
+            t = t[: -len(suf)]
+            break
+    if t.endswith("e") and len(t) > 4:
+        t = t[:-1]                      # automate/automation -> automat
+    if len(t) > 4 and t[-1] == t[-2]:
+        t = t[:-1]                      # debugging -> debugg -> debug
+    return t
+
+
+_STEM_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "for", "in", "on", "with", "to",
+    "at", "from", "by", "across", "new", "our", "your", "this", "that",
+    "will", "you", "we", "be", "is", "are", "as", "it", "its", "such",
+})
+
+
+def shares_distinctive_stem(skill: str, span: str) -> bool:
+    """Is the skill name ANCHORED in its span by at least one content stem?
+
+    This is the guard on the `unverified` bucket. Without it, "span is in the
+    document but the skill is not literally in the span" would accept a model
+    that quotes a real sentence and attaches an unrelated name to it --
+    "Kubernetes" pointing at "Deploy new Palantir products" is an invention, not
+    a paraphrase, and it must not be accepted merely because the quote is real.
+
+    Deliberately weak -- ONE shared content stem. It is not trying to verify the
+    claim, only to establish that the claim is about the quoted text. Verifying
+    the claim is what the confirmation screen is for, and the measured finding
+    that motivated this design is that the claim cannot be verified lexically at
+    all (see UNVERIFIED below).
+    """
+    def roots(text: str) -> set:
+        out = set()
+        for raw in _norm_ws(text).casefold().split():
+            tok = raw.strip(".,;:!?()[]'\"")
+            if len(tok) <= 2 or tok in _STEM_STOPWORDS:
+                continue
+            out.add(stem(tok)[:5])
+        return out
+
+    return bool(roots(skill) & roots(span))
+
 # Cap on mentions accepted from one response. A model that returns 400 "skills"
 # for a 200-word JD has failed in a way that should not become 400 database rows
 # and 400 embedding vectors on a request path.
@@ -324,6 +378,11 @@ class ExtractionResult:
     # differently on those, which is what you want to see before it becomes a
     # defect several phases later.
     paraphrased: list[dict] = field(default_factory=list)
+    # UNVERIFIED: the span is in the document and the skill is anchored to it by
+    # a content stem, but the skill name is not literally derivable from the
+    # quote. Accepted and counted. NOT part of the hallucinated-skills
+    # criterion, because these are not inventions -- see verify_spans.
+    unverified: list[dict] = field(default_factory=list)
     # FILTERED: the span was genuine but the "skill" was a sentence fragment
     # ("Building", "large warehouses"). A real defect, and a DIFFERENT one --
     # counting it as a hallucination would make a prompt-quality problem look
@@ -350,6 +409,10 @@ class ExtractionResult:
             "paraphrase_rate": (round(len(self.paraphrased) / len(self.mentions), 4)
                                 if self.mentions else 0.0),
             "paraphrased_detail": self.paraphrased[:20],
+            "unverified": len(self.unverified),
+            "unverified_rate": (round(len(self.unverified) / len(self.mentions), 4)
+                                if self.mentions else 0.0),
+            "unverified_detail": self.unverified[:20],
             "raw_count": self.raw_count,
             "llm_calls": self.llm_calls,
             "jd_truncated": self.truncated,
@@ -366,7 +429,7 @@ def verify_spans(
     raw_mentions: list[dict],
     jd_text: str,
     sections: list[Section],
-) -> tuple[list[Mention], list[dict], list[dict], list[dict]]:
+) -> tuple[list[Mention], list[dict], list[dict], list[dict], list[dict]]:
     """Keep only mentions whose span is literally present in the JD, and whose
     skill name is a nameable thing rather than a sentence fragment.
 
@@ -396,6 +459,7 @@ def verify_spans(
     rejected: list[dict] = []
     filtered: list[dict] = []
     paraphrased: list[dict] = []
+    unverified: list[dict] = []
 
     for item in raw_mentions[:MAX_MENTIONS]:
         if not isinstance(item, dict):
@@ -427,11 +491,42 @@ def verify_spans(
         # passes a span-only check.
         supported, how = span_supports_skill(skill, span)
         if not supported:
-            rejected.append({"skill": skill, "span": span[:160],
-                             "reason": "span does not support the skill name "
-                                       "(the claim is broader than the quote)"})
-            continue
-        if how == "paraphrase":
+            # UNVERIFIED, not invented -- and this is a taxonomy fix, not a
+            # smarter matcher.
+            #
+            # The acceptance run reported 11 "hallucinations" on foundry-fde of
+            # which ZERO were inventions. All eleven were verb-to-noun
+            # nominalisations of real JD text: "workflow automation" from
+            # "automate workflows", "Debugging" from "Debug, improve, and
+            # optimize", "product deployment" from "Deploy new Palantir
+            # products". The skill IS in the document; only its morphology
+            # differs from the quote.
+            #
+            # Extending the matcher to catch them was tried and ABANDONED
+            # because the adversarial pin-set disproved its precondition: no gap
+            # rule and no window size separates a legitimate nominalisation from
+            # a fabricated compound. Both classes occur with a preposition in
+            # the gap ("migrations to the latest infrastructure types" vs "data
+            # pipelines for science teams") AND with an empty gap ("automate
+            # workflows" vs "Python, testing, and deployment"). A fabricated
+            # compound can be structurally identical to a legitimate one.
+            #
+            # So the honest move is to stop CLAIMING a discrimination that is
+            # unavailable. These are accepted, counted, and explicitly not
+            # asserted as verified -- which leaves "hallucinated skills" meaning
+            # what it was always supposed to mean: the model produced text that
+            # is not in the document.
+            #
+            # The anchor is the guard. Without it this bucket would accept a
+            # real quote with an unrelated name attached, which IS an invention.
+            if shares_distinctive_stem(skill, span):
+                unverified.append({"skill": skill, "span": span[:160]})
+            else:
+                rejected.append({"skill": skill, "span": span[:160],
+                                 "reason": "skill name shares no content word "
+                                           "with its own span"})
+                continue
+        elif how == "paraphrase":
             # ACCEPTED, and counted. Bucket size is a per-JD signal about
             # extraction behaviour: near-zero means literal quoting; a rate that
             # is high on some JDs and not others means the model is doing
@@ -453,7 +548,7 @@ def verify_spans(
             section_header=header_at(sections, offset),
         ))
 
-    return accepted, rejected, filtered, paraphrased
+    return accepted, rejected, filtered, paraphrased, unverified
 
 
 def extract_mentions(
@@ -501,7 +596,8 @@ def extract_mentions(
         logger.warning("extraction response had no 'mentions' list; treating as empty")
         raw = []
 
-    accepted, rejected, filtered, paraphrased = verify_spans(raw, jd_text, sections)
+    accepted, rejected, filtered, paraphrased, unverified = verify_spans(
+        raw, jd_text, sections)
     span_words = [len(str(m.get("span", "")).split())
                   for m in raw if isinstance(m, dict)]
     return ExtractionResult(
@@ -509,6 +605,7 @@ def extract_mentions(
         rejected=rejected,
         filtered=filtered,
         paraphrased=paraphrased,
+        unverified=unverified,
         mean_span_words=(sum(span_words) / len(span_words)) if span_words else 0.0,
         raw_count=len(raw),
         llm_calls=1,

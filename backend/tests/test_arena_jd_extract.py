@@ -19,7 +19,8 @@ worse than no count -- it will be believed.
 import pytest
 
 from app.services.arena.jd_extract import (MAX_PARAPHRASE_GAP_TOKENS, is_fragment,
-                                           span_supports_skill, verify_spans)
+                                           shares_distinctive_stem, span_supports_skill,
+                                           stem, verify_spans)
 from app.services.arena.jd_sections import segment
 
 JD = (
@@ -98,7 +99,7 @@ class TestNoLengthFloor:
     @pytest.mark.parametrize("word", ["Teamwork", "Flexibility", "Reasoning", "Learning"])
     def test_a_one_word_competency_line_is_accepted(self, word):
         jd = f"Competencies\n{word}\nRequirements\nPython.\n"
-        accepted, invented, filtered, _para = verify_spans(
+        accepted, invented, filtered, _para, _unv = verify_spans(
             [mention(word, word)], jd, segment(jd))
         assert len(accepted) == 1, (
             f"{word!r} was rejected: invented={invented} filtered={filtered}. "
@@ -109,21 +110,21 @@ class TestNoLengthFloor:
     def test_a_literal_one_word_span_still_requires_the_word_to_be_in_the_jd(self):
         # Dropping the floor must NOT drop the guard. Pure invention still fails.
         jd = "Competencies\nTeamwork\n"
-        accepted, invented, _f, _p = verify_spans(
+        accepted, invented, _f, _p, _u = verify_spans(
             [mention("Kubernetes", "Kubernetes")], jd, segment(jd))
         assert accepted == [] and len(invented) == 1
 
 
 class TestFourWaySplit:
     def test_invented_span_is_counted_as_invention(self):
-        accepted, invented, filtered, para = run([
+        accepted, invented, filtered, para, _u = run([
             mention("Kubernetes", "We orchestrate everything with Kubernetes at scale.")])
         assert accepted == [] and len(invented) == 1
         assert filtered == [] and para == []
         assert "not found" in invented[0]["reason"]
 
     def test_a_fragment_is_not_counted_as_an_invention(self):
-        accepted, invented, filtered, _p = run([
+        accepted, invented, filtered, _p, _u = run([
             mention("Building", "Responsible for cataloging and documenting datasets "
                                 "across the programme.")])
         assert accepted == []
@@ -135,7 +136,7 @@ class TestFourWaySplit:
         assert len(filtered) == 1
 
     def test_a_paraphrase_is_ACCEPTED_and_counted_separately(self):
-        accepted, invented, filtered, para = run([
+        accepted, invented, filtered, para, _u = run([
             mention("Cataloging datasets",
                     "Responsible for cataloging and documenting datasets across the programme.")])
         assert len(accepted) == 1, "a legitimate paraphrase was rejected"
@@ -146,7 +147,7 @@ class TestFourWaySplit:
         )
 
     def test_a_literal_match_is_not_counted_as_a_paraphrase(self):
-        accepted, _i, _f, para = run([
+        accepted, _i, _f, para, _u = run([
             mention("Python", "5+ years of strong Python in production.")])
         assert len(accepted) == 1 and para == [], (
             "a literal quote was counted in the paraphrase bucket, which would "
@@ -161,7 +162,7 @@ class TestFourWaySplit:
             mention("Building", "5+ years of strong Python in production."),        # fragment
             mention("Rust", "We write everything in Rust."),                        # invented
         ]
-        accepted, invented, filtered, para = run(items)
+        accepted, invented, filtered, para, _u = run(items)
         # paraphrased is a SUBSET of accepted, so the total is accepted+invented+filtered.
         assert len(accepted) + len(invented) + len(filtered) == len(items)
         assert len(para) <= len(accepted)
@@ -278,3 +279,93 @@ class TestFragmentListExtendedFromTheRun:
             f"{contextual!r} was added to the fragment list -- see the comment "
             "in jd_extract.py for why this is the wrong trade"
         )
+
+
+class TestUnverifiedBucket:
+    """The taxonomy fix for the nominalisation class.
+
+    The acceptance run reported 11 "hallucinations" on foundry-fde of which zero
+    were inventions -- all were verb-to-noun nominalisations of real JD text.
+    Extending the matcher was tried and abandoned: the adversarial pin-set
+    showed no gap rule or window size separates a legitimate nominalisation from
+    a fabricated compound, because both occur with a preposition in the gap AND
+    with an empty gap.
+
+    So the claim of a discrimination is dropped instead of faked. These are
+    accepted, counted, and not asserted as verified -- which leaves
+    "hallucinated skills" meaning what it should: text not in the document.
+    """
+
+    JD = ("Requirements\n"
+          "Reduce manual operations and automate workflows, processes, and/or runbooks\n"
+          "Deploy new Palantir products at customer deployments\n"
+          "Debug, improve, and optimize Palantir's services and infrastructure\n"
+          "perform migrations to the latest infrastructure types\n")
+
+    def _run(self, skill, span):
+        return verify_spans([{"skill": skill, "span": span}], self.JD, segment(self.JD))
+
+    @pytest.mark.parametrize("skill,span", [
+        ("workflow automation", "automate workflows, processes"),
+        ("process automation", "automate workflows, processes"),
+        ("product deployment", "Deploy new Palantir products"),
+        ("Debugging", "Debug, improve, and optimize"),
+        ("infrastructure optimization", "optimize Palantir's services and infrastructure"),
+        ("infrastructure migrations", "migrations to the latest infrastructure types"),
+    ])
+    def test_nominalisations_are_unverified_not_invented(self, skill, span):
+        accepted, invented, _f, _p, unverified = self._run(skill, span)
+        assert invented == [], (
+            f"{skill!r} counted as a hallucination. It is a nominalisation of "
+            "real JD text -- the skill IS in the document, only its morphology "
+            "differs from the quote."
+        )
+        assert len(accepted) == 1, f"{skill!r} was dropped rather than accepted"
+        assert len(unverified) == 1, f"{skill!r} accepted but not counted as unverified"
+
+    def test_an_unrelated_name_on_a_real_quote_is_STILL_invented(self):
+        """The anchor, and the reason the bucket is safe.
+
+        Without it, "the span is real but the skill is not literally in it"
+        would accept a model that quotes a genuine sentence and attaches an
+        unrelated name to it. That is an invention, not a paraphrase, and a real
+        quote must not launder it.
+        """
+        accepted, invented, _f, _p, unverified = self._run(
+            "Kubernetes", "Deploy new Palantir products")
+        assert accepted == [] and unverified == []
+        assert len(invented) == 1
+        assert "shares no content word" in invented[0]["reason"]
+
+    def test_a_span_absent_from_the_document_is_still_invented(self):
+        accepted, invented, _f, _p, _u = self._run(
+            "Rust", "We write all new services in Rust")
+        assert accepted == [] and len(invented) == 1
+        assert "not found" in invented[0]["reason"]
+
+    def test_a_literal_match_is_not_marked_unverified(self):
+        accepted, invented, _f, _p, unverified = self._run(
+            "workflows", "automate workflows, processes")
+        assert len(accepted) == 1 and invented == [] and unverified == []
+
+
+class TestStemAnchor:
+    @pytest.mark.parametrize("a,b", [
+        ("automate", "automation"), ("Debug", "Debugging"),
+        ("deploy", "deployment"), ("migrations", "migration"),
+        ("optimize", "optimization"), ("configure", "configuration"),
+    ])
+    def test_morphological_variants_anchor_together(self, a, b):
+        assert shares_distinctive_stem(a, f"we {b} things"), f"{a} did not anchor to {b}"
+
+    @pytest.mark.parametrize("skill,span", [
+        ("Kubernetes", "Deploy new Palantir products"),
+        ("Terraform", "Excellent communication and interpersonal skills"),
+    ])
+    def test_unrelated_words_do_not_anchor(self, skill, span):
+        assert not shares_distinctive_stem(skill, span)
+
+    def test_stopwords_alone_do_not_anchor(self):
+        # Otherwise "the" or "and" in both strings would anchor anything to
+        # anything, and the guard would be decorative.
+        assert not shares_distinctive_stem("the new role", "and the team will")
