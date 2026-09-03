@@ -31,13 +31,22 @@ The int8 model (88 MB) is used rather than fp32 (310 MB) or fp16 (169 MB):
 int8 quantisation targets CPU inference, and it matches the
 `compute_type="int8"` this project already chose for faster-whisper.
 
-EDGE-TTS IS STILL HERE, DELIBERATELY
-====================================
-`TTS_ENGINE=edge` still works and edge-tts is still installed. It is NOT deleted
-in this phase, because Phase 5 bakes model weights into the image and a weights
-change wants a rollback path that does not depend on the same weights. Deletion
-is a Phase 6 change bundled with the pip removal, the code removal and the
-enforcement-test flip in one commit.
+EDGE-TTS IS GONE, AS OF PHASE 6 (2026-09-03)
+============================================
+It was the original primary: a websocket to a Microsoft endpoint, which meant
+every spoken response needed a network round-trip, it broke behind the corporate
+proxy, and every utterance left the machine. Kokoro replaced it as primary in
+Phase 4; the deletion waited for Phase 6 to MEASURE that no endpoint regressed,
+so that Phase 5's weight-baking kept a rollback path not dependent on the same
+weights.
+
+Removing it dropped 9 packages and 11 MB, including the entire aiohttp
+websocket stack, which nothing else in this project required.
+
+It is not coming back as a fallback. A network fallback underneath a local-first
+primary is precisely the configuration where an offline guarantee stops holding
+without anyone noticing -- the defect class Phase 5 closed. There are now two
+engines and both are local.
 """
 import io
 import logging
@@ -58,10 +67,20 @@ logger = logging.getLogger("athena.voice.tts")
 # ---------------------------------------------------------------------------
 ENGINE_KOKORO = "kokoro"
 ENGINE_PIPER = "piper"
-ENGINE_EDGE = "edge"
 
 # Order matters: primary first, then fallbacks in the order they are tried.
-ENGINE_ORDER = (ENGINE_KOKORO, ENGINE_PIPER, ENGINE_EDGE)
+# Both entries are LOCAL. `edge` was the third entry until Phase 6; see the
+# module docstring for why a network engine is not welcome back here.
+ENGINE_ORDER = (ENGINE_KOKORO, ENGINE_PIPER)
+
+# Engines that once existed, mapped to what to do instead. Kept so that a
+# deploy still carrying TTS_ENGINE=edge gets a sentence naming the removal
+# rather than a bare "not a known engine", which would send an operator looking
+# for a typo that is not there.
+RETIRED_ENGINES = {
+    "edge": "edge-tts was removed in Phase 6 (network dependency, sent audio "
+            "to Microsoft). Unset TTS_ENGINE to use kokoro.",
+}
 DEFAULT_ENGINE = ENGINE_KOKORO
 
 # Env var name is itself a constant so the pin test asserts the same string the
@@ -70,7 +89,7 @@ ENGINE_ENV_VAR = "TTS_ENGINE"
 
 # Weight locations. Overridable so Phase 5's image can put them anywhere, with
 # defaults pointing at the local `models/` directory an operator populates via
-# scripts/fetch_voice_models.sh.
+# scripts/fetch_models.sh.
 # Derived from the ONE model root in app.core.config rather than re-deriving a
 # path from __file__ -- four loaders resolving "the models directory"
 # independently is four chances to disagree.
@@ -81,10 +100,15 @@ KOKORO_VOICES_PATH = os.environ.get(
 PIPER_VOICE_PATH = os.environ.get(
     "PIPER_VOICE", str(MODELS_DIR / "piper" / "en_US-lessac-medium.onnx"))
 
-# Kokoro voice used when a caller passes nothing, or passes an edge-tts voice
-# name (e.g. "en-US-AriaNeural") that Kokoro does not know. Mapping every legacy
-# name would be inventing a compatibility table nobody asked for; falling back
-# to one known-good voice and SAYING SO in the log is honest.
+# Kokoro voice used when a caller passes nothing, or passes a voice name Kokoro
+# does not know.
+#
+# THIS OUTLIVES EDGE-TTS AND MUST. The `user.voice` column still holds edge-tts
+# voice IDs (e.g. "en-US-AriaNeural") for anyone who set one before Phase 6 --
+# deleting the engine does not rewrite stored user rows. So an unknown voice name
+# has to degrade to a working default rather than fail. Mapping every legacy name
+# onto a Kokoro equivalent would be inventing a compatibility table nobody asked
+# for; falling back to one known-good voice and SAYING SO in the log is honest.
 KOKORO_DEFAULT_VOICE = "af_heart"
 KOKORO_SAMPLE_RATE = 24000
 
@@ -115,9 +139,11 @@ def configured_engine() -> str:
     """
     name = (os.environ.get(ENGINE_ENV_VAR) or DEFAULT_ENGINE).strip().lower()
     if name not in ENGINE_ORDER:
+        retired = RETIRED_ENGINES.get(name)
         raise ValueError(
             f"{ENGINE_ENV_VAR}={name!r} is not a known engine. "
-            f"Known: {', '.join(ENGINE_ORDER)}"
+            f"Known: {', '.join(ENGINE_ORDER)}."
+            + (f" {retired}" if retired else "")
         )
     return name
 
@@ -155,7 +181,7 @@ def _get_kokoro():
                 if not os.path.exists(path):
                     raise TTSUnavailable(
                         f"Kokoro {label} weights missing at {path}. Run "
-                        "scripts/fetch_voice_models.sh, or use an image built "
+                        "scripts/fetch_models.sh, or use a build that fetched them "
                         "with the weights baked in (see Phase 5)."
                     )
             # espeakng-loader ships libespeak-ng in the wheel; phonemizer needs
@@ -199,10 +225,16 @@ def _synth_piper(text: str, voice: Optional[str]) -> bytes:
         # docs/voice-known-issues.md VKI-5: the Piper voice file is NOT
         # committed (60 MB, and git keeps a binary forever), so this fallback
         # boots weightless and reports itself broken until an operator supplies
-        # weights or Phase 5's image bakes them in. It does not pretend.
+        # weights or the build fetches them. It does not pretend.
+        #
+        # RAISED IN COST BY PHASE 6: with edge-tts deleted this is the ONLY
+        # fallback, so a weightless Piper means Kokoro failing has nothing
+        # behind it. engine_status() reports that state rather than hiding it,
+        # and scripts/fetch_models.sh fetches the file -- but the exposure is
+        # real and is recorded against VKI-5.
         raise TTSUnavailable(
             f"Piper voice file missing at {path}. The Piper fallback ships "
-            "WITHOUT weights by design -- run scripts/fetch_voice_models.sh or "
+            "WITHOUT weights by design -- run scripts/fetch_models.sh or "
             "use an image with them baked in. See docs/voice-known-issues.md "
             "VKI-5."
         )
@@ -212,28 +244,24 @@ def _synth_piper(text: str, voice: Optional[str]) -> bytes:
     return buf.getvalue()
 
 
-async def _synth_edge(text: str, voice: Optional[str]) -> bytes:
-    try:
-        import edge_tts
-    except ImportError as exc:
-        raise TTSUnavailable("edge-tts is not installed.") from exc
-    comm = edge_tts.Communicate(text, voice=voice or "en-US-AriaNeural")
-    buf = io.BytesIO()
-    async for chunk in comm.stream():
-        if chunk["type"] == "audio":
-            buf.write(chunk["data"])
-    if not buf.getbuffer().nbytes:
-        raise TTSUnavailable("edge-tts returned no audio.")
-    return buf.getvalue()
-
-
+# Both engines emit WAV now that edge-tts's audio/mpeg is gone. The mapping is
+# kept rather than collapsed to a constant: it is what pins "every engine
+# declares a media type", and a third engine arriving with a different container
+# should have to add a row here.
 MEDIA_TYPES = {ENGINE_KOKORO: "audio/wav",
-               ENGINE_PIPER: "audio/wav",
-               ENGINE_EDGE: "audio/mpeg"}
+               ENGINE_PIPER: "audio/wav"}
 
 
 async def synthesize(text: str, voice: Optional[str] = None) -> tuple[bytes, str, str]:
     """text -> (audio_bytes, media_type, engine_that_produced_it).
+
+    STILL `async` even though no engine awaits anything now that edge-tts is
+    gone. Both call sites (`voice.speak`, `communication._synthesize`) await
+    this, and breaking a shared interface is not part of a deletion whose gate
+    was "no endpoint regresses". Both remaining engines are CPU-bound and block
+    the event loop while they run -- true before this commit too, filed rather
+    than fixed here because moving them to a threadpool changes concurrency
+    behaviour and belongs with the latency work in VKI-8.
 
     Returns the engine name because a caller that cannot tell which engine ran
     cannot report a degraded state -- which is how VKI-1 was able to serve
@@ -255,10 +283,8 @@ async def synthesize(text: str, voice: Optional[str] = None) -> tuple[bytes, str
         try:
             if engine == ENGINE_KOKORO:
                 audio = _synth_kokoro(text, voice)
-            elif engine == ENGINE_PIPER:
-                audio = _synth_piper(text, voice)
             else:
-                audio = await _synth_edge(text, voice)
+                audio = _synth_piper(text, voice)
             if engine != start:
                 logger.warning("TTS fell back from %s to %s", start, engine)
             return audio, MEDIA_TYPES[engine], engine
@@ -304,11 +330,6 @@ def engine_status() -> dict:
     except ImportError:
         out["engines"][ENGINE_PIPER] = {"ready": False, "reason": "piper-tts not installed"}
 
-    try:
-        import edge_tts  # noqa: F401
-        out["engines"][ENGINE_EDGE] = {"ready": True, "note": "network-dependent"}
-    except ImportError:
-        out["engines"][ENGINE_EDGE] = {"ready": False, "reason": "edge-tts not installed"}
     return out
 
 

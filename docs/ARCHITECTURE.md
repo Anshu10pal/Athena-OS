@@ -16,7 +16,7 @@ LLM ROUTER     Gemini Flash (primary, vision) ⟷ Groq Llama 3.3 (fast lane)
                OpenAI SDK · httpx · provider fallback on 429/timeout/SSL
 ─────────────────────────────────────────────────────────────────────────────
 SERVICES       vector_store (Qdrant+FastEmbed) · content_hub (GitHub fetch+cache)
-               voice (faster-whisper + Edge-TTS + Piper) · briefing · analytics
+               voice (faster-whisper + Kokoro + Piper) · briefing · analytics
 ─────────────────────────────────────────────────────────────────────────────
 PERSISTENCE    SQLite (relational state) · Qdrant local (vectors) · GitHub (community)
 ```
@@ -99,7 +99,10 @@ users
   id, email, name, hashed_password
   experience_level, current_role, target_role, learning_goals
   skills (JSON: {"Python": 4, "RAG": 3})
-  voice (Edge-TTS voice ID)
+  voice (TTS voice name — a Kokoro voice such as `af_heart`; may still hold a
+        legacy Edge-TTS ID like `en-US-AriaNeural` for accounts set before
+        Phase 6, which the TTS service degrades to the default rather than
+        failing on)
   xp, streak, last_active (YYYY-MM-DD)
 
 roadmaps

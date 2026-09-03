@@ -72,10 +72,7 @@ pip install -r requirements.txt
 ### `piper-phonemize` fails to install
 **Symptom:** `No matching distribution found for piper-phonemize`.
 **Cause:** No Windows wheels published, period. Building from source requires C++ build tools.
-**Fix:** Skip Piper, use Edge-TTS instead — free Microsoft neural voices, dramatically better quality, pure Python:
-```powershell
-pip install edge-tts faster-whisper
-```
+**Fix (obsolete — see below):** this section used to say "skip Piper, use Edge-TTS instead". That advice is dead twice over: `piper-tts` 1.7.0 **dropped the `piper-phonemize` dependency**, so the symptom no longer occurs on the pinned version, and edge-tts was deleted in Phase 6. If you hit this, you are on the old `piper-tts==1.2.0` pin, which was never installable on Python 3.12 at all — upgrade rather than work around it.
 
 ### `pydantic_core.ValidationError: Extra inputs are not permitted` on startup
 **Cause:** A non-declared env var in `.env` (often `HF_HUB_DISABLE_SYMLINKS_WARNING=1`).
@@ -94,21 +91,20 @@ The most common class of failure on managed corporate machines (Prodapt, similar
 ### OpenAI client (Gemini/Groq) fails with `CERTIFICATE_VERIFY_FAILED`
 **Already fixed in v3+:** `app/core/llm.py` constructs every OpenAI client with `http_client=httpx.Client(verify=False, timeout=60.0)`. If you see this error, you're on an older drop — pull the latest patch.
 
-### Edge-TTS fails with `[SSL: CERTIFICATE_VERIFY_FAILED]`
-**Cause:** Edge-TTS uses `aiohttp`'s websocket, which has its **own** SSL context independent of `httpx`.
-**Fix:** Patch in `app/api/voice.py`:
-```python
-import aiohttp, ssl
-ssl_ctx = ssl.create_default_context()
-ssl_ctx.check_hostname = False
-ssl_ctx.verify_mode = ssl.CERT_NONE
-connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-async with aiohttp.ClientSession(connector=connector) as session:
-    communicate.session = session
-    async for chunk in communicate.stream():
-        ...
-```
-**Worst case:** If the proxy blocks the websocket protocol entirely (not just SSL), Edge-TTS can't work on the corporate network. The frontend's browser-`speechSynthesis` fallback engages automatically, so voice never fully disappears.
+### ~~Edge-TTS fails with `[SSL: CERTIFICATE_VERIFY_FAILED]`~~ — cannot happen any more
+
+**Resolved by deletion, 2026-09-03 (Phase 6).** TTS no longer touches the
+network, so there is no TLS handshake to fail and no websocket for a proxy to
+block. Both engines (Kokoro primary, Piper fallback) run locally from baked
+weights.
+
+Recorded rather than removed for two reasons. First, this was the single most
+frequent voice failure on managed corporate machines, and someone hitting an
+older drop needs to find it. Second, the fix this section used to recommend was
+a hand-rolled `ssl.CERT_NONE` context — the `verify=False` pattern this project
+is trying to eliminate, not extend. Deleting the network dependency removed the
+motivation for that patch entirely, which is a better outcome than a
+better-configured CA bundle would have been.
 
 ### Whisper / FastEmbed model download fails
 **Symptom:** `huggingface_hub` retries during first chat or first mic press.
@@ -165,7 +161,7 @@ Same root cause as above.
 **Fix:** v3.3+ rebuilt as a timestamp stopwatch: `setElapsed(Math.floor((Date.now() - t0) / 1000))`. Drift-immune by design.
 
 ### Athena's voice changes between replies
-**Cause (v3.2):** First reply fell back to the browser's default voice before Edge-TTS warmed up; later replies used Edge-TTS.
+**Cause (v3.2):** First reply fell back to the browser's default voice before Edge-TTS warmed up; later replies used Edge-TTS. (Edge-TTS was deleted in Phase 6; the warm-up race it describes is gone with it, but the Settings voice picker below is still the thing that locks one voice.)
 **Fix:** v3.3+ adds a Settings page voice picker that locks one voice for all replies. Test it with "Test voice" before relying on it.
 
 ### Oratory topics repeat

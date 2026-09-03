@@ -2006,7 +2006,8 @@ and has it ever?*
 ## Voice migration Phase 4 outcome
 
 Kokoro is primary behind `synthesize(text, voice) -> (bytes, media_type,
-engine)`, selected by `TTS_ENGINE` with a Kokoro → Piper → edge fallback chain.
+engine)`, selected by `TTS_ENGINE` with a Kokoro → Piper → edge fallback chain
+(shortened to Kokoro → Piper in Phase 6, when edge-tts was deleted).
 Both call sites (`voice.speak`, `communication._synthesize`) route through it;
 neither knows which engine ran, except that the engine is now *reported* —
 `voice.speak` returns it in `X-TTS-Engine`, because a caller that cannot tell
@@ -2024,11 +2025,54 @@ Windows dev parity without WSL, and was verified rather than assumed.
 int8 weights (88 MB) over fp32 (310 MB): int8 targets CPU inference and matches
 the `compute_type="int8"` already chosen for faster-whisper.
 
-**edge-tts is deliberately NOT deleted.** `TTS_ENGINE=edge` still works and the
-package is still installed, so Phase 5's weight-baking has a rollback path that
-does not depend on the same weights it is changing. Deletion is a Phase 6
-change bundled with the pip removal, the code removal and the enforcement-test
-flip in one commit.
+**edge-tts was deliberately NOT deleted in Phase 4** — and WAS deleted in Phase
+6, 2026-09-03, once the measurement supported it. The delay was the point:
+Phase 5 baked model weights into the build, and a weights change wants a
+rollback path that does not depend on the same weights it is changing. So the
+network engine stayed reachable through the risky change and was removed after,
+gated on a measured no-regression across all five endpoints.
+
+The removal took 9 packages and 11 MB with it, including the whole `aiohttp`
+websocket stack, which nothing else in this project required. `TTS_ENGINE=edge`
+now raises a `ValueError` that names the removal rather than reporting an
+unknown engine — a deploy still carrying that variable should be told what
+happened, not sent looking for a typo it does not have.
+
+Two consequences recorded rather than glossed:
+
+- **Piper is now the sole fallback**, which raises the cost of its uncommitted
+  voice file (VKI-5) from "third choice ships weightless" to "the only fallback
+  ships weightless". `engine_status()` reports it, `scripts/fetch_models.sh`
+  fetches it, and the exposure is real.
+- **Both engines emit WAV**, so `/api/voice/speak` no longer varies its content
+  type by engine — but WAV is uncompressed, and `listening/passage` base64-
+  encodes a ~40 s passage into roughly 2.5 MB of JSON where the old MP3 was
+  ~5x smaller. Not a regression introduced by the deletion (Kokoro became
+  primary in Phase 4) but the deletion removes the compressed option
+  permanently.
+
+**The enforcement test flipped rather than being deleted.** It used to permit
+`edge_tts` inside `app/services/voice/tts.py` and ban it everywhere else,
+because what was being prevented then was a *second call site*. It now bans the
+import across the whole codebase — app, tests, scripts, alembic — with no file
+exempt, and asserts both that the package is uninstalled and that it is absent
+from `requirements.txt`. The import ban alone would pass trivially on a machine
+whose venv still held the package, which is the check-that-cannot-fail shape.
+
+Prose mentions were deliberately KEPT. `tts.py`'s docstring, `voice.py`'s
+history and the `RETIRED_ENGINES` map all still name edge-tts, because erasing
+the record of a removed dependency destroys the trail explaining why the
+interface exists. This is also why the ban is AST-parsed and not grepped: a
+grep would have to whitelist those mentions, and a guard with a whitelist is a
+guard that has started lying.
+
+**One reference was deliberately NOT touched:**
+`tests/fixtures/known_external_python_specifiers.py` lists `edge_tts` and keeps
+it. That file is hand-verified ground truth about what the *remote* repo
+`github.com/Anshu10pal/Athena-OS` imports, used by the codebase-analysis
+classifier tests; it is not an inventory of this working tree. Editing it to
+match a local deletion would have falsified a record about a repository this
+commit does not modify.
 
 ## A third named defect class: THE UNRESOLVED PREMISE
 

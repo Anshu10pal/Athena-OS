@@ -43,7 +43,18 @@ scikit-learn==1.7.2
 # app either booting with voice working or failing at BUILD, never at a user's
 # first request.
 faster-whisper==1.1.1
-edge-tts==7.2.8
+
+# edge-tts WAS HERE and is gone as of Phase 6, 2026-09-03. It was the original
+# primary TTS: a websocket call to a Microsoft endpoint, which made every spoken
+# response depend on a network round-trip, broke behind the corporate proxy
+# (docs/TROUBLESHOOTING.md carried two separate sections about it), and sent
+# every utterance to a third party. Kokoro replaced it as primary in Phase 4 and
+# the removal waited until Phase 6 measurement confirmed no endpoint regressed,
+# so weight-baking had a rollback path that did not depend on the same weights.
+#
+# It is not coming back as a fallback. A network fallback under a local-first
+# primary is the configuration where an offline guarantee silently stops
+# holding, which is the whole class of defect Phase 5 closed.
 # 1.7.0, NOT the 1.2.0 that was pinned in the old extras file. That pin was
 # UNINSTALLABLE on this runtime: piper-tts 1.2.0 requires
 # piper-phonemize~=1.1.0, which publishes no distribution for Python 3.12
@@ -55,8 +66,13 @@ edge-tts==7.2.8
 # 1.7.0 dropped the piper-phonemize dependency: it needs onnxruntime (already
 # present via fastembed) plus pathvalidate, so the transitive graph is SMALLER
 # than the broken pin's would have been. The synthesize() API changed across
-# this range, so voice.py's fallback call site needs checking -- Phase 4 work,
-# reported not silently patched.
+# this range; the call site was updated in Phase 4 and now uses
+# synthesize_wav().
+#
+# Piper is now the ONLY fallback, which raises the cost of its missing voice
+# file (VKI-5) from "third choice ships weightless" to "the sole fallback ships
+# weightless". Filed, not fixed here: scripts/fetch_models.sh fetches it, and
+# engine_status() reports it as unready rather than pretending.
 piper-tts==1.7.0
 soundfile==0.13.1
 

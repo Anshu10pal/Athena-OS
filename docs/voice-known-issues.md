@@ -171,7 +171,7 @@ fallback is not acceptable." So it is not silent:
   asserts it reports broken, so a future change that makes it *claim* health
   fails a test.
 
-Measured state on this machine today:
+Measured state, **Phase 4, 2026-09-03 — SUPERSEDED, kept for provenance**:
 
 ```
 GET /api/voice/engines
@@ -181,8 +181,22 @@ GET /api/voice/engines
   edge  : ready (network-dependent)
 ```
 
-To supply weights locally: `scripts/fetch_voice_models.sh`. In production,
-Phase 5's image has them baked.
+Two things changed after that reading. Phase 5 taught
+`scripts/fetch_models.sh` to fetch the Piper voice, so `piper` reports ready on
+a machine that has run it; and Phase 6 deleted edge-tts, so the third row no
+longer exists — `engine_status()` now returns exactly the two engines in
+`ENGINE_ORDER`, both local.
+
+**This raises VKI-5's cost rather than resolving it.** With edge-tts gone,
+Piper is the ONLY fallback, so a checkout that has not fetched weights has
+nothing behind Kokoro at all. The voice file is still not committed (60 MB, and
+git keeps a binary forever). What prevents this being silent is that
+`engine_status()` reports the unready state and
+`tests/test_voice_bake.py::test_both_tts_engines_report_ready_with_egress_blocked`
+fails if either engine is not genuinely ready offline.
+
+To supply weights locally: `scripts/fetch_models.sh`. In production the build
+command fetches them at build time (docs/DEPLOYMENT.md).
 
 ---
 
@@ -264,35 +278,64 @@ configuration; the conclusion got sharper and one of the three options I
 originally listed is now ruled out.**
 
 Measured offline, model already warm, so these are synthesis times and not load
-times:
+times. Kokoro n=2, Piper n=3, median with (min, max); spreads are under 0.4 s,
+so these are reproducible rather than single-shot.
 
-| text | synthesis | audio produced | **real-time factor** |
-|---|---:|---:|---:|
-| 673-char passage | 67.8 s | 39.7 s | **1.71×** |
-| 72-char question | 8.5 s | 4.0 s | **2.12×** |
+| text | engine | synthesis | audio | **real-time factor** |
+|---|---|---:|---:|---:|
+| 673-char passage | kokoro | 70.35 s (70.21, 70.50) | 41.12 s | **1.71×** |
+| 673-char passage | **piper** | **4.55 s** (4.51, 4.56) | 36.84 s | **0.12×** |
+| 76-char question | kokoro | 9.07 s (9.06, 9.07) | 4.37 s | **2.07×** |
+| 76-char question | **piper** | **1.38 s** (1.37, 1.38) | 3.65 s | **0.38×** |
 
 **The number that matters is the real-time factor, not the seconds.** RTF > 1
-means synthesis is *slower than playback*. At 1.7–2.1× on this hardware, Kokoro
-cannot generate audio as fast as a listener consumes it.
+means synthesis is *slower than playback*. At 1.7–2.1× Kokoro cannot generate
+audio as fast as a listener consumes it.
 
-**That rules out streaming synthesis as a standalone fix**, which was the first
-of the three options originally filed here. Streaming converts total latency
-into time-to-first-audio, and it works only when the synthesiser keeps *ahead*
-of playback. At RTF 1.7 it falls behind immediately and the audio stalls
+**That rules out streaming synthesis as a standalone fix for Kokoro**, which was
+the first of the three options originally filed here. Streaming converts total
+latency into time-to-first-audio, and works only when the synthesiser stays
+*ahead* of playback. At RTF 1.7 it falls behind immediately and stalls
 mid-sentence — worse for a candidate mid-interview than a straightforward wait.
 Recorded as a withdrawal rather than edited away: the original option list was
 written from seconds alone, before RTF was measured.
 
-**Phase 5 did not change the latency.** The 62.5 s originally filed was the
-whole `listening/passage` endpoint (LLM + TTS) on a 673-char passage; TTS alone
-on 673 chars now measures 67.8 s. Same order, no improvement — pinning weights
-and enforcing offline loading closed a *correctness* defect, not a performance
-one, and nothing in Phase 5 claimed otherwise.
+**THE FINDING THAT CHANGES THIS ISSUE: Piper is 15× faster and already
+installed.**
+
+Measured while verifying the Phase 6 deletion, not sought out. Piper is the
+existing fallback engine — same process, same onnxruntime, weights already
+fetched by `scripts/fetch_models.sh` — and it synthesises the 673-char passage
+in 4.55 s against Kokoro's 70.35 s, at RTF 0.12. It is roughly **eight times
+faster than playback**, so it clears an interview-turn budget with enormous
+headroom and streaming would genuinely work on top of it.
+
+**This is not a recommendation to switch, and the measurement does not support
+one.** Voice quality is why Kokoro was made primary in Phase 4, and quality was
+NOT measured here — nothing in Phase 6 compared how the two engines sound. What
+has changed is that the trade is now quantified on one side: the cost of
+Kokoro's quality is 15× the synthesis time and an RTF that forbids streaming.
+Whether that is worth paying is a product decision for the Arena voice phase,
+and it now has a number attached instead of an intuition.
+
+Phase 5 did not change Kokoro's latency and never claimed to — it closed a
+*correctness* defect, not a performance one. The 62.5 s originally filed was the
+whole `listening/passage` endpoint (LLM + TTS); TTS alone on 673 chars now
+measures 70.35 s. Same order, no improvement.
+
+*(Provenance note: two earlier drafts of this measurement mislabelled the
+passage length — 466 and 580 characters both reported as 673. The numbers above
+are from a run that asserts `len(passage) == 673` rather than trusting the
+label. Kokoro's RTF came out at 1.70–1.71 at all three lengths, so the
+conclusion never depended on the error, but the figures did.)*
 
 **What remains open for Arena, revised:**
 
-- **A faster model or quantisation.** int8 is already the smallest published
-  Kokoro variant, so this likely means a different model.
+- **Switch the primary to Piper**, at a quality cost that has not been measured.
+  Cheapest by far: no new dependency, no new weights, one env var. Blocked on a
+  quality comparison nobody has run.
+- **A faster Kokoro.** int8 is already the smallest published variant, so this
+  means a different model rather than more quantisation.
 - **Thread/session tuning, untested.** onnxruntime's default intra-op thread
   count may not be using the available cores; this is the cheapest thing to
   check and it has *not* been checked. Stated as a hypothesis with a named

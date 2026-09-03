@@ -31,8 +31,13 @@ NOT_INSTALLED_STT = (
     "install — faster-whisper is a hard dependency in requirements.txt. "
     "Report as a defect."
 )
+# Names the CURRENT engines. It said "edge-tts and piper-tts" until Phase 6
+# deleted edge-tts; a 501 naming a package the project no longer installs would
+# send a developer to fix the wrong thing, which is exactly how the two
+# predecessor messages went stale (they pointed at an extras file that had
+# already been merged away).
 NOT_INSTALLED_TTS = (
     "No TTS available. This should not occur in a properly-configured install "
-    "— edge-tts and piper-tts are hard dependencies in requirements.txt. "
+    "— kokoro-onnx and piper-tts are hard dependencies in requirements.txt. "
     "Report as a defect."
 )

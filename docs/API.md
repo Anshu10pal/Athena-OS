@@ -186,7 +186,9 @@ Field: `file` (audio). Returns `{ "text": "..." }`. Uses faster-whisper.
 ```json
 { "text": "..." }
 ```
-Returns audio (`audio/mpeg` if Edge-TTS, `audio/wav` if Piper). 501 if both unavailable — frontend then uses browser `speechSynthesis`.
+Returns `audio/wav` from either engine (Kokoro primary, Piper fallback) — edge-tts and its `audio/mpeg` were deleted in Phase 6, so the content type no longer varies by engine. The engine that produced the audio is in the **`X-TTS-Engine`** response header; a caller that cannot tell which engine ran cannot report a degraded state. 501 if both are unavailable, which means a broken install rather than a disabled feature — the frontend then uses browser `speechSynthesis`.
+
+Note the payload-size consequence: WAV is uncompressed, so a long passage is roughly 5x the bytes the old MP3 would have been (a 40-second passage is ~1.9 MB, and `listening/passage` base64-encodes it into JSON). Filed against VKI-8.
 
 ## Vault
 

@@ -214,17 +214,23 @@ class TestModelsLoadWithNoNetwork:
             vecs = embeddings.embed_texts(["offline embedding check"])
         assert vecs.shape[0] == 1 and vecs.shape[1] > 100
 
-    def test_all_three_tts_engines_report_ready_with_egress_blocked(self):
+    def test_both_tts_engines_report_ready_with_egress_blocked(self):
+        """Both, not "all three" -- edge-tts was deleted in Phase 6.
+
+        This assertion got STRONGER by losing an engine. Previously the third
+        engine's readiness meant only "the package is importable", since a
+        network engine cannot be ready offline by nature; now every engine in
+        ENGINE_ORDER is one that genuinely works with egress blocked, so the
+        set-equality below is a real offline guarantee rather than a mixed
+        claim.
+        """
         from app.services.voice import tts
         with NoNetwork():
             status = tts.engine_status()
-        for name in ("kokoro", "piper"):
-            assert status["engines"][name]["ready"] is True, (
-                f"{name} not ready offline: {status['engines'][name]}")
-        # edge is network-dependent BY NATURE; readiness here means "installed",
-        # and claiming otherwise would be the honest-self-report defect again.
-        assert status["engines"]["edge"]["ready"] is True
-        assert status["engines"]["edge"]["note"] == "network-dependent"
+        assert set(status["engines"]) == set(tts.ENGINE_ORDER) == {"kokoro", "piper"}
+        for name, report in status["engines"].items():
+            assert report["ready"] is True, (
+                f"{name} not ready offline: {report}")
 
 
 class TestNoFetchWasAttempted:

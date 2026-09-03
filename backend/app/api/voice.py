@@ -71,7 +71,8 @@ async def speak(payload: dict, user=Depends(get_current_user)):
     guarded by two bare `except: pass` blocks -- so an operator could not tell a
     blocked proxy from a missing package from a bad voice name, and the Piper
     branch had never worked (its pinned version was not even installable; see
-    docs/voice-known-issues.md VKI-3).
+    docs/voice-known-issues.md VKI-3). edge-tts itself was deleted in Phase 6;
+    the history is kept because it is why this interface exists.
 
     The engine that produced the audio is returned in `X-TTS-Engine`. A caller
     that cannot tell which engine ran cannot report a degraded state, which is

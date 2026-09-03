@@ -13,8 +13,15 @@ import pytest
 
 from app.services.voice import NOT_INSTALLED_TTS, stt, tts
 
-APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
+BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
+APP_DIR = BACKEND_DIR / "app"
 TTS_FILE = APP_DIR / "services" / "voice" / "tts.py"
+
+# Directories the codebase-wide edge_tts ban walks. `venv/` is excluded because
+# it is an install tree, not this codebase -- and after Phase 6 an operator's
+# stale venv is exactly where a leftover edge_tts would sit without being a
+# defect in the source. test_edge_tts_is_not_installed covers that case.
+CODEBASE_DIRS = ("app", "tests", "scripts", "alembic")
 FIXTURE = pathlib.Path(__file__).resolve().parent / "fixtures" / "voice" / "kokoro_roundtrip.wav"
 
 # ---------------------------------------------------------------------------
@@ -38,23 +45,32 @@ class TestEngineNamesArePinned:
     def test_engine_name_literals(self):
         assert tts.ENGINE_KOKORO == "kokoro"
         assert tts.ENGINE_PIPER == "piper"
-        assert tts.ENGINE_EDGE == "edge"
+
+    def test_the_edge_engine_constant_is_gone(self):
+        # Phase 6 deleted the engine. A lingering ENGINE_EDGE constant would let
+        # a future dispatch branch be written against a name with no
+        # implementation behind it.
+        assert not hasattr(tts, "ENGINE_EDGE"), (
+            "ENGINE_EDGE still exists after the Phase 6 deletion"
+        )
 
     def test_env_var_name_is_pinned(self):
         assert tts.ENGINE_ENV_VAR == "TTS_ENGINE"
 
-    def test_kokoro_is_the_default_and_edge_is_last(self):
+    def test_kokoro_is_the_default_and_both_engines_are_local(self):
         assert tts.DEFAULT_ENGINE == tts.ENGINE_KOKORO, (
             "Kokoro must be the primary engine -- that is the whole point of the "
-            "migration away from edge-tts, which is a network call to Microsoft."
+            "migration away from edge-tts, which was a network call to Microsoft."
         )
-        assert tts.ENGINE_ORDER == ("kokoro", "piper", "edge"), (
+        assert tts.ENGINE_ORDER == ("kokoro", "piper"), (
             f"engine order changed to {tts.ENGINE_ORDER}. Order is the fallback "
-            "sequence: local-primary, local-fallback, network-last."
+            "sequence and BOTH entries must stay local: a network fallback under "
+            "a local-first primary is where an offline guarantee stops holding "
+            "without anyone noticing."
         )
 
-    def test_no_fourth_engine_crept_in(self):
-        assert set(tts.ENGINE_ORDER) == {"kokoro", "piper", "edge"}
+    def test_no_third_engine_crept_in(self):
+        assert set(tts.ENGINE_ORDER) == {"kokoro", "piper"}
         assert set(tts.MEDIA_TYPES) == set(tts.ENGINE_ORDER), (
             "an engine exists without a declared media type, or vice versa"
         )
@@ -78,33 +94,58 @@ class TestEngineNamesArePinned:
         monkeypatch.delenv("TTS_ENGINE", raising=False)
         assert tts.configured_engine() == tts.ENGINE_KOKORO
 
-    @pytest.mark.parametrize("name", ["kokoro", "piper", "edge", "KOKORO", " edge "])
+    @pytest.mark.parametrize("name", ["kokoro", "piper", "KOKORO", " piper "])
     def test_configured_engine_accepts_every_known_name(self, monkeypatch, name):
         monkeypatch.setenv("TTS_ENGINE", name)
         assert tts.configured_engine() in tts.ENGINE_ORDER
+
+    def test_a_retired_engine_name_says_it_was_retired(self, monkeypatch):
+        """A deploy still carrying TTS_ENGINE=edge must not get a bare "not a
+        known engine" -- that reads as a typo and sends an operator looking for
+        a mistake they did not make."""
+        monkeypatch.setenv("TTS_ENGINE", "edge")
+        with pytest.raises(ValueError) as exc:
+            tts.configured_engine()
+        msg = str(exc.value)
+        assert "removed" in msg and "Phase 6" in msg, (
+            f"retired-engine error does not explain the removal: {msg!r}"
+        )
 
 
 class TestThereIsExactlyOneTTSImplementation:
     """Enforced, not remembered -- same shape as the STT enforcement tests.
 
-    edge-tts is still INSTALLED and `TTS_ENGINE=edge` still works: deletion is a
-    Phase 6 change bundled with the pip removal, so Phase 5's weight-baking has
-    a rollback path. What is forbidden is a second CALL SITE.
+    SCOPE WIDENED IN PHASE 6. This check used to permit `edge_tts` inside
+    `app/services/voice/tts.py` and ban it everywhere else, because the engine
+    was still a supported fallback and the thing being prevented was a second
+    call site. edge-tts is now deleted -- from requirements.txt, from the venv
+    and from the dispatch -- so the ban covers the WHOLE codebase, this test
+    file and the TTS service included.
     """
 
     def _other_py_files(self):
         return [p for p in APP_DIR.rglob("*.py") if p != TTS_FILE]
 
-    def test_no_edge_tts_import_outside_the_tts_service(self):
-        """AST-parsed, not grepped.
+    def _all_py_files(self):
+        for d in CODEBASE_DIRS:
+            root = BACKEND_DIR / d
+            if root.exists():
+                yield from root.rglob("*.py")
 
-        A grep finds the words "edge_tts" and "edge-tts" in voice.py's docstring
-        and in the 501 message text -- both legitimate prose. Suppressing those
-        with an exclusion list is how a guard starts lying, so the check looks
-        at real import statements instead.
+    def test_no_edge_tts_import_anywhere_in_the_codebase(self):
+        """AST-parsed, not grepped, and NO file is exempt.
+
+        Prose survives deliberately: tts.py's docstring, voice.py's history and
+        RETIRED_ENGINES all name edge-tts, and they should -- erasing the record
+        of a removed dependency destroys the trail explaining why this interface
+        exists at all. A grep-based ban would have to whitelist those, which is
+        how a guard starts lying. So the check reads real import statements and
+        ignores every mention that is not one.
         """
         offenders = []
-        for path in self._other_py_files():
+        scanned = 0
+        for path in self._all_py_files():
+            scanned += 1
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8"))
             except SyntaxError:
@@ -112,15 +153,39 @@ class TestThereIsExactlyOneTTSImplementation:
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
-                        if alias.name.split(".")[0] == "edge_tts":
-                            offenders.append(f"{path.relative_to(APP_DIR.parent)}:{node.lineno}")
+                        if alias.name.split(".")[0] in {"edge_tts", "edge_playback"}:
+                            offenders.append(f"{path.relative_to(BACKEND_DIR)}:{node.lineno}")
                 elif isinstance(node, ast.ImportFrom):
-                    if (node.module or "").split(".")[0] == "edge_tts":
-                        offenders.append(f"{path.relative_to(APP_DIR.parent)}:{node.lineno}")
+                    if (node.module or "").split(".")[0] in {"edge_tts", "edge_playback"}:
+                        offenders.append(f"{path.relative_to(BACKEND_DIR)}:{node.lineno}")
+        # Guards the guard: a wrong CODEBASE_DIRS, or a walk that silently
+        # matched nothing, would make this pass by scanning zero files.
+        assert scanned > 100, (
+            f"the codebase-wide scan only reached {scanned} files -- it is not "
+            "actually walking the codebase, so its pass means nothing"
+        )
         assert not offenders, (
-            f"edge_tts is imported outside the TTS service at {offenders}. Every "
-            "caller must go through app.services.voice.tts.synthesize so the "
-            "engine is a configuration choice and not a hard-coded one."
+            f"edge_tts is imported at {offenders}. It was DELETED in Phase 6: "
+            "it is not in requirements.txt, so the import would fail at runtime, "
+            "and re-adding a network TTS engine beneath a local-first primary "
+            "needs an explicit decision, not an import."
+        )
+
+    def test_edge_tts_is_not_installed(self):
+        """The pip removal, asserted. Without this the import ban above passes
+        trivially on a machine that still has the package in its venv, and
+        "we removed the dependency" would be an unverified claim."""
+        import importlib.util
+        assert importlib.util.find_spec("edge_tts") is None, (
+            "edge_tts is still importable. requirements.txt no longer lists it, "
+            "so this venv is stale -- pip uninstall edge-tts."
+        )
+
+    def test_edge_tts_is_not_in_requirements(self):
+        req = (BACKEND_DIR / "requirements.txt").read_text(encoding="utf-8")
+        specs = [ln.split("#")[0].strip().lower() for ln in req.splitlines()]
+        assert not [x for x in specs if x.startswith(("edge-tts", "edge_tts"))], (
+            "edge-tts is back in requirements.txt"
         )
 
     def test_no_kokoro_or_piper_import_outside_the_tts_service(self):
@@ -163,14 +228,14 @@ class TestFailuresRaiseRatherThanReturningEmptyBytes:
                             lambda t, v: (_ for _ in ()).throw(RuntimeError("no weights")))
         monkeypatch.setattr(tts, "_synth_piper",
                             lambda t, v: (_ for _ in ()).throw(RuntimeError("no voice file")))
-        async def edge_boom(t, v):
-            raise RuntimeError("proxy blocked")
-        monkeypatch.setattr(tts, "_synth_edge", edge_boom)
         with pytest.raises(tts.TTSUnavailable) as exc:
             asyncio.run(tts.synthesize("hello"))
         msg = str(exc.value)
-        for reason in ("no weights", "no voice file", "proxy blocked"):
+        for reason in ("no weights", "no voice file"):
             assert reason in msg, f"{reason!r} was swallowed instead of reported"
+        assert "edge" not in msg.lower(), (
+            "a deleted engine is still being tried and reported as a failure"
+        )
 
     def test_fallback_order_is_followed_and_the_engine_is_reported(self, monkeypatch):
         monkeypatch.setenv("TTS_ENGINE", "kokoro")
@@ -248,7 +313,7 @@ class TestRoundTripWiredGate:
 
     @pytest.mark.skipif(
         not (os.path.exists(tts.KOKORO_MODEL_PATH) and os.path.exists(tts.KOKORO_VOICES_PATH)),
-        reason="Kokoro weights not present (run scripts/fetch_voice_models.sh)")
+        reason="Kokoro weights not present (run scripts/fetch_models.sh)")
     def test_live_kokoro_generation_still_round_trips(self, monkeypatch):
         monkeypatch.setenv("TTS_ENGINE", "kokoro")
         audio, media, engine = asyncio.run(tts.synthesize(FIXTURE_TEXT))

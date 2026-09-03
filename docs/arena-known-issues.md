@@ -313,7 +313,8 @@ which matches word *categories* rather than literal strings.
 TTS per turn — at the edge of a 2–4 s budget for the shortest questions,
 outside it for anything longer, with no headroom for a follow-up probe.
 
-The voice migration closes edge-tts as a liability; it does not deliver
+The voice migration has now closed edge-tts as a liability (deleted in Phase 6,
+2026-09-03); it does not deliver
 real-time voice interviewing. Streaming synthesis, a smaller model, or an
 accepted slower turn is a required design decision **before** Arena voice
 ships.
