@@ -230,3 +230,51 @@ class TestSpanLengthIsMonitored:
         # a model drifting back toward sentence-length spans is visible.
         assert result.mean_span_words == pytest.approx(3.0)
         assert result.as_json()["mean_span_words"] == pytest.approx(3.0)
+
+
+class TestFragmentListExtendedFromTheRun:
+    """Extended 2026-09-03 from the acceptance run's own output.
+
+    The run reported 0 fragments filtered on foundry-fde.txt while its accepted
+    skill list contained these. Real tokens, spent fixture, confined to the
+    cases that actually failed -- which is the legitimate shape for extending a
+    word list, as opposed to generalising a rule from what was seen.
+    """
+
+    @pytest.mark.parametrize("junk", [
+        "autonomy", "responsibility", "iteration with users",
+        "multi-functional teams", "developing software", "production issues",
+        "production systems", "service logs", "on-call schedule",
+        "programming languages", "AI technology", "LLM technology",
+    ])
+    def test_tokens_the_run_surfaced_are_now_filtered(self, junk):
+        assert is_fragment(junk), f"{junk!r} still accepted as a skill"
+
+    @pytest.mark.parametrize("real", [
+        "Python", "REST APIs", "Kubernetes", "Testing", "Monitoring",
+        "data modelling", "stakeholder management", "Teamwork", "ETL pipelines",
+    ])
+    def test_the_extension_did_not_start_dropping_real_skills(self, real):
+        assert not is_fragment(real), f"{real!r} regressed into the fragment list"
+
+    @pytest.mark.parametrize("contextual", [
+        "Computer Science", "Mathematics", "Physics", "Data Science",
+    ])
+    def test_degree_fields_are_DELIBERATELY_not_filtered(self, contextual):
+        """The interesting half of the extension.
+
+        The same run emitted these as skills, and in that posting they are
+        degree fields rather than assessable skills. They are NOT in the list,
+        because in another posting "data science" and "mathematics" are real
+        skills and a word list cannot tell the difference -- the distinction is
+        contextual and the list is not.
+
+        Trading a visible false positive (a junk node the user deletes on the
+        confirmation screen) for an invisible false negative (a real skill that
+        never appears there) is the wrong direction. Pinned so nobody "tidies
+        up" the omission later without reading why it exists.
+        """
+        assert not is_fragment(contextual), (
+            f"{contextual!r} was added to the fragment list -- see the comment "
+            "in jd_extract.py for why this is the wrong trade"
+        )

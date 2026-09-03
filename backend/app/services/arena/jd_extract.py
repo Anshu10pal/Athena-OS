@@ -161,7 +161,42 @@ _FRAGMENT_WORDS = frozenset({
     "ability", "skills", "background", "exposure", "plus", "bonus",
     "environment", "production", "team", "teams", "role", "opportunity",
     "warehouses", "scale", "production environment", "large warehouses",
+
+    # --- EXTENDED 2026-09-03 from the acceptance run's own output, not from
+    # imagination. These are verbatim skill names the extractor emitted on
+    # foundry-fde.txt and the filter let through: the run reported 0 fragments
+    # filtered while the accepted list contained these. The fixture is spent,
+    # the word list was never part of the pre-registered instrument, and the
+    # extension is confined to tokens that actually failed -- which is the
+    # legitimate shape for extending it.
+    "autonomy", "responsibility", "reliability",
+    "iteration with users", "multi-functional teams", "multi functional teams",
+    "developing software", "production issues", "production systems",
+    "service logs", "on-call schedule", "on call schedule",
+    "programming languages", "ai technology", "llm technology",
+    "technical troubleshooting support", "software support",
 })
+
+# DELIBERATELY NOT ADDED, and this is the interesting half of the list.
+#
+# The same run emitted `Computer Science`, `Mathematics`, `Physics` and
+# `Data Science` as skills. In THIS posting they are degree fields -- "Strong
+# engineering background, preferred in fields such as Computer Science,
+# Mathematics..." -- and are not assessable skills. In another posting
+# "data science" is a perfectly real skill, and so is "mathematics" for a
+# quant role.
+#
+# A word list cannot tell those apart, because the distinction is contextual
+# and the list is not. Adding them would trade a visible false positive for an
+# invisible false negative, and the false negative is the worse direction: a
+# junk node is one the user deletes on the confirmation screen, while a
+# silently dropped real skill never appears there at all.
+#
+# This is also the classifier trap named in the instruction for this work:
+# extend the list from what was seen, do NOT generalise a rule from what was
+# seen and assume it transfers. Degree-field-versus-skill needs the SECTION
+# the mention sat in, which is already computed and is a weighting input --
+# so if it is ever worth fixing, it belongs in weighting, not here.
 
 
 def is_fragment(skill: str) -> bool:

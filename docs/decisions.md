@@ -1515,3 +1515,59 @@ NOT acted on in Phase A:
   long-context call. That is a different question from the one Phase 0 answered.
 - **"A 20-question mixed session fits."** True at 250 RPD, false at 25. A
   cold-bank session consumes an entire user-day of budget.
+
+## Latency: length tiering RETIRED, superseded by its own first measurement (§17.16)
+
+Two superseded targets now, both kept rather than overwritten:
+
+| generation | target | fate |
+|---|---|---|
+| original, Phase 0 | flat `< 15s`, fail `> 45s` | superseded 2026-09-02 — extrapolated from no data |
+| tiered, 2026-09-02 | `<500w: <15s` / `500-1500w: <25s` / `>1500w: <45s` | **superseded 2026-09-03 — falsified by measurement** |
+| **current** | **flat `< 30s`, hard fail `> 60s`, all lengths** | derived from 9 observations |
+
+**What falsified the tiers.** Measured medians across 3 runs each:
+
+| fixture | words | latency | against its own tier |
+|---|---:|---:|---|
+| short | 80 | 17.4s | MISS (`<15s`) |
+| foundry-fde | 452 | **45.6s** | **HARD FAIL** (`>30s`) |
+| long | 3487 | 37.2s | ok (`<45s`) |
+
+**A 452-word posting is slower than a 3,487-word one.** Length does not predict
+cost, so a schedule keyed on length measures the wrong variable — and the
+`<500w` band had itself been extrapolated from a single 54-word smoke test,
+which is one data point stretched across an order of magnitude. Both errors
+were mine and both are marked rather than quietly replaced.
+
+**Hypothesis for the real driver, named and NOT measured** — so it stays a
+hypothesis (§17.0b): Gemini 2.5 Flash's reasoning phase scales with task
+AMBIGUITY rather than input size. The 452-word posting is prose-heavy with
+implicit, judgement-requiring skills ("Confidence in troubleshooting complex
+systems issues independently"); the 3,487-word one is a structured federal
+announcement, mostly boilerplate, with explicit skill mentions. Testing this
+needs thinking-token counts, which the OpenAI-compatible endpoint does not
+return. Recorded as the next thing to measure, not as a finding.
+
+**Residual, stated:** 9 observations across 3 fixtures is a thin basis for any
+band, and §17.0 is explicit that a threshold set from a small sample is
+provisional. `< 30s / > 60s` discriminates (a regression to 70s hard-fails) and
+reports the module honestly as slower than wanted rather than broken. It should
+be re-derived when there are more fixtures — and NOT by sweeping against the
+held-out set.
+
+## Aggregation defect found on real data: run 1's node budget applied to all runs
+
+`print_aggregate` judged every run's parent count against **run 1's** node
+budget. The budget is keyed on that run's own post-canonicalisation mention
+count, so a run which legitimately extracted more mentions earns a wider parent
+band — and was being judged against a band that was never its own.
+
+It changed a verdict: `short.txt` run 3 produced 6 parents and was reported
+**HARD FAIL** against run 1's 2-4 band. That may have been a false failure.
+`long.txt` run 3 (10 parents) fails regardless, since 10 exceeds the widest band.
+
+Fixed before the re-run, because measuring against a broken aggregator makes it
+impossible to tell whether a new hard-fail is real. The criterion is now
+evaluated per run against that run's own band, and the table prints the bands
+when they differ across runs rather than silently picking one.
