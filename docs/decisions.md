@@ -1571,3 +1571,43 @@ Fixed before the re-run, because measuring against a broken aggregator makes it
 impossible to tell whether a new hard-fail is real. The criterion is now
 evaluated per run against that run's own band, and the table prints the bands
 when they differ across runs rather than silently picking one.
+
+### Gemini RPD is EXACTLY 20 — upgraded from a bounded observation to the authoritative figure
+
+2026-09-03. The earlier entry recorded "~20-25 requests/day, bounded by two
+observed 429s" and said plainly that exhaustion establishes a ceiling rather
+than its value. The value is now stated by the API itself:
+
+```
+Quota exceeded for metric:
+  generativelanguage.googleapis.com/generate_content_free_tier_requests
+limit: 20
+model: gemini-2.5-flash
+quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier
+```
+
+**20 requests per day, per project, per model.** The Phase 0 estimate was 250 —
+wrong by 12.5x, not 10x.
+
+Two details worth keeping:
+
+- **The 429 advertises a misleading `retryDelay` of 19-57 seconds** for what is
+  a DAILY cap. A naive backoff-and-retry loop would spin against it all day.
+  The protocol's discard-and-retry (2 attempts) honoured the delay, failed, and
+  correctly reported the fixture as NOT MEASURED.
+- **The provider pin proved itself immediately.** With Groq now working, an
+  unpinned run would have fallen through silently and produced a
+  mixed-provider "n=3". Pinned, the raised error was Gemini's own and therefore
+  the informative one — KI-1's misattribution did not occur, because there was
+  no second provider to mis-blame.
+
+**What 20 RPD means for the measurement.** One fixture at n=3 is 6 calls; five
+fixtures is 30. So a complete acceptance run is a **minimum of two days** with
+zero development calls in between. The two-day plan is confirmed, now on an
+authoritative number rather than an estimate.
+
+**What it means for the product, filed for Phase B.** At 20 RPD a single
+cold-bank interview session consumes an entire user-day of budget on Gemini.
+Groq's measured 1,000 RPD is 50x that. The Phase B ordering question is no
+longer "which provider is primary" but "is Gemini viable as a primary at all",
+bounded by the 8,000 TPM finding that keeps it on the long-context call.
