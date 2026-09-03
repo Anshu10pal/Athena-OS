@@ -18,45 +18,51 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.core.security import get_current_user
+from app.services.voice import NOT_INSTALLED_TTS
+from app.services.voice import stt
 
 router = APIRouter(prefix="/api/voice", tags=["voice"])
 
-# One message, two call sites, and it says what a 501 now MEANS. The old
-# messages ("Run: pip install -r requirements-voice.txt" here,
-# "Run: pip install faster-whisper" in oratory.py) disagreed with each other,
-# and both became actively misleading the moment the extras file was deleted --
-# they told a developer to install something that is already a hard dependency,
-# pointing at a file that no longer exists.
-_NOT_INSTALLED_STT = (
-    "Local STT is not installed. This should not occur in a properly-configured "
-    "install \u2014 faster-whisper is a hard dependency in requirements.txt. "
-    "Report as a defect."
-)
-_NOT_INSTALLED_TTS = (
-    "No TTS available. This should not occur in a properly-configured install "
-    "\u2014 edge-tts and piper-tts are hard dependencies in requirements.txt. "
-    "Report as a defect."
-)
-
-_whisper_model = None
+# The 501 messages now live in app/services/voice/ -- an API module was the
+# wrong home for a contract two API modules share, and the note left in the
+# previous commit said so.
 
 
 @router.post("/transcribe")
 async def transcribe(file: UploadFile = File(...), user=Depends(get_current_user)):
-    global _whisper_model
+    """Audio -> text, through the SHARED verbatim STT service.
+
+    BEHAVIOUR CHANGE, and it is the point of the extraction. This endpoint used
+    to call Whisper with `vad_filter=True` and no other options, which meant
+    Whisper's default token suppression DELETED fillers -- so the legacy
+    interview page and the chat mic, both of which post here, silently received
+    tidied transcripts while Oratory received verbatim ones. Filler preservation
+    is a hard requirement for this project, so the two paths cannot disagree
+    about it. Both now use the same configuration.
+
+    The response shape is unchanged (`{"text": ...}`): `InterviewArena.tsx:145`
+    and `Chat.tsx` destructure `text`, and this phase is about where the
+    settings live, not about breaking callers.
+    """
     try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        raise HTTPException(501, _NOT_INSTALLED_STT)
-    if _whisper_model is None:
-        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+        result = stt.transcribe(await _spool(file))
+    except stt.STTUnavailable as exc:
+        raise HTTPException(501, str(exc))
+    return {"text": result["transcript"]}
+
+
+async def _spool(file: UploadFile) -> str:
+    """Upload -> a path on disk, because faster-whisper reads a file.
+
+    Suffix kept as `.webm` since that is what every current caller sends
+    (MediaRecorder default); the decoder sniffs the container rather than
+    trusting the extension, so a `.wav` upload also works -- which is what the
+    wired-gate test relies on.
+    """
     data = await file.read()
     with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
         tmp.write(data)
-        path = tmp.name
-    segments, _info = _whisper_model.transcribe(path, vad_filter=True)
-    text = " ".join(s.text.strip() for s in segments)
-    return {"text": text}
+        return tmp.name
 
 
 @router.post("/speak")
@@ -83,13 +89,13 @@ async def speak(payload: dict, user=Depends(get_current_user)):
     try:
         from piper import PiperVoice
     except ImportError:
-        raise HTTPException(501, _NOT_INSTALLED_TTS)
+        raise HTTPException(501, NOT_INSTALLED_TTS)
     import os
     import wave
 
     voice_path = os.environ.get("PIPER_VOICE", "voices/en_US-lessac-medium.onnx")
     if not os.path.exists(voice_path):
-        raise HTTPException(501, _NOT_INSTALLED_TTS)
+        raise HTTPException(501, NOT_INSTALLED_TTS)
     voice = PiperVoice.load(voice_path)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav:

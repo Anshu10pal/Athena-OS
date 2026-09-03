@@ -23,13 +23,7 @@ CRUTCH_CANDIDATES = {"like", "basically", "actually", "literally", "so", "right"
 HEDGES = ["i think", "i guess", "maybe", "sort of", "kind of", "probably", "i feel like", "not sure"]
 WEAK_WORDS = {"very", "really", "thing", "things", "stuff", "good", "nice", "a lot"}
 HEDGING = ["maybe", "probably", "perhaps", "kind of", "sort of", "i think", "i guess", "i feel like"]
-# Imported rather than re-worded: two copies of this message disagreed with each
-# other before 2026-09-03, and a message duplicated per call site is a message
-# that drifts. Phase 3 moves the transcription itself behind a shared service;
-# this is the message half of the same problem.
-from app.api.voice import _NOT_INSTALLED_STT  # noqa: E402
-
-_whisper = None
+from app.services.voice import stt  # noqa: E402
 
 
 @router.post("/topic")
@@ -62,34 +56,23 @@ async def analyze(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    global _whisper
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        raise HTTPException(501, _NOT_INSTALLED_STT)
-    if _whisper is None:
-        _whisper = WhisperModel("base", device="cpu", compute_type="int8")
-
     data = await file.read()
     with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
         tmp.write(data)
         path = tmp.name
 
-    # Verbatim mode: word timestamps on, prompt nudges Whisper to KEEP fillers it normally cleans out
-    # suppress_tokens=[] disables Whisper's default token suppression — the main reason
-    # fillers like "um"/"uh" silently vanish from transcripts.
-    segments, _info = _whisper.transcribe(
-        path,
-        word_timestamps=True,
-        initial_prompt="So um, uh, I think, you know, like, basically, um yeah...",
-        suppress_tokens=[],
-        vad_filter=False,
-    )
-    words = []
-    for seg in segments:
-        for w in seg.words or []:
-            words.append({"w": w.word.strip(), "start": w.start, "end": w.end})
-    transcript = " ".join(w["w"] for w in words)
+    # The verbatim configuration that keeps fillers alive now lives in
+    # app/services/voice/stt.py and is pinned by tests/test_voice_stt.py. It was
+    # correct HERE and absent from the other STT endpoint, which is exactly why
+    # it was extracted: a setting that decides whether "um" survives cannot live
+    # in two places. `words` keeps its {w, start, end} shape, so every metric
+    # below is untouched.
+    try:
+        result = stt.transcribe(path)
+    except stt.STTUnavailable as exc:
+        raise HTTPException(501, str(exc))
+    words = result["words"]
+    transcript = result["transcript"]
     if not words:
         raise HTTPException(400, "No speech detected in the recording")
 

@@ -1896,3 +1896,61 @@ passage through the fallback), one resolved (`piper-tts==1.2.0` was never
 installable on Python 3.12), and one carried to Phase 5 (the STT model still
 downloads 142 MB at runtime — KI-2's defect class, now confirmed for a second
 model).
+
+## "No new dependencies" — what the rule means, resolved on evidence
+
+Written down because the next ambiguity should be resolved from a record rather
+than by asking.
+
+The constraint reads **no new libraries entering the dependency graph.** It
+exists to prevent "let me also add Vosk for flexibility" — breadth acquired
+speculatively. It does **not** govern version changes to libraries already
+pinned.
+
+Phase 2 hit the ambiguity: `piper-tts==1.2.0` was unresolvable on Python 3.12
+and the merge failed outright. Bumping to `1.7.0` is within scope, because the
+same library at a version that exists for this runtime is not a new entrant —
+and this particular bump *removed* a transitive dependency
+(`piper-phonemize`), so the graph got smaller. Version bumps are governed by
+the ordinary change discipline instead: pinned in one place, tested, and called
+out in the commit message.
+
+The alternative reading — drop Piper entirely — would have made Phase 4
+Kokoro-only with no fallback. That is a **product** decision about what happens
+when the primary TTS engine fails, not a scope decision, and it would need its
+own case made. The bump is the boring correct answer.
+
+## VKI-4 is the substantial finding of Phase 2, not a footnote
+
+Phase 2's probe caused faster-whisper to fetch **142 MB** of weights at runtime.
+That matters more than its filing suggests, for three reasons:
+
+1. **It is a second instance of a defect class already filed.**
+   `docs/arena-known-issues.md` KI-2 records exactly this for
+   `bge-small-en-v1.5`. Two models, two modules, one mechanism.
+2. **It was found the same way both times** — by a probe reaching the network in
+   a design that says it should not need to. Not by reading the code, in either
+   case.
+3. **It means voice currently "works" only because a cache is warm.** Which is
+   precisely the condition that hid KI-2 for as long as it did, now reproduced
+   in a second module.
+
+So **Phase 5 is not a small Dockerfile edit.** It closes two separately-filed
+defects under one bake-at-build change, and when it lands its audit trail
+should say so rather than treating the change as a formality. Recorded here
+because the phase most likely to be rushed is the one that looks like plumbing.
+
+## Phase 3 outcome, and a coverage gap it exposed
+
+The verbatim STT configuration now lives in `app/services/voice/stt.py` and
+both API call sites route through it; the 501 message constants moved to
+`app/services/voice/` from `app/api/voice.py`, which was the wrong home for a
+contract two API modules share.
+
+**The gap worth naming: filler preservation had ZERO test coverage before this
+phase.** `tests/` contained no test referencing Oratory, voice, or the filler
+logic at all — the hard requirement rested entirely on four keyword arguments in
+one endpoint, which is how the *other* endpoint came to be missing all four
+without anything noticing. `tests/test_voice_stt.py` is the first test in this
+repository that guards it, and the pin was verified to fail against a mutation
+of each of the four settings individually before being trusted.
