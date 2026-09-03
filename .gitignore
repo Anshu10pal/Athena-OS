@@ -31,3 +31,11 @@ athena-docs/
 # Raw session transcripts: 54MB each, superseded by the curated docs,
 # and they contain verbatim pasted credentials. Never commit these.
 docs/Context/
+
+# Voice model weights. NOT committed: Kokoro int8 is 88 MB and its voice pack
+# 26 MB, and git keeps a binary forever even after it is deleted. Phase 5 of the
+# voice migration COPYs these into the Docker image at build time, which is the
+# mechanism that closes KI-2/VKI-4 -- committing them would duplicate that and
+# add ~114 MB of permanent repository weight for no gain.
+# An operator running locally fetches them with scripts/fetch_voice_models.sh.
+backend/models/

@@ -5,6 +5,7 @@ fuses locally-MEASURED metrics (vocabulary, clarity, precision) with LLM-EVALUAT
 (grammar, structure, tone). Missed vocab/grammar items feed the spaced-repetition Review Queue.
 """
 import base64
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
@@ -259,16 +260,29 @@ def reading_submit(payload: dict, user: User = Depends(get_current_user), db: Se
 
 
 async def _synthesize(text: str, voice_name: str) -> bytes:
-    import io
+    """Delegates to the shared TTS interface.
+
+    STILL RETURNS b"" ON FAILURE, deliberately. That empty-bytes contract is
+    what the caller at `listening_passage` branches on, and changing it would be
+    fixing VKI-1 (this endpoint answers HTTP 200 with no audio) under a task
+    that is explicitly not allowed to. Filed, not fixed.
+
+    What DID change: the failure is now logged with its exception. The bare
+    `except Exception: return b""` this replaces discarded the exception object
+    entirely, so an operator could not distinguish a blocked proxy from a
+    missing package from a malformed voice name -- half of VKI-1's minimum fix,
+    acquired for free by routing through the interface. The 200-versus-503
+    decision remains open and remains VKI-1's.
+    """
+    from app.services.voice import tts
+
     try:
-        import edge_tts
-        communicate = edge_tts.Communicate(text[:1500], voice=voice_name or "en-US-AriaNeural")
-        buf = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                buf.write(chunk["data"])
-        return buf.getvalue()
+        audio, _media_type, _engine = await tts.synthesize(text[:1500], voice_name)
+        return audio
     except Exception:
+        logging.getLogger("athena.communication").warning(
+            "TTS failed for a listening passage; serving the text fallback "
+            "(see docs/voice-known-issues.md VKI-1 and VKI-2)", exc_info=True)
         return b""
 
 

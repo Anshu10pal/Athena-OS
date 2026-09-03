@@ -59,3 +59,17 @@ edge-tts==7.2.8
 # reported not silently patched.
 piper-tts==1.7.0
 soundfile==0.13.1
+
+# Kokoro TTS. `kokoro-onnx`, NOT the `kokoro` PyPI package -- that one is
+# torch-based and pip resolves it to cuda-toolkit, nvidia-cublas, nvidia-cudnn
+# and nvidia-cufft, which is disqualifying under this project's CPU-only
+# constraint before image size is even discussed. kokoro-onnx runs on the
+# onnxruntime already present for FastEmbed and pulls four small packages.
+#
+# espeakng-loader ships libespeak-ng INSIDE the wheel, so phonemisation needs
+# no system package -- that is what keeps Windows dev parity without WSL.
+#
+# Model weights are NOT pip-installed and NOT committed: 88 MB (int8) + 26 MB
+# voices. Phase 5 bakes them into the image; locally, run
+# scripts/fetch_voice_models.sh.
+kokoro-onnx==0.6.1

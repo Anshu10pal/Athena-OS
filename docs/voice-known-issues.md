@@ -147,3 +147,90 @@ unauthenticated fetch that the proxy breaks.
 Phase 5 bakes this, the Kokoro voice and the Piper voice into the image at build
 time. Until then, voice works on this machine only because the cache is now
 warm — which is exactly the condition that hid KI-2 for as long as it did.
+
+---
+
+## VKI-5 — the Piper fallback ships WITHOUT weights, by design and out loud
+
+**Decided in Phase 4. Not a defect being tolerated — a documented state with a
+self-test.**
+
+The Piper voice file is **not committed**. `en_US-lessac-medium.onnx` is 60 MB,
+and git keeps a binary forever even after it is deleted; Phase 5 COPYs the same
+file into the Docker image at build time, so committing it would duplicate that
+mechanism and add permanent repository weight for no gain.
+
+The constraint that mattered here was "**silently** shipping a never-worked
+fallback is not acceptable." So it is not silent:
+
+- `tts.engine_status()` reports Piper as `ready: false` with the exact missing
+  path and a pointer to this entry. Exposed at **`GET /api/voice/engines`**.
+- `_synth_piper` raises `TTSUnavailable` naming the missing file and the fetch
+  script, rather than returning empty bytes.
+- `tests/test_voice_tts.py::test_piper_reports_broken_when_its_voice_file_is_absent`
+  asserts it reports broken, so a future change that makes it *claim* health
+  fails a test.
+
+Measured state on this machine today:
+
+```
+GET /api/voice/engines
+  configured: kokoro
+  kokoro: ready
+  piper : NOT ready — voice file missing at models/piper/en_US-lessac-medium.onnx
+  edge  : ready (network-dependent)
+```
+
+To supply weights locally: `scripts/fetch_voice_models.sh`. In production,
+Phase 5's image has them baked.
+
+---
+
+## VKI-6 — Chat and the legacy interview page received filler-stripped transcripts for an unknown period
+
+**Owner: a data-quality question for whoever owns those surfaces. NOT the voice
+migration, which has already fixed the cause.**
+
+Until Phase 3, `/api/voice/transcribe` called Whisper with `vad_filter=True` and
+no other options — so Whisper's default token suppression **deleted fillers**,
+while `oratory.analyze` was configured verbatim and kept them. Two STT paths,
+disagreeing about a hard requirement of this project.
+
+`Chat.tsx` and `InterviewArena.tsx` (the legacy `/interview` page) both post to
+`/api/voice/transcribe`. So every transcript either of those surfaces produced
+was tidied, and any downstream artefact derived from one — a vault entry, a chat
+memory embedding, an interview answer stored in `interview_sessions.transcript`
+— carries filler-free text that does not represent how the user actually spoke.
+
+**The cause is fixed** (Phase 3 routed both through the verbatim shared
+service). What is NOT addressed:
+
+- **How long.** The split predates the git history reviewed for this migration;
+  no dated change introduced it.
+- **What to do about existing rows.** They cannot be recovered — the audio was
+  written to a tempfile and discarded. Any historical filler-rate or fluency
+  comparison that mixes pre- and post-Phase-3 transcripts is comparing two
+  different instruments, which is the §17.16 shape.
+
+Minimum honest handling for the owning task: decide whether stored transcripts
+need a provenance marker distinguishing pre- and post-fix capture, and do not
+pool them in any longitudinal metric until that is settled.
+
+---
+
+## Performance observation from Phase 4, not yet a defect
+
+Kokoro on CPU is **slow for long text**. Measured through the real endpoints:
+
+| text | engine | latency |
+|---|---|---|
+| one sentence (32 chars) | kokoro | 5.5 s |
+| one sentence (32 chars) | edge | 1.0 s |
+| listening passage (673 chars) | kokoro | **62.5 s** |
+
+The 62.5 s figure is a whole listening exercise, so it is not a per-request user
+wait in the interview sense — but it is well outside anything usable for a
+spoken interview turn, which is the eventual Arena use case. Recorded now
+because Phase 6 measures against it, and because it is the number that will
+decide whether streaming synthesis or a smaller Kokoro variant is needed. Not
+acted on in Phase 4.

@@ -1,6 +1,6 @@
 """Local voice endpoints.
 
-STT: faster-whisper (CPU int8). TTS: edge-tts with a Piper fallback.
+STT and TTS both go through app/services/voice/ -- this module is transport only.
 
 NO LONGER OPTIONAL. These were behind an extras file (requirements-voice.txt)
 until 2026-09-03, and the extras file was never installed -- so every endpoint
@@ -11,15 +11,13 @@ in requirements.txt: the app either boots with voice working or fails at build.
 A 501 from this module therefore means the install is broken, not that a feature
 is switched off, and the messages below say so.
 """
-import io
 import tempfile
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.core.security import get_current_user
-from app.services.voice import NOT_INSTALLED_TTS
-from app.services.voice import stt
+from app.services.voice import stt, tts
 
 router = APIRouter(prefix="/api/voice", tags=["voice"])
 
@@ -67,37 +65,32 @@ async def _spool(file: UploadFile) -> str:
 
 @router.post("/speak")
 async def speak(payload: dict, user=Depends(get_current_user)):
+    """Text -> audio, through the SHARED TTS interface.
+
+    This endpoint used to construct `edge_tts` inline, with a Piper fallback
+    guarded by two bare `except: pass` blocks -- so an operator could not tell a
+    blocked proxy from a missing package from a bad voice name, and the Piper
+    branch had never worked (its pinned version was not even installable; see
+    docs/voice-known-issues.md VKI-3).
+
+    The engine that produced the audio is returned in `X-TTS-Engine`. A caller
+    that cannot tell which engine ran cannot report a degraded state, which is
+    how VKI-1 was able to serve silence with a 200.
+    """
     text = (payload or {}).get("text", "")
     if not text:
         raise HTTPException(400, "No text provided")
-    # Primary: Edge-TTS (free Microsoft neural voices, no key). Fallback: Piper (fully local).
     try:
-        import edge_tts
+        audio, media_type, engine = await tts.synthesize(text[:1500],
+                                                         getattr(user, "voice", None))
+    except tts.TTSUnavailable as exc:
+        raise HTTPException(501, str(exc))
+    return Response(content=audio, media_type=media_type,
+                    headers={"X-TTS-Engine": engine})
 
-        voice_name = getattr(user, "voice", None) or "en-US-AriaNeural"
-        communicate = edge_tts.Communicate(text[:1500], voice=voice_name)
-        buf = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                buf.write(chunk["data"])
-        if buf.getbuffer().nbytes > 0:
-            return Response(content=buf.getvalue(), media_type="audio/mpeg")
-    except ImportError:
-        pass
-    except Exception:
-        pass  # offline or blocked -> try Piper
-    try:
-        from piper import PiperVoice
-    except ImportError:
-        raise HTTPException(501, NOT_INSTALLED_TTS)
-    import os
-    import wave
 
-    voice_path = os.environ.get("PIPER_VOICE", "voices/en_US-lessac-medium.onnx")
-    if not os.path.exists(voice_path):
-        raise HTTPException(501, NOT_INSTALLED_TTS)
-    voice = PiperVoice.load(voice_path)
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wav:
-        voice.synthesize(text, wav)
-    return Response(content=buf.getvalue(), media_type="audio/wav")
+@router.get("/engines")
+async def engines(user=Depends(get_current_user)):
+    """Per-engine readiness. The surface that makes a weightless fallback
+    visible instead of a runtime surprise -- see VKI-5."""
+    return tts.engine_status()

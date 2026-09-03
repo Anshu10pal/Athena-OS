@@ -1954,3 +1954,65 @@ one endpoint, which is how the *other* endpoint came to be missing all four
 without anything noticing. `tests/test_voice_stt.py` is the first test in this
 repository that guards it, and the pin was verified to fail against a mutation
 of each of the four settings individually before being trusted.
+
+## A named defect class: THE CHECK THAT CANNOT FAIL
+
+Filed alongside the partial-input class. Two instances on record, no accusation
+attached — the point is that the shape gets recognised on sight next time.
+
+**The shape: a test or guard that passes for a reason unrelated to the property
+it claims to verify, and therefore would pass equally if the property were
+false.** It is worse than no test, because a green assertion is read as
+evidence.
+
+**Instance 1 — the self-referential pin.** `test_arena_llm_clustering.py`'s
+prompt pin computed its expected sha256 **from the constant at module load**,
+then compared the constant's hash to its own hash. Any edit to the prompt would
+have kept it green. Fixed by hardcoding the digest, and the fix was verified by
+mutating the prompt and observing the failure.
+
+**Instance 2 — the assertion never reached.** `test_voice_stt.py`'s
+single-model-instance test was left mid-experiment: it monkeypatched
+`_get_model`, then reached for a `__wrapped__` attribute that does not exist,
+and the meaningful assertion sat behind that. It passed while asserting
+nothing. Fixed by counting constructions through the real lazy path.
+
+**Both were caught by the same habit, not by a tool:** *after writing a guard,
+break the thing it guards and confirm the guard fails.* That habit is now
+applied deliberately — the four verbatim STT settings were each mutated
+individually, and the TTS engine pins were mutated four ways, before either
+pin-set was trusted. A pin never observed failing is not a pin, it is a
+decoration that reads like one.
+
+**Relation to the partial-input class.** Both are self-report defects: there,
+code describes what it does while doing something narrower; here, a test
+describes what it verifies while verifying nothing. Recognising either one
+starts from the same question — *what would have to be true for this to fail,
+and has it ever?*
+
+## Voice migration Phase 4 outcome
+
+Kokoro is primary behind `synthesize(text, voice) -> (bytes, media_type,
+engine)`, selected by `TTS_ENGINE` with a Kokoro → Piper → edge fallback chain.
+Both call sites (`voice.speak`, `communication._synthesize`) route through it;
+neither knows which engine ran, except that the engine is now *reported* —
+`voice.speak` returns it in `X-TTS-Engine`, because a caller that cannot tell
+which engine produced the audio cannot report a degraded state, which is how
+VKI-1 served silence with a 200.
+
+**`kokoro-onnx`, not `kokoro`, and that was decided on measurement:**
+`pip install --dry-run kokoro` resolves to `cuda-toolkit`, `nvidia-cublas`,
+`nvidia-cudnn` and `nvidia-cufft` — disqualifying under CPU-only before image
+size is discussed. `kokoro-onnx` pulls four small packages and runs on the
+`onnxruntime` already present. `espeakng-loader` ships `libespeak-ng` inside the
+wheel, so phonemisation needs no system package — which is what preserves
+Windows dev parity without WSL, and was verified rather than assumed.
+
+int8 weights (88 MB) over fp32 (310 MB): int8 targets CPU inference and matches
+the `compute_type="int8"` already chosen for faster-whisper.
+
+**edge-tts is deliberately NOT deleted.** `TTS_ENGINE=edge` still works and the
+package is still installed, so Phase 5's weight-baking has a rollback path that
+does not depend on the same weights it is changing. Deletion is a Phase 6
+change bundled with the pip removal, the code removal and the enforcement-test
+flip in one commit.
