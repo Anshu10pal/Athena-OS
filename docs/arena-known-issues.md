@@ -198,7 +198,7 @@ debt.
 
 ---
 
-## KI-4 — `llama-3.3-70b-versatile` no longer exists on Groq; the app has had no working fallback provider
+## KI-4 — RESOLVED 2026-09-03. `llama-3.3-70b-versatile` was decommissioned; replaced with `openai/gpt-oss-120b`
 
 **Found 2026-09-02, during the Arena acceptance run. Affects the WHOLE
 application, not the Arena. Not fixed here — the model choice is an app-wide
@@ -232,7 +232,53 @@ ones are `openai/gpt-oss-120b`, `openai/gpt-oss-20b` and
 This is the §17.35 shape again — a platform default silently substituted (one
 provider standing in for two) and the result was plausible rather than broken.
 
-**Decision needed, not taken here:** which Groq model replaces it, if any. The
+### Resolution
+
+`app/core/llm.py` now pins Groq to **`openai/gpt-oss-120b`** — the closest
+replacement in kind (large general-purpose, 131,072 context vs the old ~128k).
+
+The candidate was qualified against what `llm.py` actually needs, not against
+"does it respond", because a model failing any of these degrades **silently** to
+Gemini — the same shape as KI-1:
+
+| requirement | why it matters | result |
+|---|---|---|
+| non-empty `message.content` | `chat()` returns `content or ""` | pass |
+| `response_format=json_object` | `chat_json` depends on it | pass |
+| `stream=True` `delta.content` | `chat_stream` depends on it | pass 3/3 |
+| non-empty content at `max_tokens=200` | `briefing.py:49` is a fast-lane call with a small cap, and a reasoning model can spend that budget thinking and return an empty string that propagates as SUCCESS | pass, 623-674 chars |
+
+Verified through `llm.py` itself with the **Gemini key blanked**, so no fallback
+could mask a fault.
+
+**Rejected on measurement**, recorded so they are not retried blind:
+
+- **`openai/gpt-oss-20b`** — yields **zero content deltas** when streaming.
+  `chat_stream` would yield nothing and return, producing a silently empty chat
+  reply.
+- **`qwen/qwen3.6-27b`** — **leaks chain-of-thought into `content`**
+  (`"<think>\nHere's a thinking process..."`, 163 output tokens to answer
+  "capital of France"). `llm.py` would return the thinking as the answer.
+- `groq/compound*`, `allam-2-7b`, `orpheus*`, `prompt-guard*`, `whisper*` —
+  agentic systems, 4k-context Arabic, TTS and classifier models. Not general
+  chat.
+
+**Runner-up `qwen/qwen3.8-27b`** passed every check and is materially leaner:
+0.24s vs 0.79s on a realistic JSON task, 56 vs 202 output tokens on the same
+prompt. Against the measured **8,000 TPM** ceiling that token economy is a real
+advantage, so it is the better choice **if the fast lane is ever split from the
+streaming lane**. Not chosen now: one model serves both, and 27B would downgrade
+the user-facing chat path.
+
+**What this does NOT fix.** KI-1 stands. The fallback still cannot distinguish
+quota exhaustion from a transient error, and still reports the last provider's
+error rather than the informative one. What changes is that there is now a
+second *working* provider behind Gemini, so a Gemini 429 degrades instead of
+stopping — and per the Phase B note, Groq's leaky bucket degrades to a rate
+rather than a cliff.
+
+**Original decision framing, kept for the record:** which Groq model replaces
+it, if any. The
 free-tier candidates on this key are `openai/gpt-oss-120b` (larger, slower) and
 `openai/gpt-oss-20b` (smaller, faster). Changing it alters behaviour for every
 module that uses the fast lane, so it belongs to whoever owns

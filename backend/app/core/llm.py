@@ -25,7 +25,48 @@ PROVIDERS = [
         "name": "groq",
         "base_url": "https://api.groq.com/openai/v1",
         "api_key": settings.GROQ_API_KEY,
-        "model": "llama-3.3-70b-versatile",
+        # Was `llama-3.3-70b-versatile` until 2026-09-03. Groq DECOMMISSIONED
+        # that model: it 404s with `model_not_found`, and this key's /models
+        # listing carries no llama-3.3-* chat model at all. Because Groq is
+        # FIRST in both FAST_ORDER and STREAM_ORDER, every fast-lane and
+        # streaming call had been paying a failed round trip and falling through
+        # to Gemini -- so the app had effectively ONE provider, and the fallback
+        # that exists to survive a Gemini quota exhaustion was itself dead. Found
+        # when it turned a Gemini 429 into a hard failure mid measurement run.
+        # See docs/arena-known-issues.md KI-4.
+        #
+        # `openai/gpt-oss-120b` is the closest replacement IN KIND -- a large
+        # general-purpose model, preserving the intent of the original 70B
+        # choice, at 131,072 context (the old model had ~128k).
+        #
+        # QUALIFIED against what this module actually needs, rather than "does it
+        # respond" -- which would certify the wrong property. A model failing any
+        # of these degrades SILENTLY to Gemini, the exact shape this change
+        # exists to end:
+        #   1. non-empty message.content    (chat() returns `content or ""`)
+        #   2. response_format json_object  (chat_json depends on it)
+        #   3. stream=True delta.content    (chat_stream depends on it)
+        #   4. non-empty content at max_tokens=200
+        #      (briefing.py:49 is a fast-lane call with a small cap; a reasoning
+        #       model can spend that budget thinking and return an empty string,
+        #       which propagates as SUCCESS -- no exception, no fallback, no log,
+        #       and a blank briefing on screen)
+        # All four verified through this module with the Gemini key BLANKED, so
+        # no fallback could mask a fault. Streaming passed 3/3 attempts.
+        #
+        # REJECTED on measurement, recorded so they are not retried blind:
+        #   openai/gpt-oss-20b   yields ZERO content deltas when streaming
+        #   qwen/qwen3.6-27b     leaks chain-of-thought into `content`
+        #                        ("<think>\nHere's a thinking process...", 163
+        #                        output tokens to answer "capital of France")
+        #
+        # RUNNER-UP `qwen/qwen3.8-27b` passed everything and is materially
+        # leaner: 0.24s vs 0.79s on a realistic JSON task, 56 vs 202 output
+        # tokens on the same prompt. That token economy matters against the
+        # measured 8,000 TPM ceiling, so it is the better pick IF the fast lane
+        # is ever split from the streaming lane. Not chosen now because one model
+        # serves both here, and 27B would downgrade user-facing chat.
+        "model": "openai/gpt-oss-120b",
     },
 ]
 
