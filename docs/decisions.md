@@ -1680,3 +1680,109 @@ in crypto, betting, gaming, trading, fintech, or similar fast-paced platforms
 is a strong plus."* The suspicion was wrong and the guard was right. **The vague
 JD degraded HONESTLY**: 19 skills all traceable to the document, 6 parents, zero
 inventions — which is the PASS condition that case was written to test.
+
+## LLM clustering escalation — RUN, and Phase A CLOSES ON THE RECORDED FAILURE
+
+The pre-registered escalation (§7.3 / `min_coherent_parent_fraction`) fired on
+its trigger, once, and was measured under the same protocol: 5 fixtures x 3
+runs, Groq-pinned, same table, same PASS/MISS/HARD FAIL rule, prompt pinned by
+hash before any fixture ran under it.
+
+### The table
+
+| fixture | words | skills | parents | max children | coherence | latency | verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| foundry-fde | 452 | 21 | 6 `(5-6)` ok | **5** ok | 67% | 19.3s ok | **PASS** |
+| short | 80 | 10 | 4 `(3-4)` ok | **3** ok | 0% | 18.2s ok | **PASS** |
+| target-role | 324 | 19 | 5 `(4-6)` ok | **5** ok | 75% | 30.9s MISS | MISS |
+| vague | 254 | 26 | 5 ok | 7 MISS | 40% | 20.4s ok | MISS |
+| long | 3487 | — | — | — | — | — | **NOT MEASURED** |
+
+`hallucinated skills` 0 and `LLM calls` 2 on every measured fixture and run.
+`clustering: invented` and `clustering: unassigned` were **0 everywhere** — the
+model respected the skill set completely, inventing nothing and omitting
+nothing across 12 runs.
+
+### What moved, against the deterministic baseline
+
+| | deterministic | LLM clustering |
+|---|---|---|
+| HARD FAILs | **2** (target-role parents, long latency) | **0** among measured |
+| `max children` MISS | **4 of 5** | **1 of 4** |
+| target-role parents | 7 `(7-8)` **HARD FAIL** | 5 `(4-6)` ok |
+| verdicts | 1 PASS / 2 MISS / 2 HARD FAIL | 2 PASS / 2 MISS / 1 NOT MEASURED |
+
+Per-fixture `max children`: foundry-fde 7 -> 5, short 4 -> 3, target-role 8 ->
+5, vague 7 -> 7. That was the criterion the escalation most directly targeted
+and it moved on three of four.
+
+Coherence moved in **both** directions and is the honest disappointment:
+foundry-fde 50% -> 67%, target-role 50% -> 75%, vague 50% -> 40%, short 50% ->
+**0%**. The short fixture is the interesting one: 10 mostly non-technical
+marketing skills split into 4 groups of 2-3, and NOT ONE parent cleared the
+0.64 cosine bar. That is a plausible sign the coherence threshold — derived
+from a reference set of *technical* skill-name pairs — does not transfer to
+non-technical vocabularies. It is a bar question, and it is filed rather than
+adjusted.
+
+### Why `long.txt` could not be measured
+
+Groq returned `400 json_validate_failed` with **`'failed_generation': ''`** —
+the model generated **nothing**, on the largest skill list of the five. Not a
+JSON syntax defect: an empty generation that then failed JSON validation. Same
+class as the empty-content risk that disqualified `gpt-oss-20b` for streaming
+and that requirement 4 of the KI-4 qualification was written to catch, now
+appearing on a reasoning model under JSON mode with a large input.
+
+**Not fixed here.** The stop condition for this session says a prompt-shape
+defect is repaired by a NEW PINNED PROMPT, not by an in-flight retry with
+looser parsing, and the prompt must not be swept against fixture output. It
+occurred on exactly 1 fixture of 5, which is *at* the stop threshold ("more
+than 1") and not over it, so the run continued and the fixture is reported
+NOT MEASURED — which is a true statement where a salvaged number would not be.
+
+The rate-limit classifier behaved correctly: it did not mistake a 400 for a 429
+and did not retry into it.
+
+### VERDICT: FAIL at the pre-registered bar. Phase A closes here.
+
+Two MISSes and one unmeasurable fixture is not a pass, and a fixture that could
+not be run is not a fixture that passed. The pre-registered response has fired
+once; per the rules agreed before this session, there is no second escalation
+and the bar is not adjusted because numbers came in close.
+
+Stated plainly because it would be easy to spin: the escalation **worked on
+what it targeted** — both hard fails cleared, the max-children criterion moved
+on three of four fixtures, and the model never invented or dropped a skill. It
+did not clear the bar, and the remaining gaps are one empty-generation defect
+and two marginal misses (target-role latency 30.9s against a 30s bar; vague
+max-children 7 against a 2-5 target).
+
+### Held-out limitation of THIS measurement, recorded as a limitation
+
+All five fixtures were visible when this clustering prompt was written. The
+prompt was deliberately not swept against their output — it was pinned by hash
+before any fixture ran under it, and the hash test is hardcoded so an edit
+cannot pass silently. But "not tuned" is a statement about process, not a
+property the numbers can demonstrate. **A clustering design authored after its
+evaluation set became visible cannot claim general validity from that set**, and
+this table should be read as evidence about these five graphs rather than about
+JD clustering in general. A sixth, unseen fixture is the only thing that would
+settle it, and adding one is a Phase B decision, not this session's.
+
+### Phase B inherits five open items
+
+1. **Extractor-on-Gemini criterion-1 quality.** Both acceptance runs measured
+   Groq's extraction accuracy, not the shipped Gemini-first path's. 20 RPD
+   makes a Gemini run a two-day exercise.
+2. **Bar re-examination**, with this run's numbers as its evidence: `2-5`
+   children with `5-9` parents implies 10-45 leaves while the extractor
+   honestly produces 10-26 skills; and the 0.64 coherence threshold was derived
+   from technical skill-name pairs and returned 0% on a non-technical fixture.
+3. **Quota exhaustion is a different product per provider** — Gemini cliffs at
+   20 RPD, Groq throttles at 1 request/86.4s. "Surface the 429" is not an answer.
+4. **Bank-fill economics** at the real ceiling: a warm-bank session is 12-15% of
+   a Gemini day, not 1.2%.
+5. **Provider ordering under measured numbers**: 1,000 RPD vs 20 is a 40x
+   asymmetry, bounded by the 8,000 TPM finding that keeps the long-context call
+   on Gemini.

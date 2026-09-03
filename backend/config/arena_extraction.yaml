@@ -159,6 +159,19 @@ clustering:
   linkage: "average"
   metric: "cosine"
 
+  # LLM clustering: the PRE-REGISTERED escalation, and OFF by default.
+  #
+  # `min_coherent_parent_fraction` above is the trigger, and it fired: measured
+  # 43-50% coherence across all five acceptance fixtures against the 0.80 bar,
+  # with `max children per parent` also missing its 2-5 target on four of five.
+  # Both are outputs of this component, so the diagnosis localised here rather
+  # than to extraction (which closed with 0 invented skills across 15 runs).
+  #
+  # Left OFF so the deterministic path remains the shipped default and remains
+  # runnable for regression. Turned on explicitly for the measurement that
+  # judges the swap: scripts/arena_extraction_report.py --llm-clustering.
+  use_llm: false
+
 # ---------------------------------------------------------------------------
 # Node budget -- how many parents a JD is ALLOWED to produce, as a function of
 # how much material it actually contains.

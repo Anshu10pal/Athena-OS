@@ -25,7 +25,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models import ArenaJobTarget, ArenaMergeSuggestion, ArenaSkillNode
 from app.services.arena import canonicalise as canon
-from app.services.arena import clustering, jd_extract, jd_sections, weighting
+from app.services.arena import (clustering, jd_extract, jd_sections,
+                                llm_clustering, weighting)
 from app.services.arena.config import extractor_version, load_config
 
 logger = logging.getLogger("athena.arena.graph")
@@ -86,8 +87,15 @@ def build_graph(
 
     extraction = jd_extract.extract_mentions(jd_text, title, sections, cfg)
     nodes, suggestions = canon.canonicalise(extraction.mentions, cfg)
-    cluster_result = clustering.cluster_skills(nodes, cfg)
-    cluster_result = clustering.cluster_llm_names(cluster_result, nodes, title)
+    # Clusterer dispatch. The LLM path replaces BOTH cluster_skills and
+    # cluster_llm_names, so the call budget is unchanged at two per JD
+    # (extraction + clustering) rather than three -- which is why the
+    # `max_calls_per_extraction` guard below still reads 2 either way.
+    if bool(cfg["clustering"].get("use_llm")):
+        cluster_result = llm_clustering.cluster_skills_llm(nodes, title, cfg)
+    else:
+        cluster_result = clustering.cluster_skills(nodes, cfg)
+        cluster_result = clustering.cluster_llm_names(cluster_result, nodes, title)
 
     llm_calls = extraction.llm_calls + 1  # extraction + naming
     budget = int(cfg["llm"]["max_calls_per_extraction"])

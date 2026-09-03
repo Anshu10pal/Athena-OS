@@ -41,6 +41,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "min_coherent_parent_fraction": 0.80,
         "linkage": "average",
         "metric": "cosine",
+        # OFF by default. The deterministic path stays the shipped default and
+        # stays runnable for regression; the LLM path is the pre-registered
+        # escalation, enabled explicitly for the measurement that judges it.
+        "use_llm": False,
     },
     "node_budget": [
         {"max_mentions": 7, "min_parents": 2, "max_parents": 4, "allow_flat": True},

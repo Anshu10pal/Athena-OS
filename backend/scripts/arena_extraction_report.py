@@ -262,6 +262,9 @@ def measure(db, user_id: int, title: str, jd_text: str, label: str) -> dict:
         "children_ok": (max(child_counts) if child_counts else 0) <= max_children,
         "suggestions": len(suggestions),
         "merge_methods": canon.get("merge_methods", {}),
+        "clusterer": (clustering.get("budget_applied", {}) or {}).get("clusterer", "deterministic"),
+        "invented_assignments": (clustering.get("budget_applied", {}) or {}).get("invented_assignments", 0),
+        "unassigned_recovered": (clustering.get("budget_applied", {}) or {}).get("unassigned_recovered", 0),
         "coherent_fraction": clustering.get("coherent_fraction"),
         "coherent_fraction_pct": (None if clustering.get("coherent_fraction") is None
                                   else clustering["coherent_fraction"] * 100),
@@ -461,7 +464,9 @@ def print_aggregate(rows: list[dict]) -> None:
                            ("mean span words", "mean_span_words", "{:.1f}"),
                            ("fragments filtered", "filtered", "{:.0f}"),
                            ("review-band suggestions", "suggestions", "{:.0f}"),
-                           ("cluster coherence", "coherent_fraction_pct", "{:.0f}%")):
+                           ("cluster coherence", "coherent_fraction_pct", "{:.0f}%"),
+                           ("clustering: invented", "invented_assignments", "{:.0f}"),
+                           ("clustering: unassigned", "unassigned_recovered", "{:.0f}")):
         vals = [r.get(key) for r in rows]
         vals = [v for v in vals if v is not None]
         if not vals:
@@ -586,6 +591,10 @@ def main() -> int:
                         help="pin all runs to one provider. gemini is the shipped "
                              "extraction path; groq has 50x the daily request "
                              "ceiling (1000 vs 20) but is not what ships.")
+    parser.add_argument("--llm-clustering", action="store_true",
+                        help="enable the pre-registered LLM clustering escalation "
+                             "(clustering.use_llm). Default OFF -- the "
+                             "deterministic path is the shipped default.")
     parser.add_argument("--smoke", action="store_true",
                         help="one small built-in JD, single run, live model -- "
                              "verifies wiring, NOT acceptance")
@@ -616,6 +625,16 @@ def main() -> int:
               "  so criterion 1 from this run is groq's accuracy, not the shipped\n"
               "  path's. Structural criteria (parents, children, calls, invented /\n"
               "  unverified counts) are provider-independent and do transfer.")
+    if args.llm_clustering:
+        # Mutated on the loaded config so every fixture in this run uses the
+        # same clusterer. Printed, because a table produced by a different
+        # clusterer than the reader assumes is the mislabelled-instrument
+        # problem (contract 17.16).
+        load_config()["clustering"]["use_llm"] = True
+        print("  CLUSTERER: llm (pre-registered escalation; the deterministic\n"
+              "  path is the shipped default and is what --llm-clustering replaces)")
+    else:
+        print("  CLUSTERER: deterministic (shipped default)")
     print()
 
     db = _session()
