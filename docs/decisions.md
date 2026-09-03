@@ -1436,3 +1436,82 @@ be re-cited later as if it still held.
 Provider ordering, bank-fill economics and cold-session viability remain **filed
 for Phase B and deliberately unchanged here**, regardless of what these numbers
 imply about them.
+
+### Corollary to §17.16 — a confidence label on an UNMEASURED figure does not discriminate
+
+Filed as an instance, not as a rule change.
+
+The Phase 0 rate-limit estimates carried explicit confidence labels. When the
+measurements landed, **the labels did not track the error**:
+
+| figure | label | error |
+|---|---|---|
+| Gemini RPD 250 | *medium* confidence | **wrong by 10x** |
+| Groq RPD 1,000 | *low* confidence | exact |
+| Groq TPM 6,000 | *low* confidence | 33% pessimistic |
+| Groq TPD ~100,000 | *low* confidence, "unconfirmed" | not a real axis at all |
+
+The medium-confidence figure was the catastrophically wrong one and the three
+low-confidence figures were nearly right. The label was assigned from *how many
+secondary sources agreed*, which turned out to measure source-copying rather
+than truth — the 250 RPD figure appeared in several places because those places
+were copying each other, and the lone dissenting source ("20-50 in some
+configurations") was the accurate one.
+
+**The lesson is not "be more pessimistic on medium confidence."** It is that a
+confidence label attached to secondary-source aggregation carries little
+information and must not be treated as a substitute for measurement. Where the
+number matters, read it from the system. Recorded here so that the next time a
+confidence label is reached for on an unmeasured figure, this instance is on
+file rather than the habit being repeated with more careful adjectives.
+
+### Phase 0 provider ordering: upgraded from ESTIMATION-BASED to MEASUREMENT-CONFIRMED
+
+Phase 0 put Gemini on the large-context extraction call and Groq on the small
+naming call, reasoning that Groq's TPM ceiling could not hold a long JD plus a
+structured response. That reasoning rested on an **estimated** 6,000 TPM from
+secondary sources.
+
+It is now **measured at 8,000 TPM** (2026-09-03, response headers). The
+long-fixture extraction call is ~3,000+ tokens in a single request, so two such
+calls inside one minute exceed the bucket. The conclusion is unchanged and the
+basis is stronger: this is a rare upgrade from "we chose correctly" to "we can
+show why the alternative fails", and it holds independently of any preference
+between providers.
+
+Recorded because the ordering decision will be re-opened in Phase B (see the
+backlog note below) and whoever re-opens it should know which parts rest on
+measurement and which do not.
+
+### Phase B backlog — quota exhaustion is a categorically different PRODUCT on each provider
+
+Not a Phase A item. Filed because it is a design input, not an observation.
+
+The two providers do not merely have different ceilings; they **fail in
+different shapes**, and from a user's seat those are different products:
+
+| | Gemini 2.5 Flash | Groq (`openai/gpt-oss-20b`) |
+|---|---|---|
+| ceiling | ~20-25 requests/day (measured by exhaustion) | 1,000 requests/day (header) |
+| shape | **cliff** — a hard daily cap | **leaky bucket** — refills 1 request / 86.4s |
+| user experience at the limit | the session is *stuck until the cap resets*; nothing the user does helps | the session *slows to a rate* and keeps making progress |
+
+A mid-interview quota exhaustion on Gemini ends the interview. On Groq it makes
+the next question take 86 seconds. Phase B needs a real answer for that state,
+and "surface the 429" is not one — it is the difference between "come back
+tomorrow" and "this is slow right now".
+
+Two further Phase B inputs from the same measurements, filed and deliberately
+NOT acted on in Phase A:
+
+- **Bank-fill economics.** Phase 0 concluded "warm bank ~3 calls, ~80 sessions
+  per day." At the measured ceiling a warm-bank session is 12-15% of the daily
+  budget, not 1.2%. The design survives, but the bank must reach steady-state
+  hit rate far sooner than the original arithmetic assumed.
+- **The ordering question has changed shape.** With a 40x request-ceiling
+  asymmetry, Phase B's question is not "which provider is primary" but "do the
+  bank-fill economics move to a Groq-first model given that asymmetry" —
+  bounded by the 8,000 TPM finding above, which still rules Groq out for the
+  long-context call. That is a different question from the one Phase 0 answered.
+- **"A 20-question mixed session fits."** True at 250 RPD, false at 25. A
+  cold-bank session consumes an entire user-day of budget.
