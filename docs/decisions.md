@@ -1329,3 +1329,110 @@ the long fixture: accepted mentions 33 → 49, inventions on the long JD 12,0 �
 at and deliberately not swept against the acceptance fixtures. No toggle: the
 whole-sentence variant is deleted, because a flag leaves two extractors alive
 and one of them is worse.
+
+## Free-tier rate limits: MEASURED, superseding the Phase 0 estimates
+
+Both Phase 0 figures came from secondary sources because **both providers'
+official rate-limit pages are account-gated** — Google's publishes no per-model
+table and points at AI Studio; Groq's points at `/settings/limits`. The
+estimates were reported with their confidence stated. One of them was wrong by
+**10x**, and it was wrong in the direction that made the module look feasible.
+
+Mechanism, stated so the lesson transfers: **secondary-source averaging is
+unreliable at 10x scale, and the response headers are the authoritative signal
+for the numbers that actually matter.** When sources disagreed on Gemini's RPD
+(250 vs 500 vs 1,500, with one claiming a December-2025 cut to "20-50 in some
+configurations"), the low outlier was the true one and averaging discarded it.
+Read the headers. They cost one unit of the thing being measured and they are
+not opinions.
+
+### Groq — measured 2026-09-03T13:45:30Z, response headers verbatim
+
+Measured against **`openai/gpt-oss-20b`**, not `llama-3.3-70b-versatile`.
+The latter is decommissioned (KI-4) and a `404 model_not_found` **short-circuits
+before rate-limit accounting**, so it returns no rate-limit headers at all — the
+originally specified probe produced a null, not a measurement. Groq's limits are
+per-model, so this measures a candidate replacement, which is the figure a
+replacement decision would need anyway.
+
+```
+HTTP/2 200
+x-ratelimit-limit-requests:      1000
+x-ratelimit-limit-tokens:        8000
+x-ratelimit-remaining-requests:  999
+x-ratelimit-remaining-tokens:    7923
+x-ratelimit-reset-requests:      1m26.4s
+x-ratelimit-reset-tokens:        577ms
+```
+
+**Which axis each limit is on, derived rather than assumed** — the header names
+say `requests` and `tokens` but not the window, and guessing the window is how a
+10x error happens twice:
+
+| header | used | reset | implied refill | window |
+|---|---|---|---|---|
+| `limit-requests` 1000 | 1 | 86.4s | 86400 / 86.4 = **1000/day** | **RPD** |
+| `limit-tokens` 8000 | 77 | 0.577s | 77 / 0.577 x 60 = **8007/min** | **TPM** |
+
+Both derivations reproduce the round number in the header, which is the check on
+the interpretation. So: **1,000 requests/day, 8,000 tokens/minute.**
+
+Two properties worth keeping:
+
+- **It is a leaky bucket, not a midnight cliff.** Requests refill continuously
+  at one per 86.4s. That is a materially different failure shape from Gemini's
+  hard daily cap: a Groq-backed caller degrades to a rate rather than stopping.
+- **8,000 TPM is genuinely tight**, and it confirms the Phase 0 reasoning that
+  put Gemini on extraction. The long fixture's extraction call is ~3,000+ tokens
+  in one request; two such calls inside a minute exceed the bucket. This is an
+  independent, measured reason to keep the large-context call on Gemini that has
+  nothing to do with provider preference.
+
+### Gemini 2.5 Flash — measured by observed exhaustion, ~20-25 requests/day
+
+No header equivalent was captured; the figure is bounded by two independent
+429s:
+
+| date | successful calls before 429 | evidence |
+|---|---|---|
+| 2026-09-02 | ~24 | 4 fixtures x 3 runs x 2 calls = 24, then fixture 5 raised |
+| 2026-09-03 | 20 | 3 fixtures x 3 runs x 2 = 18, plus 2 isolated probes |
+
+Consistent at **~20-25 requests/day**. Reported as a bounded observation rather
+than a figure, because exhaustion establishes a ceiling, not the ceiling's exact
+value, and no header stated it.
+
+### Superseded, originals kept (§17.16)
+
+| figure | Phase 0 estimate | measured | error |
+|---|---|---|---|
+| Gemini RPD | 250 (medium confidence, sources disagreed) | **~20-25** | **10x optimistic** |
+| Gemini TPM | 250,000 | not measured | — |
+| Groq RPD | 1,000 (low confidence) | **1,000** | correct |
+| Groq TPM | 6,000 (low confidence, 6k vs 12k in sources) | **8,000** | ~33% pessimistic |
+| Groq TPD | ~100,000 (unconfirmed) | **no such header exists** | not a real axis |
+
+The Phase 0 estimates are NOT overwritten above; they stand in the left column
+with the measured values beside them. Notably the *low-confidence* Groq figures
+were nearly right and the *medium-confidence* Gemini figure was the one that was
+badly wrong — the stated confidence did not track the actual error.
+
+### One rationale this falsifies, for a decision that nonetheless stands
+
+The two-day acceptance protocol was chosen over "use Groq as a second budget"
+for three reasons. **Reason 1 is now dead:** it argued that Groq's ceiling was
+known only from the same class of secondary sources that got Gemini wrong by
+10x, so betting the protocol on it would repeat the failure. That objection is
+answered — the ceiling is now measured from authoritative headers, not
+estimated.
+
+**The decision stands on reasons 2 and 3, either of which is sufficient:**
+swapping providers mid-protocol means two Gemini runs and one Groq run, which is
+not n=3 of one instrument; and two-day execution preserves the instrument while
+spending nothing new. Recorded because a decision surviving on fewer reasons
+than it was made with is worth knowing, and because the dead reason should not
+be re-cited later as if it still held.
+
+Provider ordering, bank-fill economics and cold-session viability remain **filed
+for Phase B and deliberately unchanged here**, regardless of what these numbers
+imply about them.
