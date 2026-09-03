@@ -1770,7 +1770,33 @@ this table should be read as evidence about these five graphs rather than about
 JD clustering in general. A sixth, unseen fixture is the only thing that would
 settle it, and adding one is a Phase B decision, not this session's.
 
-### Phase B inherits five open items
+### PHASE A CLOSE-OUT — read this first
+
+**Phase A closed on measurement, not on judgement.** The pre-registered
+acceptance bar was set before any job description was processed, the
+pre-registered escalation fired once on its own trigger, and the result was a
+recorded FAIL: two MISSes and one fixture that could not be measured, against a
+bar that was not moved to accommodate them. The escalation did work on what it
+targeted — both HARD FAILs cleared, `max children per parent` moved on three of
+four fixtures, and across twelve runs the clusterer invented no skill and
+dropped none — and it still did not clear the bar. Both statements are true and
+neither cancels the other. Two temptations are named in the record rather than
+left implicit, because naming where the pull was is the only way the next person
+knows where to look: **adjusting the latency bar**, which `target-role` missed
+by 0.9 seconds against a threshold I had myself set from nine observations and
+marked provisional (reading "provisional" as "adjustable" would have converted a
+MISS into a PASS by editing the ruler after seeing the measurement), and
+**patching the `long.txt` prompt**, which looks like a one-line `max_tokens` fix
+precisely because the fixture it would rescue is already known. One defect in
+the session's own work was caught in flight and is recorded: the prompt pin
+originally computed its expected digest from the constant at module load, so it
+compared the prompt's hash to its own hash and **could never fail** — the same
+class of defect as a check that certifies the wrong property. The digest is now
+a literal and the pin was demonstrated failing against a mutated prompt before
+being trusted. Seven items are filed forward, below. Phase A ships nothing that
+claims to have passed.
+
+### Phase B inherits seven open items
 
 1. **Extractor-on-Gemini criterion-1 quality.** Both acceptance runs measured
    Groq's extraction accuracy, not the shipped Gemini-first path's. 20 RPD
@@ -1786,3 +1812,32 @@ settle it, and adding one is a Phase B decision, not this session's.
 5. **Provider ordering under measured numbers**: 1,000 RPD vs 20 is a 40x
    asymmetry, bounded by the 8,000 TPM finding that keeps the long-context call
    on Gemini.
+6. **`long.txt` empty-generation on Groq — a known Groq failure mode on large
+   inputs, not a novel discovery.** The clustering call on the largest skill set
+   returned `400 json_validate_failed` with `failed_generation: ''`: the model
+   produced nothing, so there was no JSON to validate. **The same class already
+   disqualified `openai/gpt-oss-20b`** during the KI-4 replacement
+   qualification, where it yielded zero content deltas when streaming, and it is
+   why requirement 4 of that qualification (non-empty content at
+   `max_tokens=200`) exists at all. So this is a third sighting of one behaviour
+   — reasoning models under output pressure returning empty content — not a new
+   problem.
+   **Fixed in Phase B by a NEW PINNED PROMPT, never by a retry loop.** A retry
+   with looser parsing would report a number for a grouping the model did not
+   produce, and the fixture is currently reported NOT MEASURED precisely because
+   that is the true statement. Whatever prompt replaces it gets pinned by a
+   hardcoded digest before any fixture runs under it, exactly as this one was.
+7. **The 0.64 coherence threshold does not transfer to non-technical skill
+   sets — a threshold-domain-generality question, filed and NOT adjusted.**
+   Evidence: the `short` fixture returned **0% coherence** — not one parent of
+   four cleared the bar — on 10 mostly non-technical marketing skills grouped
+   2-3 per parent. The threshold was derived in Phase 0 from a hand-labelled
+   reference set of **technical** skill-name pairs, where 0.64 was the measured
+   SIBLING/UNRELATED separation point (SIBLING min 0.639, UNRELATED max 0.636).
+   Nothing in that derivation claimed it generalised to marketing, operations or
+   commercial vocabularies, and this run is the first evidence that it does not.
+   The honest reading is that the *instrument* is domain-scoped, not that these
+   graphs were incoherent. Adjusting it now would be tuning a threshold against
+   the fixture that exposed it (§17.27); it needs its own reference set per
+   domain, or an explicit statement that the metric applies only to technical
+   graphs.
