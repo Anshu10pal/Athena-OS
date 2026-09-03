@@ -218,9 +218,49 @@ pool them in any longitudinal metric until that is settled.
 
 ---
 
-## Performance observation from Phase 4, not yet a defect
+## VKI-7 — numeral tokens survive Whisper round-trip only under NORMALISATION, not literally
 
-Kokoro on CPU is **slow for long text**. Measured through the real endpoints:
+**Owner: Interview Arena Phase B, rubric scoring specifically.** Not a voice
+migration defect — a property of the transcription path that downstream
+literal-token matching will trip over.
+
+**Evidence, from the Phase 4 anchor pin.** Fixture text
+`"The meeting starts at three fifteen on Thursday."` transcribed as
+`"The meeting starts at 3 .15 on Thursday."` The transcript is *correct*; the
+spoken number was rendered in digits. The pinned anchor `fifteen` was therefore
+defeated by normalisation, not by a transcription failure.
+
+**Why this matters where it is filed.** Interview answers to technical
+questions are dense with numerals: "port 8080", "the 90th percentile", "O(n log
+n)", "S3 bucket 3", "three nines of availability", "a 500 error". Whisper will
+render each under its own normalisation rules — digits, or a mix — and none of
+those forms is predictable from the spoken words. Any scorer that compares a
+transcript against **literal expected tokens** will produce **false negatives**:
+the candidate said the right thing and the rubric will not see it.
+
+**Why the Communication Gym does not hit this.** Its filler tally operates on
+word *categories* (`CORE_FILLERS`, `CRUTCH_CANDIDATES`, hedge phrase lists) via
+a normaliser, not on literal-string equality against expected content. Category
+membership is unaffected by whether "fifteen" is spelled or digitised.
+
+**The reason to file it now rather than when it bites.** It surfaced only
+because the anchors were pinned. Without that discipline it would have appeared
+in Phase B's item scoring against real interview answers, where it would have
+looked like *the extractor* or *the rubric* was broken rather than the
+comparison method. This is the phase where the evidence exists, so it is the
+phase that records it.
+
+Minimum honest handling in Phase B: compare on a numeral-normalised form of
+both sides, or score numerals via a range/semantic check rather than string
+equality. Do NOT solve it by removing numerals from rubrics — the numbers are
+often the answer.
+
+---
+
+## VKI-8 — Kokoro-on-CPU latency is not production-ready for interview turns
+
+**Owner: Interview Arena voice, whenever it becomes a phase. Filed against
+Arena's inheritance list, not just here.** Measured in Phase 4, not acted on.
 
 | text | engine | latency |
 |---|---|---|
@@ -228,9 +268,30 @@ Kokoro on CPU is **slow for long text**. Measured through the real endpoints:
 | one sentence (32 chars) | edge | 1.0 s |
 | listening passage (673 chars) | kokoro | **62.5 s** |
 
-The 62.5 s figure is a whole listening exercise, so it is not a per-request user
-wait in the interview sense — but it is well outside anything usable for a
-spoken interview turn, which is the eventual Arena use case. Recorded now
-because Phase 6 measures against it, and because it is the number that will
-decide whether streaming synthesis or a smaller Kokoro variant is needed. Not
-acted on in Phase 4.
+**What the migration did and did not deliver.** The voice migration closes
+edge-tts as a liability — a network call to Microsoft, duplicated across two
+call sites, with a fallback that had never worked. It does **not** deliver a
+real-time voice-interview capability, and the 62.5 s figure is why.
+
+**The projection, stated as a projection.** At Arena question length — roughly
+30–100 characters per question, perhaps 500 for a follow-up probe — the same
+architecture on the same model projects to **3–10 seconds of TTS per turn**.
+That sits at the edge of a 2–4 second interview-turn budget for the shortest
+questions and outside it for anything longer, with no headroom for a probe.
+This is extrapolation from three measurements at one text length, not a measured
+per-question figure; the point is the order of magnitude, and the order of
+magnitude is the problem.
+
+**The consequence for Arena.** Arena voice **cannot assume Kokoro-as-configured
+is production-ready.** One of these is a required design decision *before* Arena
+voice ships, and it is a Phase B/C decision for Arena rather than this
+migration's to make:
+
+- **streaming synthesis** — begin playback on the first sentence while the rest
+  synthesises, which turns total latency into time-to-first-audio;
+- **a smaller variant** — Kokoro publishes fp16 (169 MB) and the int8 already in
+  use; a genuinely smaller model or a different one may be needed;
+- **something else** — including accepting a slower turn, if the product can.
+
+Filed here because this is where the number was discovered. Filed against
+Arena because that is where it forces a choice.

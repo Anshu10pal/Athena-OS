@@ -285,3 +285,35 @@ module that uses the fast lane, so it belongs to whoever owns
 `app/core/llm.py` — not to Arena Phase A. Arena's only Groq dependency is the
 cluster-naming call, which was moved to the fast lane deliberately and can be
 moved back to Gemini in one line if the decision is to drop Groq entirely.
+
+---
+
+## Inherited from the Voice Migration — two items Arena owns
+
+Both were discovered during the voice migration and are recorded in full in
+`docs/voice-known-issues.md`. They are cross-referenced here because Arena, not
+the migration, is where each forces a decision.
+
+### VKI-7 — literal numeral matching against transcripts will produce false negatives
+
+**Arena Phase B, rubric scoring.** Whisper renders spoken numbers under its own
+normalisation rules: `"three fifteen"` came back as `"3 .15"` in the Phase 4
+round-trip gate. Interview answers are dense with numerals — "port 8080", "the
+90th percentile", "O(n log n)", "a 500 error" — and a scorer comparing a
+transcript against literal expected tokens will mark correct answers wrong.
+
+Relevant to Phase B's item scoring, which is exactly the rubric-versus-transcript
+comparison this breaks. Not relevant to the Communication Gym's filler tally,
+which matches word *categories* rather than literal strings.
+
+### VKI-8 — Kokoro-on-CPU is not production-ready for interview-turn latency
+
+**Arena voice, Phase B/C.** Measured: 5.5 s for one sentence, **62.5 s for a
+673-character passage**. Projected to Arena question lengths that is 3–10 s of
+TTS per turn — at the edge of a 2–4 s budget for the shortest questions,
+outside it for anything longer, with no headroom for a follow-up probe.
+
+The voice migration closes edge-tts as a liability; it does not deliver
+real-time voice interviewing. Streaming synthesis, a smaller model, or an
+accepted slower turn is a required design decision **before** Arena voice
+ships.
