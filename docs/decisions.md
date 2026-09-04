@@ -2252,3 +2252,46 @@ are caught by asking what result would distinguish the claim from its opposite.
 
 Compare §17.32 (read the output, not the counts): the same discipline applied to
 a different artefact. Reading "6" and stopping is the failure mode in both.
+
+## Positive pattern: WHEN CONSTRAINTS CONFLICT, THE STRONGER CONSTRAINT DECIDES
+
+**Do not trade the stronger constraint to preserve the suggested mechanism.**
+
+The instance, from VKI-9's measurement task. The task carried two instructions
+that turned out to be incompatible:
+
+- *the mechanism:* "locate the session construction in `tts.py`, thread the
+  count through as a parameter"
+- *the constraint:* "measurement only — no default changes, no code path
+  additions"
+
+They collided because the mechanism's premise was wrong. `tts.py` does not
+construct the ONNX session; `kokoro_onnx` builds it inside `Kokoro.__init__` via
+`session.create_session()`, which passes no `SessionOptions` at all. Following
+the mechanism therefore meant *adding a parameter and a construction path to
+production code in order to take a measurement* — spending the constraint to
+keep the mechanism.
+
+The resolution was `Kokoro.from_session()`, the library's own extension point:
+the harness builds its own `InferenceSession` and hands it over, so `tts.py` is
+untouched and the measurement commit contains no production change.
+
+**Why the mechanism is the part to give up.** A mechanism is a suggestion about
+*how*; a constraint is a statement about *what must remain true*. Here the
+constraint protected something durable — a measurement scaffold added to
+production code outlives the measurement, and the next reader cannot tell an
+instrumentation parameter from a designed one. The mechanism protected nothing;
+it was a guess about where the code lived, made before anyone looked.
+
+**The general rule:** when a task's instructions conflict, rank them by what
+survives the task. Constraints on the artefact outrank suggestions about the
+route. And say which one you dropped and why — silently satisfying both by
+half-measures is worse than either.
+
+**Relationship to the other patterns filed here.** Same family as
+[isolate-before-reporting]: both are disciplines about not letting the *shape*
+of a request overwrite the *intent* of the request. Isolation resists a number
+that looks like an answer; this resists a route that looks like an instruction.
+Both are also the constructive side of the unresolved-premise class — that class
+says verify an instruction's target exists before writing against it; this says
+what to do when you verify and find it does not.

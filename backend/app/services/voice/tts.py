@@ -112,6 +112,26 @@ PIPER_VOICE_PATH = os.environ.get(
 KOKORO_DEFAULT_VOICE = "af_heart"
 KOKORO_SAMPLE_RATE = 24000
 
+# onnxruntime intra-op threads for the Kokoro session. MEASURED, not inherited.
+#
+# 1, not onnxruntime's auto default. Auto resolves to 2 on the target hardware
+# (1 physical core, 2 logical CPUs) and is slower: 69.99 s vs 66.80 s on a
+# 673-char passage, 9.09 s vs 7.83 s on a 76-char question. RTF rises
+# monotonically with thread count here -- 1.62x, 1.70x, 2.02x, 2.67x at 1/2/4/8
+# -- because there is no second physical core to parallelise across, so every
+# added thread buys nothing and pays synchronisation cost. Full sweep and the
+# raw per-run data: docs/voice-known-issues.md VKI-9.
+#
+# This does NOT rescue Kokoro's latency and was never expected to; 7.83 s for a
+# 76-char question is still roughly 2x the Arena turn budget. It is here because
+# it is the correct value measured, and shipping an inherited default that a
+# future reader will assume was chosen is a maintenance liability.
+#
+# Overridable because VKI-9's closure says the sweep is worth repeating on
+# multi-core hardware, where the best value will differ. A non-integer value
+# raises at import, which is the right kind of loud.
+KOKORO_INTRA_OP_THREADS = int(os.environ.get("KOKORO_INTRA_OP_THREADS", "1"))
+
 
 class TTSUnavailable(RuntimeError):
     """No engine could produce audio.
@@ -197,8 +217,34 @@ def _get_kokoro():
                 logger.warning("could not point phonemizer at the bundled "
                                "espeak-ng; falling back to a system install",
                                exc_info=True)
-            logger.info("loading kokoro-onnx int8 from %s", KOKORO_MODEL_PATH)
-            _kokoro = Kokoro(KOKORO_MODEL_PATH, KOKORO_VOICES_PATH)
+            # Built through `from_session` rather than `Kokoro(model, voices)`
+            # because kokoro-onnx constructs its own session internally via
+            # `session.create_session()`, which passes NO SessionOptions at all
+            # -- so the constructor offers no way to set the thread count. This
+            # is the library's own documented extension point, not a reach into
+            # its internals.
+            #
+            # Provider selection is delegated to the library's resolve_providers
+            # so this commit changes the thread count and nothing else; a
+            # hardcoded provider list here would have quietly changed a second
+            # thing. Guarded, because it is a submodule path and kokoro-onnx is
+            # pinned but not immutable.
+            import onnxruntime as ort
+            try:
+                from kokoro_onnx.session import resolve_providers
+                providers = resolve_providers()
+            except ImportError:  # pragma: no cover - pinned version has it
+                logger.warning("kokoro_onnx.session.resolve_providers is gone; "
+                               "falling back to CPUExecutionProvider")
+                providers = ["CPUExecutionProvider"]
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = KOKORO_INTRA_OP_THREADS
+            logger.info("loading kokoro-onnx int8 from %s (intra_op=%d, providers=%s)",
+                        KOKORO_MODEL_PATH, KOKORO_INTRA_OP_THREADS, providers)
+            _kokoro = Kokoro.from_session(
+                ort.InferenceSession(KOKORO_MODEL_PATH, opts, providers=providers),
+                KOKORO_VOICES_PATH,
+            )
     return _kokoro
 
 

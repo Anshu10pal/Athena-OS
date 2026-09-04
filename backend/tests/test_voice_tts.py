@@ -83,6 +83,49 @@ class TestEngineNamesArePinned:
             "change to image size and inference cost."
         )
 
+    def test_kokoro_intra_op_threads_is_the_measured_value(self):
+        """1, not onnxruntime's auto default, and the value is MEASURED.
+
+        VKI-9 swept 1/2/4/8 on the target hardware: RTF rose monotonically
+        (1.62x, 1.70x, 2.02x, 2.67x on a 673-char passage) because the box has
+        one physical core, so auto's choice of 2 is slower than 1. A change here
+        is a change to synthesis latency and needs its own measurement.
+        """
+        assert tts.KOKORO_INTRA_OP_THREADS == 1, (
+            f"intra_op is {tts.KOKORO_INTRA_OP_THREADS}, not the measured 1. "
+            "See docs/voice-known-issues.md VKI-9 before changing it."
+        )
+
+    @pytest.mark.skipif(not pathlib.Path(tts.KOKORO_MODEL_PATH).exists(),
+                        reason="Kokoro weights not present (run scripts/fetch_models.sh)")
+    def test_the_thread_count_actually_reaches_the_onnx_session(self):
+        """The pin that cannot pass on a declared-but-unwired constant.
+
+        Asserting the constant alone would hold just as well if nothing read
+        it -- the check-that-cannot-fail shape. This reads the setting back off
+        the live InferenceSession, which is the only thing that proves the
+        value is in effect.
+        """
+        tts.reset_for_tests()
+        try:
+            engine = tts._get_kokoro()
+            effective = engine.sess.get_session_options().intra_op_num_threads
+        finally:
+            tts.reset_for_tests()
+        # Two separate failures, two separate messages. Chained as
+        # `effective == DECLARED == 1` this reported "the setting is not wired
+        # through" when the constant had merely changed -- a true failure with
+        # misleading text, which sends a reader to the wrong file.
+        assert effective == tts.KOKORO_INTRA_OP_THREADS, (
+            f"session reports intra_op={effective} but the module declares "
+            f"{tts.KOKORO_INTRA_OP_THREADS} -- the setting is NOT WIRED THROUGH "
+            "to the ONNX session"
+        )
+        assert effective == 1, (
+            f"the session is wired correctly but runs at intra_op={effective}, "
+            "not the measured 1 (VKI-9)"
+        )
+
     def test_configured_engine_rejects_an_unknown_name(self, monkeypatch):
         # A typo'd TTS_ENGINE that silently ran the default would be
         # indistinguishable from correct configuration.

@@ -354,20 +354,26 @@ configuration; the conclusion got sharper and one of the three options I
 originally listed is now ruled out. Thread-swept 2026-09-04 (VKI-9): the
 conclusion HELD and streaming stays withdrawn.**
 
-**Current best-known configuration is `intra_op_num_threads = 1`**, which is
-*not* the shipped default. The default (onnxruntime auto, which resolves to 2
-on this hardware) is mildly slower. Both are recorded below; per §17.16 the
-superseded default figure is kept with its provenance rather than overwritten,
-because every earlier number in this issue was taken under it.
+**The shipped configuration is now `intra_op_num_threads = 1`** (2026-09-04),
+pinned in `tts.py` and asserted by two tests. Per §17.16 the superseded
+onnxruntime-auto figure is kept below with its provenance rather than
+overwritten, because every earlier number in this issue was taken under it.
 
 | configuration | 673-char passage | 76-char question |
 |---|---:|---:|
-| `intra_op=1` — best measured | **66.80 s** · RTF **1.62×** | **7.83 s** · RTF **1.79×** |
-| default (auto → 2) — *shipped, superseded as best* | 69.99 s · RTF 1.70× | 9.09 s · RTF 2.08× |
+| `intra_op=1` — **CURRENT, shipped 2026-09-04** | **66.80 s** · RTF **1.62×** | **7.83 s** · RTF **1.79×** |
+| default (auto → 2) — *superseded, all figures below predate this* | 69.99 s · RTF 1.70× | 9.09 s · RTF 2.08× |
 
-The default costs 4.6% on the passage and 13.8% on the question. Real, small,
-and **not changed in this task** — the sweep was measurement only, and flipping
-the default is a separate commit gated on this result.
+The old default cost 4.6% on the passage and 13.8% on the question. Verified
+through the real call path after shipping, not just in the sweep harness:
+`tts.synthesize()` on the 76-char question measures 7.90 s median (7.85, 7.93),
+within 1% of the harness figure, so the improvement is realised where callers
+actually reach it.
+
+**This changes no decision and was never expected to.** 7.83 s for a 76-char
+question is still roughly 2× the Arena turn budget floor. It shipped because it
+is the correct value measured, and an inherited default that a future reader
+assumes was chosen is a maintenance liability.
 
 **Neither figure is below 1.0, so nothing here reopens streaming.** The full
 sweep, the hardware it was taken on, and why the curve looks the way it does are
@@ -571,6 +577,57 @@ stated, not a measurement claimed.
   setting. `intra_op_num_threads = 1` beats auto by 4.6% / 13.8%. Changing it is
   a small separate commit, deliberately NOT made here — this task was
   measurement only.
-- **RE-OPENS ELSEWHERE:** on multi-core production hardware the sweep is worth
-  repeating, because nothing here measured a scaling regime. A result from one
-  physical core does not generalise to a box with four.
+- **SHIPPED:** `intra_op_num_threads = 1` is now the default (2026-09-04), with
+  the sweep's numbers as its justification. That was a separate commit, gated on
+  this measurement, exactly as this filing said it should be.
+
+### Do not cite this issue as evidence that Kokoro does not scale
+
+**It is not that. It is evidence that Kokoro does not scale ON THE SUBSTRATE
+THAT SHIPS.** The distinction is the whole result and it is easy to lose.
+
+VKI-9 asked "does thread count close the gap." The answer recorded here is
+narrower: *on one physical core, thread count is not a lever.* A degradation
+curve from n=1 cannot distinguish a compute-bound workload from a
+bandwidth-bound one, because neither regime is observable without real cores to
+add. Anyone quoting these numbers as a property of Kokoro int8, rather than a
+property of Kokoro int8 on a single-core VM, is over-reading them.
+
+**Why the distinction is nonetheless academic for this project.** The intended
+deployment target is Render, and free-tier instances there are understood to be
+single-vCPU — so the substrate that could answer the general question is not the
+substrate that ships. On the deployment path, thread-count-as-lever is answered
+**negatively**, even though hardware with cores might answer differently.
+
+*Attribution and its limit:* the single-vCPU characterisation of Render's free
+tier came from the project owner in the VKI-9 review, and is **not
+independently verified in this session** — no network check was made, and this
+project has already had one filing corrected for asserting a Render mechanism
+that turned out to be wrong (the build-time fetch architecture, Phase 5). It is
+recorded as a stated expectation to confirm at deploy time, alongside the
+outstanding Render cross-check, and not as a vendor fact. If it proves wrong,
+what changes is the "academic" framing above — the measured numbers and the
+negative closure on *this* hardware stand either way.
+
+### The remaining gate on Arena voice
+
+**One input, and it is not a measurement.** VKI-9 closes the last measurable
+lever. Streaming is withdrawn, thread count is exhausted, Piper's speed
+advantage is quantified at 15×. What is left is the thing that made Kokoro
+primary in the first place, and it has never been assessed:
+
+1. Generate the same 3–5 sentences through **Kokoro at `intra_op=1`** and
+   through **Piper**.
+2. Subjective A/B listen.
+3. Decide whether Kokoro's quality is worth 15× the synthesis time on
+   target-hardware Arena turns.
+
+**Step 3 is the project owner's decision, not an agent's**, because the input is
+a human ear and not a number. Nothing further is worth measuring until that
+listen has happened — and the generation harness for step 1 is deliberately NOT
+built yet, pending that request.
+
+- **RE-OPENS ELSEWHERE, with the caveat above:** on multi-core hardware the
+  sweep is worth repeating, because nothing here measured a scaling regime. A
+  result from one physical core does not generalise to a box with four. This is
+  a note for portability, not a pending task for the current deployment target.
