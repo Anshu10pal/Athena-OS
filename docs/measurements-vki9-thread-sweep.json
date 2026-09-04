@@ -1,0 +1,157 @@
+{
+  "default(auto)": {
+    "threads": "default(auto)",
+    "intra_op_effective": 0,
+    "inter_op_effective": 0,
+    "execution_mode": "ExecutionMode.ORT_SEQUENTIAL",
+    "fixtures": {
+      "673-char passage": {
+        "chars": 673,
+        "audio_seconds": 41.125,
+        "synth_median": 69.993,
+        "synth_min": 69.985,
+        "synth_max": 70.206,
+        "rtf_median": 1.702,
+        "rtf_min": 1.7018,
+        "rtf_max": 1.7071,
+        "discarded": []
+      },
+      "76-char question": {
+        "chars": 76,
+        "audio_seconds": 4.373,
+        "synth_median": 9.094,
+        "synth_min": 9.092,
+        "synth_max": 9.103,
+        "rtf_median": 2.0794,
+        "rtf_min": 2.0789,
+        "rtf_max": 2.0815,
+        "discarded": []
+      }
+    },
+    "connection_attempts": 0
+  },
+  "1": {
+    "threads": "1",
+    "intra_op_effective": 1,
+    "inter_op_effective": 0,
+    "execution_mode": "ExecutionMode.ORT_SEQUENTIAL",
+    "fixtures": {
+      "673-char passage": {
+        "chars": 673,
+        "audio_seconds": 41.125,
+        "synth_median": 66.795,
+        "synth_min": 66.621,
+        "synth_max": 67.201,
+        "rtf_median": 1.6242,
+        "rtf_min": 1.62,
+        "rtf_max": 1.6341,
+        "discarded": []
+      },
+      "76-char question": {
+        "chars": 76,
+        "audio_seconds": 4.373,
+        "synth_median": 7.835,
+        "synth_min": 7.827,
+        "synth_max": 7.837,
+        "rtf_median": 1.7915,
+        "rtf_min": 1.7898,
+        "rtf_max": 1.792,
+        "discarded": []
+      }
+    },
+    "connection_attempts": 0
+  },
+  "2": {
+    "threads": "2",
+    "intra_op_effective": 2,
+    "inter_op_effective": 0,
+    "execution_mode": "ExecutionMode.ORT_SEQUENTIAL",
+    "fixtures": {
+      "673-char passage": {
+        "chars": 673,
+        "audio_seconds": 41.125,
+        "synth_median": 70.074,
+        "synth_min": 69.947,
+        "synth_max": 70.309,
+        "rtf_median": 1.7039,
+        "rtf_min": 1.7008,
+        "rtf_max": 1.7097,
+        "discarded": []
+      },
+      "76-char question": {
+        "chars": 76,
+        "audio_seconds": 4.373,
+        "synth_median": 9.1,
+        "synth_min": 9.093,
+        "synth_max": 9.129,
+        "rtf_median": 2.0809,
+        "rtf_min": 2.0792,
+        "rtf_max": 2.0874,
+        "discarded": []
+      }
+    },
+    "connection_attempts": 0
+  },
+  "4": {
+    "threads": "4",
+    "intra_op_effective": 4,
+    "inter_op_effective": 0,
+    "execution_mode": "ExecutionMode.ORT_SEQUENTIAL",
+    "fixtures": {
+      "673-char passage": {
+        "chars": 673,
+        "audio_seconds": 41.125,
+        "synth_median": 83.039,
+        "synth_min": 82.927,
+        "synth_max": 83.665,
+        "rtf_median": 2.0192,
+        "rtf_min": 2.0165,
+        "rtf_max": 2.0344,
+        "discarded": []
+      },
+      "76-char question": {
+        "chars": 76,
+        "audio_seconds": 4.373,
+        "synth_median": 12.761,
+        "synth_min": 12.751,
+        "synth_max": 12.778,
+        "rtf_median": 2.9179,
+        "rtf_min": 2.9155,
+        "rtf_max": 2.9219,
+        "discarded": []
+      }
+    },
+    "connection_attempts": 0
+  },
+  "8": {
+    "threads": "8",
+    "intra_op_effective": 8,
+    "inter_op_effective": 0,
+    "execution_mode": "ExecutionMode.ORT_SEQUENTIAL",
+    "fixtures": {
+      "673-char passage": {
+        "chars": 673,
+        "audio_seconds": 41.125,
+        "synth_median": 109.846,
+        "synth_min": 109.524,
+        "synth_max": 110.8,
+        "rtf_median": 2.671,
+        "rtf_min": 2.6632,
+        "rtf_max": 2.6943,
+        "discarded": []
+      },
+      "76-char question": {
+        "chars": 76,
+        "audio_seconds": 4.373,
+        "synth_median": 19.904,
+        "synth_min": 19.854,
+        "synth_max": 19.942,
+        "rtf_median": 4.5511,
+        "rtf_min": 4.5398,
+        "rtf_max": 4.5599,
+        "discarded": []
+      }
+    },
+    "connection_attempts": 0
+  }
+}

@@ -351,7 +351,27 @@ filed, against Arena Phase B.
 
 **Owner: Interview Arena voice. Re-measured 2026-09-03 under the Phase 5
 configuration; the conclusion got sharper and one of the three options I
-originally listed is now ruled out.**
+originally listed is now ruled out. Thread-swept 2026-09-04 (VKI-9): the
+conclusion HELD and streaming stays withdrawn.**
+
+**Current best-known configuration is `intra_op_num_threads = 1`**, which is
+*not* the shipped default. The default (onnxruntime auto, which resolves to 2
+on this hardware) is mildly slower. Both are recorded below; per §17.16 the
+superseded default figure is kept with its provenance rather than overwritten,
+because every earlier number in this issue was taken under it.
+
+| configuration | 673-char passage | 76-char question |
+|---|---:|---:|
+| `intra_op=1` — best measured | **66.80 s** · RTF **1.62×** | **7.83 s** · RTF **1.79×** |
+| default (auto → 2) — *shipped, superseded as best* | 69.99 s · RTF 1.70× | 9.09 s · RTF 2.08× |
+
+The default costs 4.6% on the passage and 13.8% on the question. Real, small,
+and **not changed in this task** — the sweep was measurement only, and flipping
+the default is a separate commit gated on this result.
+
+**Neither figure is below 1.0, so nothing here reopens streaming.** The full
+sweep, the hardware it was taken on, and why the curve looks the way it does are
+in VKI-9.
 
 Measured offline, model already warm, so these are synthesis times and not load
 times. Kokoro n=2, Piper n=3, median with (min, max); spreads are under 0.4 s,
@@ -407,26 +427,34 @@ conclusion never depended on the error, but the figures did.)*
 
 **What remains open for Arena, revised:**
 
-- **Measure onnxruntime intra-op thread count FIRST.** See VKI-9 — this is an
-  hour of work that can invalidate everything below it, so it is not one option
-  among several, it is the thing to do before choosing among them.
+- ~~**Measure onnxruntime intra-op thread count FIRST.**~~ **DONE 2026-09-04,
+  and it did not invalidate anything below it.** The sweep came back adverse:
+  RTF rises monotonically with thread count on this hardware and the best case
+  (1 thread, RTF 1.62×) is still 62% slower than playback. See VKI-9. The one
+  actionable residue is that the shipped default is not the best setting —
+  worth a small separate commit, not a change to the trade.
 - **Switch the primary to Piper**, at a quality cost that has not been measured.
   Cheapest by far: no new dependency, no new weights, one env var. Blocked on a
   quality comparison nobody has run.
 - **A faster Kokoro.** int8 is already the smallest published variant, so this
   means a different model rather than more quantisation.
-- **Thread/session tuning, untested.** onnxruntime's default intra-op thread
-  count may not be using the available cores; this is the cheapest thing to
-  check and it has *not* been checked. Stated as a hypothesis with a named
-  mechanism, not a finding.
+- ~~**Thread/session tuning, untested.**~~ **Tested and closed negative on this
+  hardware (VKI-9).** The hypothesis was that the default might not be using
+  the available cores. It is using them; there is only one physical core to use,
+  and every thread count above 1 made things strictly worse. Recorded as a
+  failed hypothesis rather than deleted — it was the cheapest thing to check,
+  checking it was correct, and the answer was no.
 - **Accepting a slower turn**, if the product can — an 8.5 s pause before each
   spoken question is a product decision, not a bug.
 - **Streaming, only in combination with something that gets RTF below 1.** Not
-  on its own.
+  on its own. Nothing in the thread sweep supplies that, so this stays
+  conditional and unopened.
 
-A 72-char question costing 8.5 s sits well outside a 2–4 s interview-turn
-budget. The projection originally filed here (3–10 s per turn) was right at its
-upper bound.
+A 76-char question costs 7.83 s at the best measured setting, against a 2–4 s
+interview-turn budget — still roughly 2× over at the floor of what thread
+tuning can reach. The projection originally filed here (3–10 s per turn) was
+right at its upper bound, and tuning moved the number without moving the
+verdict.
 
 ---
 
@@ -444,44 +472,105 @@ the first is currently supported. It lands whenever the next deploy does.
 
 ---
 
-## VKI-9 — Kokoro's thread count has never been tuned, and it gates the Arena voice decision
+## VKI-9 — CLOSED NEGATIVE 2026-09-04: thread count cannot close the gap on this hardware
 
-**Filed as the CHEAPEST test available, and it must run before Arena voice
-chooses between Kokoro and Piper.**
+**Filed 2026-09-03 as the cheapest test available and the gate on the Arena
+voice decision. Measured 2026-09-04. The hypothesis failed, the gate is
+discharged, and streaming stays withdrawn.**
 
-Every Kokoro latency figure in VKI-8 was measured at onnxruntime's default
-intra-op thread count. Nobody set it. `onnxruntime` also reported only
-`['AzureExecutionProvider', 'CPUExecutionProvider']` on this machine, so there
-is no accelerator involved and thread count is the main lever left.
+### The measurement
 
-**The measurement:** Kokoro RTF on target hardware at intra-op threads of
-**1, 2, 4, 8**, on the same 673-char passage and 76-char question VKI-8 pins,
-n=3, median with (min, max) — the same protocol, so the numbers are comparable
-to the ones already filed.
+Kokoro int8, offline, egress blocked, weights pre-fetched, model warm, no
+concurrent synthesis. Same two fixtures VKI-8 pins, with `len(passage) == 673`
+and `len(question) == 76` asserted in the harness rather than trusted. n=3 per
+cell, median with (min, max). 30 clean synthesis calls, **0 discarded, 0
+connection attempts**.
 
-**Why it is high leverage rather than an optimisation chore.** VKI-8's central
-conclusion is that Kokoro's RTF of 1.71 forbids streaming synthesis: the
-synthesiser falls behind playback and stalls mid-utterance. That conclusion is
-load-bearing for the whole Arena voice design.
+| intra-op threads | 673-char RTF | 76-char RTF | 673-char sec | 76-char sec |
+|---|---:|---:|---:|---:|
+| **1** | **1.62** (1.62, 1.63) | **1.79** (1.79, 1.79) | **66.80** | **7.83** |
+| 2 | 1.70 (1.70, 1.71) | 2.08 (2.08, 2.09) | 70.07 | 9.10 |
+| 4 | 2.02 (2.02, 2.03) | 2.92 (2.92, 2.92) | 83.04 | 12.76 |
+| 8 | 2.67 (2.66, 2.69) | 4.55 (4.54, 4.56) | 109.85 | 19.90 |
+| default (auto) | 1.70 (1.70, 1.71) | 2.08 (2.08, 2.08) | 69.99 | 9.09 |
 
-> **If any thread configuration produces RTF < 1, streaming synthesis
-> re-enters the design space and VKI-8's design implications change
-> materially.**
+Spreads are under 1% of the median everywhere, so these are reproducible
+numbers, not single-shot readings.
 
-A Kokoro that streams is a different engine, product-wise, from one that makes a
-candidate wait 9 seconds before every question — and it would remove the reason
-to consider trading voice quality for Piper's speed at all.
+**inter-op thread count was HELD CONSTANT** at onnxruntime's default (0 = auto)
+for every cell, and `execution_mode` stayed `ORT_SEQUENTIAL` (the CPU default),
+under which inter-op threads are not used at all. Only `intra_op_num_threads`
+varied. Providers were `['CPUExecutionProvider']` throughout.
 
-**Stated as a hypothesis with a named mechanism, not a finding.** The mechanism
-is that ONNX matmul kernels parallelise across intra-op threads and the default
-may not be using the available cores. It may also do nothing: quantised int8
-kernels can be memory-bandwidth-bound, in which case more threads buy little.
-Both outcomes are useful and neither is known today.
+**The default resolves to 2.** The `default (auto)` row and the `2` row agree to
+within 0.1 s on both fixtures, which identifies what auto picks on this box
+rather than leaving it inferred.
 
-**Sequencing, and this is the point of filing it:** run this BEFORE the
-Kokoro-vs-Piper decision, not after. Choosing an engine on numbers taken at an
-untuned default risks trading away voice quality to solve a problem that a
-configuration line already solved. One hour of work standing in front of a
-decision that is expensive to reverse.
+### The hardware, without which "1 thread" means nothing
 
-**Cost:** ~1 hour. **Blocks:** the Arena voice phase.
+```
+AMD EPYC 7763 64-Core Processor
+  sockets 1 · cores per socket 1 · threads per core 2
+  -> 1 PHYSICAL CORE, 2 LOGICAL CPUs   (os.cpu_count() = 2)
+  L3 32 MiB · RAM 7 GiB
+onnxruntime 1.29.0 · providers ['AzureExecutionProvider', 'CPUExecutionProvider']
+```
+
+The part that matters: the host CPU is a 64-core part, but **this VM is
+allocated one physical core.** Thread counts 4 and 8 were measured as specified
+and are pure oversubscription of a single core — they are not scaling
+measurements and must not be read as any.
+
+### Any RTF < 1? NO
+
+The lowest real-time factor anywhere in the sweep is **1.62× at 1 thread on the
+673-char passage**. Nothing came within 60% of the 1.0 threshold.
+
+> **The RTF < 1 gate did not fire. Streaming synthesis stays WITHDRAWN and does
+> not re-enter the Arena voice design space.** VKI-8's implication paragraph
+> stands as written.
+
+### The shape of the curve, and what it does NOT tell us
+
+RTF is **strictly monotonically increasing** with thread count on both fixtures
+— 1.62 → 1.70 → 2.02 → 2.67 on the passage, 1.79 → 2.08 → 2.92 → 4.55 on the
+question. Every step up made it worse. Eight threads costs 1.64× the passage
+time and 2.54× the question time of one thread.
+
+**This is oversubscription overhead, not a bound on the workload.** With one
+physical core there is no parallelism to win, so each added thread buys nothing
+and pays synchronisation and context-switch cost. The short fixture degrades
+faster than the long one (2.54× versus 1.64×), which fits: per-call thread
+overhead is a larger share of a 7.83 s call than of a 66.80 s one.
+
+**So the compute-bound-versus-memory-bandwidth-bound question I named in the
+original filing is NOT answered by this measurement, and I am not going to read
+an answer off this curve.** Distinguishing those requires observing how
+throughput scales as real cores are added, and this hardware has no scaling
+regime to observe — the curve never rises and then plateaus, it only degrades
+from n=1. The honest result is: *on one physical core, thread count is not a
+lever.* Whether Kokoro int8 would scale on 4 or 8 real cores is untested and
+remains open.
+
+**Not extrapolated:** 16 threads was not measured and is not projected. It was
+also not worth measuring — the curve is already degrading monotonically and
+more oversubscription of one core cannot reverse that — but that is a judgment
+stated, not a measurement claimed.
+
+### What this closes and what it leaves
+
+- **CLOSED:** thread tuning as a route to an Arena-viable Kokoro turn on this
+  hardware. The gate on the Arena voice decision is discharged.
+- **CLOSED:** the Kokoro-vs-Piper trade keeps the shape VKI-8 gives it. Kokoro's
+  side improved by 4.6–13.8% and did not change category; Piper's Phase 6
+  numbers stand untouched (not re-measured here, deliberately).
+- **STILL OPEN, and now the only open input:** voice quality. The trade has one
+  measured side and one unmeasured side, and **this measurement gates the
+  decision, it does not make it.**
+- **STILL OPEN, newly separated:** the shipped default is not the best measured
+  setting. `intra_op_num_threads = 1` beats auto by 4.6% / 13.8%. Changing it is
+  a small separate commit, deliberately NOT made here — this task was
+  measurement only.
+- **RE-OPENS ELSEWHERE:** on multi-core production hardware the sweep is worth
+  repeating, because nothing here measured a scaling regime. A result from one
+  physical core does not generalise to a box with four.
