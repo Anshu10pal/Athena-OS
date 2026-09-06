@@ -4,6 +4,21 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 
+/** An Error that also carries the HTTP status.
+ *
+ *  `instanceof Error` still holds and `.message` is unchanged, which is what
+ *  keeps this additive: the existing `.catch(() => setX(null))` callers behave
+ *  exactly as they did. Only code that asks for `.status` sees anything new.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export async function api<T = any>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string>),
@@ -19,7 +34,11 @@ export async function api<T = any>(path: string, options: RequestInit = {}): Pro
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `Request failed (${res.status})`);
+    // ADDITIVE: the status is attached to the SAME Error that was thrown
+    // before, so every existing caller -- all of which read only `.message`
+    // -- is unaffected. Callers that need to tell 404 from 409 can now do so
+    // without a second request or string-matching the message.
+    throw new ApiError(body.detail || `Request failed (${res.status})`, res.status);
   }
   return res.json();
 }
@@ -735,6 +754,7 @@ export async function streamChat(
     }
   }
 }
+
 // ---------------- Interview Arena (Phase A) ----------------
 //
 // Namespaced `arena`, not `interview`: /api/interview is the original MVP flow,
@@ -808,3 +828,15 @@ export const arenaDecideMerge = (
  *  that drifts is always the one on screen. */
 export const arenaReadiness = (id: number) =>
   api<ArenaReadinessT>(`/api/arena/job-target/${id}/readiness`);
+
+/** Phase 8: one file's dependency neighbourhood plus its token accounting.
+ *
+ *  Errors are NOT swallowed here. `/context` distinguishes 404 (no such file)
+ *  from 409 (file exists, absent from the graph snapshot), and `loadContext` in
+ *  contextLoad.ts turns those into distinct UI states -- see D10. A
+ *  `.catch(() => null)` at this layer would destroy that information before the
+ *  caller ever sees it.
+ */
+export function fetchContext<T = any>(repoId: string, fileId: number): Promise<T> {
+  return api<T>(`/api/repos/${repoId}/files/${fileId}/context`);
+}

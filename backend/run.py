@@ -1,3 +1,5 @@
+import os
+import socket
 import sys
 
 import uvicorn
@@ -30,5 +32,42 @@ sys.stdout.reconfigure(line_buffering=True)
 # record for the open Dependency Graph crash (reported once, boundary-caught,
 # never reproduced, triggered by a filter interaction) and the next occurrence
 # should be diagnosable from it rather than from another reproduction hunt.
+# THE PORT GUARD. Moved here from app/main.py on 2026-09-04; see the note there
+# for why, and do not move it back.
+#
+# WHAT IT CATCHES, which is real and was found live during Phase H1.5: two
+# independent `uvicorn --reload` processes left running from different points in
+# one long session produced several minutes of requests that appeared to hang
+# with no error anywhere, because each landed on whichever process's worker
+# happened to still be alive and busy.
+#
+# WHY *HERE* AND NOWHERE ELSE. This is the parent, and it runs BEFORE
+# `uvicorn.run` binds anything -- so the probe answers the question actually
+# being asked ("is some OTHER server already on this port") rather than the
+# question a worker-side probe is forced to answer ("is anything on this port",
+# to which its own reloader parent is always the answer).
+#
+# NOT special-cased on reload, and NOT detecting the parent via getppid or any
+# uvicorn internal. Both were considered and rejected: a guard whose correctness
+# depends on undocumented process topology is a fragile instrument protecting
+# against a fragile failure, and this project has enough recorded instances of
+# the instrument being the thing that broke. Running once, in the right process,
+# needs no cleverness and no exclusions.
+def _fail_loudly_if_port_already_bound(port: int) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.5)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            raise RuntimeError(
+                f"127.0.0.1:{port} is already answering -- another backend instance is "
+                "still running (or never fully stopped). Kill it before starting a new "
+                "one; two overlapping dev servers silently share the port and requests "
+                "hang unpredictably instead of failing clearly."
+            )
+
+
+PORT = int(os.environ.get("PORT", "8000"))
+
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)
+    # Once, in the parent, before anything binds.
+    _fail_loudly_if_port_already_bound(PORT)
+    uvicorn.run("app.main:app", host="127.0.0.1", port=PORT, reload=True)

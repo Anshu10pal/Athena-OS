@@ -1,0 +1,527 @@
+<title>Athena Phase Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#f6f6fa; --surface:#ffffff; --surface-2:#f0f0f6;
+    --ink:#1a1a2e; --ink-2:#43435c; --muted:#6b6b85;
+    --line:#e2e2ee; --line-strong:#c9c9dc;
+    --accent:#4f46a8; --accent-soft:#ecebf8;
+    --ok:#1a7f4b; --ok-soft:#e4f3ea; --ok-line:#a8d8bd;
+    --wip:#9a6c00; --wip-soft:#fbf1d9; --wip-line:#e6c878;
+    --none:#a83232; --none-soft:#fbe9e9; --none-line:#e5aeae;
+    --shadow:0 1px 2px rgba(26,26,46,.06), 0 8px 24px -16px rgba(26,26,46,.24);
+    --display:"Archivo","Helvetica Neue",Arial,sans-serif;
+    --body:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#12121c; --surface:#1b1b28; --surface-2:#22222f;
+      --ink:#e9e9f4; --ink-2:#c0c0d4; --muted:#9494ac;
+      --line:#2e2e3f; --line-strong:#41415a;
+      --accent:#a9a2f0; --accent-soft:#252341;
+      --ok:#4fc98a; --ok-soft:#16311f; --ok-line:#2d6b47;
+      --wip:#e8b23c; --wip-soft:#31280f; --wip-line:#6d5720;
+      --none:#ef8080; --none-soft:#331a1a; --none-line:#6e3535;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12121c; --surface:#1b1b28; --surface-2:#22222f;
+    --ink:#e9e9f4; --ink-2:#c0c0d4; --muted:#9494ac;
+    --line:#2e2e3f; --line-strong:#41415a;
+    --accent:#a9a2f0; --accent-soft:#252341;
+    --ok:#4fc98a; --ok-soft:#16311f; --ok-line:#2d6b47;
+    --wip:#e8b23c; --wip-soft:#31280f; --wip-line:#6d5720;
+    --none:#ef8080; --none-soft:#331a1a; --none-line:#6e3535;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.7);
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:var(--body);
+       font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:34px 22px 72px}
+
+  /* ---- masthead ---- */
+  .mast{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;
+        justify-content:space-between;padding-bottom:20px;
+        border-bottom:1px solid var(--line-strong)}
+  .eyebrow{font-family:var(--mono);font-size:11px;font-weight:500;
+           letter-spacing:.13em;text-transform:uppercase;color:var(--accent);margin:0 0 8px}
+  h1{font-family:var(--display);font-weight:700;font-size:clamp(28px,4.2vw,40px);
+     line-height:1.08;letter-spacing:-.022em;margin:0;text-wrap:balance}
+  .sub{color:var(--ink-2);margin:10px 0 0;max-width:56ch}
+  .asof{font-family:var(--mono);font-size:12px;color:var(--muted);
+        text-align:right;line-height:1.7;white-space:nowrap}
+  .asof b{color:var(--ink);font-weight:600}
+
+  /* ---- summary tiles ---- */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+         gap:12px;margin:22px 0 0}
+  .tile{background:var(--surface);border:1px solid var(--line);border-radius:9px;
+        padding:13px 15px;display:flex;flex-direction:column;gap:3px}
+  .tile .n{font-family:var(--display);font-size:29px;font-weight:700;
+           line-height:1;font-variant-numeric:tabular-nums}
+  .tile .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;
+           text-transform:uppercase;color:var(--muted)}
+  .tile.ok .n{color:var(--ok)} .tile.active .n{color:var(--wip)} .tile.none .n{color:var(--none)}
+
+  /* ---- controls ---- */
+  .bar{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin:26px 0 16px}
+  .bar .lbl{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;
+            text-transform:uppercase;color:var(--muted);margin-right:2px}
+  button{font-family:var(--body);font-size:12.5px;font-weight:500;color:var(--ink-2);
+         background:var(--surface);border:1px solid var(--line);border-radius:999px;
+         padding:5px 13px;cursor:pointer;transition:background .13s,border-color .13s,color .13s}
+  button:hover{border-color:var(--line-strong);color:var(--ink)}
+  button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .spacer{flex:1 1 auto}
+
+  /* ---- phase row ---- */
+  .board{display:flex;flex-direction:column;gap:11px}
+  .ph{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+      box-shadow:var(--shadow);overflow:hidden;display:grid;grid-template-columns:5px 1fr}
+  .rail{background:var(--line-strong)}
+  .ph.done .rail{background:var(--ok)} .ph.active .rail{background:var(--wip)} .ph.none .rail{background:var(--none)}
+  .ph-in{padding:15px 17px 16px;min-width:0}
+
+  .ph-head{display:flex;flex-wrap:wrap;gap:10px 13px;align-items:baseline}
+  .pid{font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--accent);
+       background:var(--accent-soft);border-radius:5px;padding:2px 7px;white-space:nowrap}
+  .pname{font-family:var(--display);font-size:17.5px;font-weight:600;letter-spacing:-.012em;
+         margin:0;flex:1 1 240px;min-width:0;text-wrap:balance}
+  .ph-meta{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+
+  .pill{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.07em;
+        text-transform:uppercase;border-radius:999px;padding:3px 9px;white-space:nowrap;
+        border:1px solid transparent}
+  .pill.done{color:var(--ok);background:var(--ok-soft);border-color:var(--ok-line)}
+  .pill.active{color:var(--wip);background:var(--wip-soft);border-color:var(--wip-line)}
+  .pill.none{color:var(--none);background:var(--none-soft);border-color:var(--none-line)}
+  .frac{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+  .note{color:var(--ink-2);font-size:14px;margin:9px 0 0;max-width:74ch}
+
+  /* segmented progress: one segment per checkpoint */
+  .seg{display:flex;gap:2px;margin:12px 0 0;height:5px;border-radius:3px;overflow:hidden}
+  .seg i{flex:1 1 0;background:var(--line-strong)}
+  .seg i.done{background:var(--ok)} .seg i.active{background:var(--wip)} .seg i.none{background:var(--none)}
+
+  /* sub-phases */
+  .steps{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));
+         gap:7px;margin:13px 0 0;padding:0;list-style:none}
+  .step{display:flex;gap:8px;align-items:flex-start;background:var(--surface-2);
+        border:1px solid var(--line);border-radius:7px;padding:7px 10px;min-width:0}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none;margin-top:6px;background:var(--line-strong)}
+  .step.done .dot{background:var(--ok)} .step.active .dot{background:var(--wip)} .step.none .dot{background:var(--none)}
+  .step-txt{min-width:0}
+  .step-id{font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--ink)}
+  .step-nm{font-size:12.5px;color:var(--ink-2);overflow-wrap:break-word}
+  .badge{display:inline-block;font-family:var(--mono);font-size:9.5px;font-weight:600;
+         letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+         border:1px solid var(--accent);border-radius:4px;padding:0 4px;margin-left:5px;
+         vertical-align:1px}
+
+  /* caveats + evidence */
+  .flag{display:flex;gap:9px;margin:12px 0 0;padding:9px 12px;border-radius:7px;
+        font-size:13.5px;background:var(--wip-soft);border:1px solid var(--wip-line);color:var(--ink)}
+  .flag.conflict{background:var(--none-soft);border-color:var(--none-line)}
+  .flag b{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+          color:var(--wip);flex:none;padding-top:2px}
+  .flag.conflict b{color:var(--none)}
+  .ev{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:11px 0 0;
+      overflow-x:auto;white-space:nowrap;padding-bottom:2px}
+  /* What to pick up. Deliberately the strongest-looking block on a row: the
+     board's job is to be actionable, and everything else is context for this. */
+  .next{display:flex;gap:9px;margin:12px 0 0;padding:9px 12px;border-radius:7px;
+        font-size:13.5px;background:var(--accent-soft);
+        border:1px solid var(--accent);color:var(--ink)}
+  .next b{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;
+          text-transform:uppercase;color:var(--accent);flex:none;padding-top:2px}
+  .deferred{font-size:13px;color:var(--muted);margin:10px 0 0}
+  .deferred b{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;
+              text-transform:uppercase;color:var(--ink-2)}
+
+  footer{margin:34px 0 0;padding-top:18px;border-top:1px solid var(--line);
+         font-size:13px;color:var(--muted);max-width:74ch}
+  footer code{font-family:var(--mono);font-size:12px;color:var(--ink-2);
+              background:var(--surface-2);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+  .empty{color:var(--muted);font-size:14px;padding:24px 0}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+  .asof .prov{margin-top:8px;margin-left:auto;max-width:30ch;white-space:normal;
+              font-size:11px;line-height:1.5;color:var(--muted);
+              border-top:1px solid var(--line);padding-top:7px}
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <div>
+      <p class="eyebrow">Athena OS · codebase agent · interview arena · voice</p>
+      <h1>Phase Board</h1>
+      <p class="sub">Every phase and checkpoint, what it does, what is still open, and
+        what to pick up next — three workstreams on one board. Rows marked
+        <b>Next</b> are actionable now. This mirrors
+        <code style="font-family:var(--mono);font-size:12.5px">docs/decisions.md</code>,
+        which stays authoritative: if the two disagree, that file is right and this
+        page is stale.</p>
+    </div>
+    <div class="asof" id="asof"></div>
+  </header>
+
+  <section class="tiles" id="tiles" aria-label="Status summary"></section>
+
+  <div class="bar">
+    <span class="lbl">Show</span>
+    <button data-f="all" aria-pressed="true">All</button>
+    <button data-f="done" aria-pressed="false">Completed</button>
+    <button data-f="active" aria-pressed="false">In progress</button>
+    <button data-f="none" aria-pressed="false">Not started</button>
+    <span class="spacer"></span>
+    <button id="toggle" aria-pressed="true">Hide checkpoints</button>
+  </div>
+
+  <main class="board" id="board"></main>
+
+  <footer>
+    <p style="margin:0 0 14px"><strong style="color:var(--ink-2)">Where the real detail lives.</strong>
+    <code>docs/decisions.md</code> — every decision, what was rejected, and why; the
+    per-checkpoint rows this board summarises.
+    <code>docs/code-health-contract.md</code> — §17, 42 recorded instrument failures and
+    the rule each produced. Read §17.16 (mark stale figures, never silently correct),
+    §17.25 (an answer whose completeness the consumer cannot assess), §17.30 (an
+    instrument reporting the absence of what it cannot see) and §17.37 (a perceptual
+    property needs observation, not a presence test) before changing how anything is
+    measured or displayed.
+    <code>docs/phase6-graph-as-context.md</code> — Phase 6 in narrative form with every
+    number.
+    <code>docs/TROUBLESHOOTING.md</code> — the environment traps, in the order they bite.
+    <code>docs/arena-known-issues.md</code> and <code>docs/voice-known-issues.md</code> —
+    KI-1…KI-4 and VKI-1…VKI-9.</p>
+    <p style="margin:0"><strong style="color:var(--ink-2)">To update this page:</strong> edit the
+    <code>PHASES</code> array at the top of this file's script and set <code>status</code> to
+    <code>"done"</code>, <code>"active"</code> or <code>"none"</code>. Counts, tiles, rails and
+    progress bars all derive from it — nothing else needs touching. Optional per row:
+    <code>note</code>, <code>caveat</code>, <code>conflict</code>, <code>next</code>,
+    <code>deferred</code>, <code>evidence</code>, <code>steps[]</code>. Bump <code>AS_OF</code>
+    at the same time.</p>
+  </footer>
+</div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════════
+   EDIT BELOW THIS LINE — everything on the page renders from it.
+
+   status: "done"   → green   (completed)
+           "active" → yellow  (in progress)
+           "none"   → red     (not started)
+
+   Optional per phase:  note, evidence, caveat, conflict, deferred, next, steps[]
+                        kind:"findings"  (a measurement row, not a phase)
+   Optional per step:   layers:"both"   (closed at protocol AND extension layer)
+   ════════════════════════════════════════════════════════════════════ */
+
+const AS_OF  = "2026-09-04";
+const BRANCH = "arena/phase-a";
+const HEAD   = "08bc9ff";
+/* Two workstreams share this board. The codebase-agent phases (A-D…8, :682)
+   were recorded on codebase-agent/phase4-5-and-682 @ aa8dfed; Arena and Voice
+   are on arena/phase-a. Stated rather than flattened -- a single branch line
+   would misattribute half the rows. */
+const PROVENANCE = "codebase-agent rows recorded on codebase-agent/phase4-5-and-682 @ aa8dfed. Suites: backend 1,534 passed / 1 skipped; frontend 27 files / 357 tests + 9 Playwright. Contract at 42 subsections (newest 17.36, 17.37).";
+
+const PHASES = [
+  { id:"A–D", name:"Ingest, parse, import resolution, ranking", status:"done",
+    note:"Closed clean. THE FOUNDATION EVERYTHING ELSE READS THROUGH: clone a repo, walk it, parse each file with tree-sitter, resolve import specifiers to file ids where possible, and rank files by combining graph signals (fan-in, fan-out, pagerank, entry-point) with git-history signals. Produces the code_files and code_imports tables that Phases 6 and 8 query. Python and JS/TS only — that is what Phase 7 exists to extend.",
+    caveat:"56% of Superset's import edges do NOT resolve to a file (they are stdlib or third-party specifiers). This is correct behaviour, not a defect, but it means fan-in/fan-out understate raw import counts and every consumer must treat unresolved as external rather than missing.",
+    evidence:"migrations c0a62258a8f6…2e4f4b743bea · test_ingest.py (72) · test_ranking.py (90) · test_resolve_imports.py (18)" },
+
+  { id:"E", name:"Entry detection", status:"done",
+    note:"Closed clean. Finds a repo's ENTRY POINTS — the files execution actually starts from — by reading Dockerfile CMD/ENTRYPOINT (both JSON exec and shell form), Procfile, render.yaml startCommand, and setup.py console_scripts, rather than guessing from filenames. Feeds reachability: a file no entry point can reach is a different kind of file from one that is central.",
+    evidence:"entry_detection.py · test_entry_detection.py (45)" },
+
+  { id:"F–H", name:"Architecture map, matrix, layers, focus", status:"active",
+    note:"UI ships and renders. Two surfaces still carry real defects: Layers renders the 400-capped array with no truncation notice, and Focus reports the capped count.",
+    conflict:"The phase table calls this partial because “:682's frontend half is open” — but the :682 checkpoint table below says all seven are done and “:682 is CLOSED”. One of the two is stale; resolve before quoting either.",
+    next:"RESOLVE THE CONFLICT FIRST — do not quote either figure until you know which is stale. Then two real defects remain: Layers renders the 400-capped array with no truncation notice (a user sees ≤400 files under a counter saying 6,523), and Focus's shownFileCount falls through to the capped array length.",
+    evidence:"RepoDetail.tsx:776-787 · c3f8018 · 213ee95" },
+
+  { id:"I", name:"Subsystem clustering (I1–I6)", status:"done",
+    note:"Closed clean across all six sub-steps. Groups files into SUBSYSTEMS from the import graph alone — no naming heuristics, no folder assumptions. Three algorithms are stored side by side (modularity, louvain, hdbscan) so they can be compared rather than trusted. modularity is the one the UI colours by. This is what lets the Context view say a dependency CROSSES a subsystem boundary, which is the signal that a change is riskier than it looks.",
+    caveat:"Unclustered files are excluded from every vote rather than treated as a cluster of their own — two files that each failed to cluster have not agreed on anything. On Superset every file happens to be clustered, so the null path is real code that no production payload has exercised.",
+    evidence:"8dc08ed8f03e · 425611792c27 · 49b14fd05c27 · d5e1a7c93f20 · e6f2b8d41a37 · test_subsystems.py (42)" },
+
+  { id:"J1 / K1", name:"Health, overview, description", status:"done",
+    note:"Closed with a documented gap. Per-file and per-directory HEALTH scores plus a repo overview: complexity, churn, and structural signals rolled up so a reader can see where a codebase is under strain. Snapshots are stored so trends are visible over time rather than only the current state.",
+    caveat:"Thresholds are not calibrated across ecosystems (§17.0), and health at 30.6s is recorded as gating Phase 8.",
+    evidence:"ast_metrics._iter_subtree — 35.8M calls, the named hot spot" },
+
+  { id:"4", name:"Module / roadmap persistence", status:"done",
+    next:"Wire POST /api/repos/{id}/roadmap to a button on the repo page. Roughly one control plus verification — the smallest open item in the project, and it turns a script-only capability into a usable one.",
+    note:"Closed. Output is visible: all 3 roadmaps appear in the library with modules, topics and progress working. Live: 145 modules.",
+    caveat:"Creation is unwired — POST /api/repos/{id}/roadmap has no frontend caller, so a new user would never get a roadmap. Roughly one button plus verification.",
+    evidence:"f8a3c21d9b45 · a1c9e37f4b82" },
+
+  { id:"5", name:"Comprehension cards", status:"active",
+    next:"BUILD THE CARD UI. Nothing is blocked: card_grading.grade_card is written, tested and uncalled; ComprehensionCard.module_id already points at modules rendered at /modules/:slug; ModuleAssessment has the right shape for attempts with zero code referencing it. Needs a queue component, grading wiring, an attempt record, and browser verification — multi-checkpoint, comparable in size to :682. This is the single largest built-but-unreachable capability in the project.",
+    note:"Backend complete and tested. 661 cards live (564 superset / 70 eslint / 27 Athena-OS).",
+    caveat:"NO USER SURFACE. grep over frontend/src/ finds zero references; cards are reachable only via GET/POST /api/repos/{id}/cards. Blocked on nothing — grade_card is written, tested and uncalled. Multi-checkpoint work.",
+    evidence:"c4b7e9d2f501 · repos.py:1299 · repos.py:1339" },
+
+  { id:"6", name:"Codebase Atlas → graph as targeting map", status:"done",
+    note:"DONE END TO END as of 2026-09-03. Five pieces, all exercised together: graph exported, read boundary defined, neighbourhood queryable, MCP server exposed, hook enforcing. Pooled saving 219.7x (99.5% reduction), zero sufficiency misses — read the distribution, not the pooled figure.",
+    caveat:"Residual: the hook's first-raw-read-of-session ordering is proven at the script layer by 15 tests, but NOT at the extension layer — one qualifying Read went through un-intercepted in the same session that confirmed the fire.",
+    steps:[
+      { id:"0",  name:"Feasibility gate",            status:"done" },
+      { id:"1a", name:"Read boundary",                status:"done" },
+      { id:"1b", name:"Emitter",                      status:"done" },
+      { id:"2",  name:"Neighbourhood query",          status:"done" },
+      { id:"3",  name:"Benchmark",                    status:"done" },
+      { id:"4a", name:"MCP transport gate",           status:"done", layers:"both" },
+      { id:"4b", name:"Graph MCP server",             status:"done", layers:"both" },
+      { id:"5",  name:"PreToolUse enforcement hook",  status:"done", layers:"both" }
+    ],
+    next:"Optional and additive: `path` and `explain` query primitives over the same cached graph, and migrating _build_graph's five remaining callers onto the read boundary (its own checkpoint, opening with the per-consumer unresolved-edge question). Neither blocks anything.",
+    deferred:"path and explain query primitives · migrating _build_graph's five callers onto the boundary · onboarding-question queries and subsystem summaries — deferred, not cut.",
+    evidence:"superset @ a05a0999 — 6,584 files / 61,559 imports · tiktoken cl100k" },
+
+  { id:"7", name:"Multi-language expansion", status:"none",
+    next:"Not before the Phase 6/8 demo lands — proven-then-expanded is the decision, not an accident of scheduling. When it opens, one language per checkpoint, each with its own fixture repo and a canary observed failing first. Adding a language is 'wire the grammar\u2019s node types to node/edge extraction', not 'write a parser'.",
+    note:"KEEPS this number after the 2026-09-04 renumber — the UI work took 8, and drift detection moved to 9. Registered and deliberately deferred until the Phase 6 demo lands — proven-then-expanded. Tree-sitter extractors for Go, Rust, Java, C#; one language per checkpoint, each with a fixture repo and a canary.",
+    caveat:"No files, no migrations, no tests. Atlas-layer only — Phase 6's query layer is language-agnostic and needs no change per language.",
+    steps:[
+      { id:"Go",   name:"Grammar → node/edge extraction", status:"none" },
+      { id:"Rust", name:"Grammar → node/edge extraction", status:"none" },
+      { id:"Java", name:"Grammar → node/edge extraction", status:"none" },
+      { id:"C#",   name:"Grammar → node/edge extraction", status:"none" }
+    ]},
+
+  { id:"8", name:"Graph as context — the user surface", status:"done",
+    note:"COMPLETE 2026-09-04, 16 checkpoints (ck0 recon plus the 15 with rows in decisions.md). Turns Phase 6's queryable graph into something a person can use: a Context tab in RepoDetail showing one file's dependency neighbourhood as a star graph, with the token saving stated per file. Renumber taken at ck1: the UI work took 8, Phase 7 keeps multi-language, drift detection moved to 9. WHAT IT DOES: pick a file, see what it imports and what imports it (source and test importers separated), collapsed by folder with counts, coloured by subsystem, with unresolved specifiers in their own tray because they are not files. Click a node to navigate; click a folder to drill into its files.",
+    caveat:"THE HONEST STATE OF THE NUMBER. The saving is an ESTIMATE with a measured two-sided envelope of -8%/+9% against tiktoken. It is shown per file only, never pooled. On the 83.8% of files that have connections the median is ~14x and no sampled file fell below 1.0x; on the 16.2% with none, NO ratio is shown at all, because with nothing to substitute for the comparison is void (D29).",
+    steps:[
+      { id:"0",         name:"Reconnaissance — where the tab goes, what exists", status:"done" },
+      { id:"1",         name:"Route shape + denominator: reported as options, decided by a human", status:"done" },
+      { id:"1b",        name:"GET /files/{id}/context — the endpoint, 4 canaries", status:"done" },
+      { id:"1c",        name:"Divisor recalibrated 3.6 → 4.7 and validated against the benchmark", status:"done" },
+      { id:"1d",        name:"connected_index; C3's payload boundary gets its first live test", status:"done" },
+      { id:"2",         name:"Frontend data layer, Context tab, 404/409 discrimination", status:"done" },
+      { id:"3a",        name:"direction, subsystem id, unresolved_edges on the payload", status:"done" },
+      { id:"3a-bis",    name:"Port guard moved out of the uvicorn worker (unblocked browser work)", status:"done" },
+      { id:"3a-ter",    name:"Denominator scope corrected to include the centre file", status:"done" },
+      { id:"3a-quater", name:"Estimator error envelope measured across all five benchmark files", status:"done" },
+      { id:"3b-1",      name:"contextGraph adapter — pure, headless, three-way reconciliation", status:"done" },
+      { id:"3b-2",      name:"NeighborhoodView — the star graph, trays, collapse", status:"done" },
+      { id:"3b-3",      name:"Navigation, D14 path fingerprint, empty state, /ranking limit", status:"done" },
+      { id:"4",         name:"Token badges — per-file ratio, envelope, component costs", status:"done" },
+      { id:"4-bis",     name:"Measurement: characterise the zero- and low-connection population", status:"done" },
+      { id:"5",         name:"Suppress the meaningless ratio at zero connections", status:"done" }
+    ],
+    next:"Phase 8 is feature-complete; nothing here is required. Three residuals if it is revisited: D22's test/source split is textual not spatial (needs ELK layer constraints on a SHARED layout path — real regression risk to Dependency Graph, which is why it was not attempted); the null-subsystem colour has never rendered from real data; and the 4-bis distribution was n=600, not the full 6,584.",
+    deferred:"Source viewer moved OUT to Phase 8.5 (D12). D22's test/source split is spatial-deferred: it reconciles in the header text but ELK stacks all importers in one column, so the graph carries it weakly. The null-subsystem colour path is lib-tested only — repo 6 is 100% subsystem-covered, so no real payload has ever exercised it.",
+    evidence:"31 decisions D1–D31 · envelope 0.9225–1.0910 · with-connections median ~14x (n=600 random sample) · endpoint 62 tests · adapter+layout+nav 357 frontend tests · 9 Playwright" },
+
+  { id:"8 — measured", kind:"findings", name:"What Phase 8 actually established about the repo", status:"done",
+    note:"NOT a phase — a findings row, because these numbers are the reason the phase looks the way it does and they are not recoverable from the checkpoint list. Measured on apache/superset @ a05a0999, 6,584 files. 16.2% of files (1,068) have ZERO connected files, spread across all four languages. A random sample of 600 files gives the ratio distribution: ALL FILES p10 1.66 / p50 10.34 / p90 94.69; WITH CONNECTIONS (83.2% of sample) p10 3.65 / p50 13.74 / p90 106.18 and not one below 1.0x; ZERO CONNECTIONS p10 0.95 / p50 1.40 / p90 7.46.",
+    caveat:"THE OLD \u201c0.93x\u2013293x\u201d CLAIM IS RETIRED as a statement about the repository (D31). Both endpoints came from the five benchmark files and both are wrong — the real floor is 0.9278x and this sample's max is 277x. It survives only as the spread across those five. Claims are now per-stratum with the stratum stated (D30).",
+    evidence:"n=600 random sample, seed 41, 0 endpoint failures · all 6,584 would take ~52 min at 0.49s/call · zero-connection share 16.8% in sample vs 16.2% in population" },
+
+  { id:"8.5", name:"Source viewer", status:"none",
+    next:"Blocked on environment, not on design: re-clone a repo locally so repos.local_path resolves on this machine. Until then the endpoint would return nothing for the demo repo and the component would have nothing to render.",
+    note:"Split out of Phase 8 at ck2 (D12) rather than dropped. A new endpoint serving file contents plus a new component, 1–2 days.",
+    caveat:"The decisive argument was not cost: Superset's repos.local_path is C:\\Users\\... with exists=False on this Linux VM, so a source endpoint would return nothing for the demo repo. It ships dead until a repo is re-cloned locally." },
+
+  { id:"9", name:"Drift detection", status:"none",
+    next:"ASK WHAT THIS MEANS BEFORE BUILDING ANYTHING. It is ~10% designed and holds the number provisionally. The Phase 8 placeholder lesson applies directly: a fresh session should not infer a scope from the numbering.",
+    note:"UNNUMBERED-UNTIL-DESIGNED, ~10% designed. Moved here 2026-09-04 to free Phase 8 for the UI work.",
+    caveat:"Holds the number provisionally and should NOT be treated as a planned phase — the Phase 8 placeholder lesson applies to it now: ask what it means rather than infer a scope from the numbering." },
+
+  { id:":682", name:"File-filter bar — make Architecture, Matrix and Dependency Graph honour it", status:"done",
+    note:"CLOSED. All checkpoints complete. Verified under filter on superset: 6,523 → 2,547 on Architecture and Matrix, DetailPanel intact.",
+    caveat:"Much of this shipped before it was recorded as open — checkpoints 3 and 5 were found already done, and 2.6's suspected defect did not exist. See §17.30.",
+    steps:[
+      { id:"1",   name:"Cancellation canary",                  status:"done" },
+      { id:"2",   name:"Playwright + Architecture render",     status:"done" },
+      { id:"2.5", name:"Focus establishment + wiring test",    status:"done" },
+      { id:"2.6", name:"Sparse-render defect — none existed", status:"done" },
+      { id:"3",   name:"Backend repeated-value filter params", status:"done" },
+      { id:"4",   name:"Counter alignment",                    status:"done" },
+      { id:"5",   name:"Frontend sends the params",            status:"done" },
+      { id:"6",   name:"Verify under filter",                  status:"done" },
+      { id:"7",   name:"Record: close :682, write §17.30",   status:"done" }
+    ],
+    evidence:"b507189 · elkLayoutRun.test.ts (8) · clusterList.test.ts (16)" },
+
+  { id:"Arena A", name:"Interview Arena — JD to confirmed skill graph", status:"done",
+    note:"CLOSED 2026-09-03, on a recorded FAIL rather than a pass — which is the outcome the protocol was designed to be able to produce. Extraction is sound: 0 invented skills across all 15 runs, and the vague-JD honest-degradation criterion passed. CLUSTERING is the weak component: the coherence gate missed on 5 of 5 fixtures (43–50% against an 80% bar pinned before measurement), so the pre-registered LLM-clustering escalation fired once, as specified, instead of the bar moving.",
+    caveat:"Phases B–E (item bank, Elo selection, per-modality scoring, reports) NOT started. Gemini's real free-tier ceiling is 20 RPD — 12.5x lower than my estimate — which forces a two-day acceptance protocol on any re-measurement. Four known issues carry into Phase B (docs/arena-known-issues.md KI-1…KI-4).",
+    next:"Phase B (item bank) is the next Arena step, but read KI-1…KI-4 in docs/arena-known-issues.md first — they carry forward. The binding constraint is Gemini's free-tier ceiling of 20 requests/day, 12.5x lower than the original estimate, which forces a two-day acceptance protocol on any re-measurement.",
+    evidence:"branch arena/phase-a · 15 commits · canonicalise.py 4-stage cascade · llm_clustering.py prompt pinned by hardcoded sha256 · 5 JD fixtures with provenance" },
+
+  { id:"Arena B–E", name:"Interview Arena — item bank, selection, scoring, reports", status:"none",
+    note:"NOT STARTED. The four phases after the skill graph: B an item bank of interview questions, C Elo-based question selection, D per-modality scoring, E candidate reports. Named here because Arena A's row mentions them only in passing and a reader would otherwise not know the shape of what remains.",
+    caveat:"Arena A closed on a RECORDED FAIL — clustering coherence missed on 5 of 5 fixtures — so B inherits a weak upstream component, not a clean one. Four known issues (KI-1…KI-4) carry in. Any re-measurement is rate-limited to 20 requests/day on the free tier.",
+    next:"Do not open B without deciding what to do about clustering: the LLM escalation fired as pre-registered, and whether that is the permanent answer or a stopgap has not been settled.",
+    evidence:"docs/arena-known-issues.md KI-1…KI-4" },
+
+  { id:"Voice", name:"Voice migration — local-first STT and TTS", status:"done",
+    note:"CLOSED 2026-09-03, all six phases. Five endpoints that returned 501 and one that returned HTTP 200 with silence now all return valid output; the offline guarantee is STRUCTURAL (local_files_only=True — the code cannot fetch, not merely did not) and edge-tts is deleted. Sequenced B-then-A deliberately: migrate the shared voice stack first, Arena voice later, so the Arena phase inherits a working stack instead of debugging one.",
+    steps:[
+      { id:"1", name:"Baseline — measure every endpoint before touching anything", status:"done" },
+      { id:"2", name:"Merge requirements-voice.txt — voice becomes a hard dependency", status:"done" },
+      { id:"3", name:"Extract the shared STT service, verbatim config pinned", status:"done" },
+      { id:"4", name:"Kokoro behind one TTS interface, engine reported to callers", status:"done" },
+      { id:"5", name:"Bake weights at build — SHA256-pinned, network-blocked test", status:"done", layers:"both" },
+      { id:"6", name:"Measure, then delete edge-tts — gated on no regression", status:"done", layers:"both" }
+    ],
+    caveat:"Three issues stay OPEN and none is a voice-stack change. VKI-1 is PARTIALLY closed — the 200-with-no-audio code path still exists, dormant rather than removed. VKI-5 ESCALATED: Piper is now the only fallback, so a failed build-time fetch leaves no fallback at all. The Render cross-check is outstanding by design — the claim is “the code cannot fetch, verified locally”, not “the deploy does not fetch, observed”, and it discharges on the next deploy rather than by forcing one.",
+    deferred:"VKI-8's central finding was REVISED by its own re-measurement: Kokoro's real-time factor of 1.71x means synthesis is slower than playback, so streaming synthesis cannot fix it alone — that option was withdrawn as a finding, not quietly edited away. Piper measured 15x faster at RTF 0.12, already installed. The trade now has one measured side (speed) and one unmeasured side (voice quality).",
+    evidence:"1,464 tests passing · 9 packages and 11 MB removed · 0 model fetches across all endpoints with egress blocked · docs/voice-known-issues.md VKI-1…VKI-9" },
+
+  { id:"Arena voice", name:"Interview Arena — spoken interview turns", status:"none",
+    note:"DELIBERATELY NOT OPENED. This is the “A” half of the B-then-A sequencing, and it is gated rather than merely unscheduled.",
+    caveat:"Two inputs belong before this phase opens, not inside it. (1) VKI-9 — Kokoro's onnxruntime intra-op thread count has never been tuned; measure RTF at 1/2/4/8 threads, ~1 hour. If ANY configuration gives RTF < 1, streaming synthesis re-enters the design space and VKI-8's implications change materially. (2) Voice quality — the Kokoro-vs-Piper trade has a measured speed side and an entirely unmeasured quality side, and quality is why Kokoro is primary. Deciding on numbers taken at an untuned default risks trading away quality to solve a problem a configuration line already solved.",
+    evidence:"blocked on VKI-9 (~1 hour, high leverage) and a quality comparison nobody has run" },
+
+  { id:"cross-cutting", kind:"findings", name:"Open items that belong to no single phase", status:"active",
+    note:"THINGS A READER WOULD OTHERWISE HAVE TO RECONSTRUCT FROM decisions.md. (1) BUILT BUT UNREACHABLE: 661 comprehension cards and POST /{id}/roadmap both have no UI caller — capability exists, nobody can reach it. (2) TWO CAPPED SURFACES: Layers and Focus misreport counts against a 400-node cap. (3) repo 5 vanished and the occurrence is permanently unexplained; recurrence is now traceable via repo_deletion_audits. (4) The size-aware topic budget is deferred BY DECISION — it needs a real person hitting a too-coarse module, not a guessed number. (5) Superset's repos.local_path is a Windows path that does not exist on this VM, so anything reading file CONTENTS ships dead for the demo repo.",
+    caveat:"THE ENVIRONMENT ITSELF CARRIES TRAPS worth knowing before a session starts: never `pip install mcp` into backend/venv (it upgrades starlette and breaks fastapi while printing success); the VSCode workspace root is TWO levels above the repo root, and .claude/settings.json plus .mcp.json must live there or they are never read; Vite binds IPv6 only, so 127.0.0.1:5173 is refused while localhost:5173 works.",
+    next:"If picking up cold: comprehension-cards UI is the largest real gap, the roadmap button is the smallest, and the F–H record conflict should be resolved before anyone quotes a filter figure.",
+    evidence:"docs/decisions.md 'Open items' · docs/TROUBLESHOOTING.md · docs/code-health-contract.md §17" }
+];
+
+/* ════════════════════ nothing below needs editing ════════════════════ */
+
+const LABEL = { done:"Completed", active:"In progress", none:"Not started" };
+const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c;
+                          if (x != null) n.textContent = x; return n; };
+
+let filter = "all", showSteps = true;
+
+function counts() {
+  const c = { done:0, active:0, none:0 };
+  PHASES.forEach(p => c[p.status]++);
+  return c;
+}
+
+function renderMeta() {
+  const asof = document.getElementById("asof");
+  asof.replaceChildren();
+  const line = (lab, val) => {
+    const d = el("div"); d.append(document.createTextNode(lab + " "));
+    const b = el("b", null, val); d.append(b); return d;
+  };
+  asof.append(line("as of", AS_OF), line("branch", BRANCH), line("HEAD", HEAD));
+  const prov = el("div", "prov", PROVENANCE);
+  asof.append(prov);
+  const c = counts(), t = document.getElementById("tiles");
+  t.replaceChildren();
+  [["done","Completed"],["active","In progress"],["none","Not started"]].forEach(([k, lab]) => {
+    const tile = el("div", "tile " + k);
+    tile.append(el("span", "n", String(c[k])), el("span", "l", lab));
+    t.append(tile);
+  });
+  const tot = el("div", "tile");
+  tot.append(el("span", "n", String(PHASES.length)), el("span", "l", "Tracked lines of work"));
+  t.append(tot);
+}
+
+function renderPhase(p) {
+  const row = el("div", "ph " + p.status);
+  row.append(el("div", "rail"));
+  const box = el("div", "ph-in");
+
+  const head = el("div", "ph-head");
+  head.append(el("span", "pid", (p.kind === "findings" ? "" : "Phase ") + p.id));
+  head.append(el("h2", "pname", p.name));
+  const meta = el("div", "ph-meta");
+  meta.append(el("span", "pill " + p.status, LABEL[p.status]));
+  if (p.steps && p.steps.length) {
+    const done = p.steps.filter(s => s.status === "done").length;
+    meta.append(el("span", "frac", done + " / " + p.steps.length + " checkpoints"));
+  }
+  head.append(meta);
+  box.append(head);
+
+  if (p.note) box.append(el("p", "note", p.note));
+
+  if (p.steps && p.steps.length) {
+    const seg = el("div", "seg");
+    p.steps.forEach(s => seg.append(el("i", s.status)));
+    box.append(seg);
+
+    if (showSteps) {
+      const ul = el("ul", "steps");
+      p.steps.forEach(s => {
+        const li = el("li", "step " + s.status);
+        li.append(el("span", "dot"));
+        const txt = el("div", "step-txt");
+        const idn = el("div", "step-id", s.id);
+        if (s.layers === "both") idn.append(el("span", "badge", "both layers"));
+        txt.append(idn, el("div", "step-nm", s.name));
+        li.append(txt);
+        ul.append(li);
+      });
+      box.append(ul);
+    }
+  }
+
+  if (p.conflict) {
+    const f = el("div", "flag conflict");
+    f.append(el("b", null, "Record conflict"), el("span", null, p.conflict));
+    box.append(f);
+  }
+  if (p.caveat) {
+    const f = el("div", "flag");
+    f.append(el("b", null, "Caveat"), el("span", null, p.caveat));
+    box.append(f);
+  }
+  if (p.deferred) {
+    const d = el("p", "deferred");
+    d.append(el("b", null, "Deferred "), document.createTextNode(p.deferred));
+    box.append(d);
+  }
+  if (p.next) {
+    const n = el("div", "next");
+    n.append(el("b", null, "Next"), el("span", null, p.next));
+    box.append(n);
+  }
+  if (p.evidence) box.append(el("p", "ev", p.evidence));
+
+  row.append(box);
+  return row;
+}
+
+function render() {
+  const board = document.getElementById("board");
+  board.replaceChildren();
+  const shown = PHASES.filter(p => filter === "all" || p.status === filter);
+  if (!shown.length) {
+    board.append(el("p", "empty", "Nothing in this state."));
+    return;
+  }
+  shown.forEach(p => board.append(renderPhase(p)));
+}
+
+document.querySelectorAll("[data-f]").forEach(b => {
+  b.addEventListener("click", () => {
+    filter = b.dataset.f;
+    document.querySelectorAll("[data-f]").forEach(o =>
+      o.setAttribute("aria-pressed", String(o === b)));
+    render();
+  });
+});
+
+const tg = document.getElementById("toggle");
+tg.addEventListener("click", () => {
+  showSteps = !showSteps;
+  tg.setAttribute("aria-pressed", String(showSteps));
+  tg.textContent = showSteps ? "Hide checkpoints" : "Show checkpoints";
+  render();
+});
+
+renderMeta();
+render();
+</script>

@@ -450,8 +450,9 @@ and model imports.
 
 ## 9. Status and what is next
 
-**Done:** checkpoint 0 (gate) · 1a (boundary) · 1b (emitter) · 2 (neighbourhood
-query) · 3 (benchmark) · 4a (MCP transport gate) · **4b (the graph MCP server)**.
+**Done — ALL OF IT, as of 2026-09-03:** checkpoint 0 (gate) · 1a (boundary) · 1b (emitter)
+· 2 (neighbourhood query) · 3 (benchmark) · 4a (MCP transport gate) · **4b (the graph MCP
+server)** · **5 (the enforcement hook)**. **Phase 6 is end-to-end.**
 
 **Checkpoint 4b — CLOSED 2026-09-01, at both layers.** The server is built and
 committed (`6ae89c8`), 9 tests green, stdlib-only, registered in `.mcp.json`.
@@ -467,6 +468,86 @@ real 6,584-node graph rather than an empty database, and reported
 
 Both machines are now represented: the server was built on Windows and closed
 on Linux, and the two agree.
+
+**[CORRECTION 2026-09-01, per §17.16 — marked, not silently rewritten. The
+paragraph below is superseded on two counts and kept for the record.]** Checkpoint
+5 **is built**: `backend/scripts/athena_read_hook.py` exists, **strict** was the
+choice, and it carries 15 tests (`test_read_hook.py`), taking the suite from 1,181
+to **1,196**. The "one design decision precedes the build" framing below was
+overtaken by the build itself. **And its extension layer has never fired — not
+once, in two sessions.** The script's logic is sound (a synthetic payload produces
+a correct, well-formed deny naming the right repo and path), but the harness has
+never invoked it. The apparent confirmation in the earlier session was **that
+script's own stdout in a Bash `tool_result`**, from an invocation with
+`ATHENA_HOOK_STATE_DIR` redirected to a scratchpad probe; the single genuine `Read`
+that session issued, three entries later, returned file contents uninterrupted.
+**§17.16 generalises from numbers to decisions: the instrument that produced the
+deny was never reported next to it.** Mechanism, diagnosed 2026-09-01 and recorded
+in full in `decisions.md`: **the settings file is not at the workspace root** (no
+`.claude/` at or above the session cwd — while `.mcp.json`, which *is* at the root,
+loaded fine in the same session), with a **latent schema fault** behind it (an
+`args` key the PreToolUse shape does not have, whose failure mode is a silent
+exit 0) and **`cat` routing** as a real but non-causal reliability limit — a
+genuine `Read` was un-intercepted in both sessions, so routing cannot be the cause.
+**This is 4b's own lesson unlearned one checkpoint later:** 4b closed only after
+`.mcp.json` was moved *to* the workspace root, and checkpoint 5 then placed its
+config two levels below it. **4b's "closed at both layers" is unaffected and
+stands** — it concerns the MCP server, and that call was independently reproduced
+five times on 2026-09-01. **Phase 6 is not end-to-end.** No fix applied yet.
+
+**Checkpoint 5 — CLOSED 2026-09-03, at both layers. This is the piece that
+decides whether any of the rest is real in practice, and it now runs.**
+
+The hook was built and committed earlier (`aa8dfed`, 15 tests, **strict**
+chosen), but for two days it had never been invoked by the harness — and the
+record briefly asserted a closure whose evidence had not been written down.
+Both halves are now settled.
+
+**The confirmation, and why its form matters more than its content.** In session
+`da076d61-e756-4ee6-a3d9-829343a342cc` the deny came back **as a `Read` tool
+error raised by the harness** — not as a Bash `tool_result` carrying the
+script's own stdout, which is exactly the instrument confusion an earlier
+session had to retract. The hook wrote its own receipt at
+`~/.cache/athena-read-hook/session-da076d61….fired`, in the real state
+directory rather than a scratchpad probe, with `ATHENA_HOOK_STATE_DIR` unset.
+The evidence was produced by the hook, not by the session reporting on it.
+
+**The full loop, which is the actual deliverable.** A read of
+`backend/app/services/codebase/health_scoring.py` was denied, naming
+`repo="Anshu10pal/Athena-OS"` — identity-resolved from the git remote, not
+path-matched — and the correct repo-relative path. The redirect was then
+**followed**, and `mcp__athena-graph__neighborhood` answered from the real
+graph: **rank 31, fan_in 7, fan_out 0, 7 importers all enriched and all
+same-subsystem, 3 unresolved (`dataclasses` ×2, `typing`), snapshot
+`5155f6ceb9f6`, budget 9,000 `applied: false`.** Deny → query → usable
+answer, end to end, with no step simulated.
+
+**The mechanism that had been blocking it: settings LOCATION.** The file the
+client reads is `.claude/settings.json` **at the session cwd**
+(`/home/hack-t36/Athena`) — the workspace root, one level above the repo. The
+committed copy at `athena-os/.claude/settings.json` sits two levels *below* that
+and was never in the discovery path. This is 4b's lesson repeating one
+checkpoint later: 4b closed only after `.mcp.json` was moved **to** the
+workspace root, and checkpoint 5 then put its config below it, with the fix
+already written down. The working file carries **absolute** interpreter and
+script paths, and uses the `{"type":"command","command":…,"args":[…]}`
+shape — so `args` is honoured by this client, and the "latent schema fault"
+recorded earlier is withdrawn on evidence rather than on argument.
+
+**What this does NOT prove, kept here because a closure that hid it would be
+the §17.30 failure again (§15.1).** Proven: the hook fires at the extension
+layer, denies, and its redirect is answerable. **Not proven: that it fires on
+the *first* raw source read of a session.** The first `Read` in that same
+session — `ranking.py`, equally qualifying — went through un-intercepted,
+because the cwd settings file was observed *appearing* mid-session, between two
+Bash calls. Precondition 2 was therefore never exercised against a loaded hook.
+That ordering is attested at the script layer by the 15 tests and nowhere else.
+One session, one confirmed fire, **and one un-intercepted qualifying read in the
+same session.**
+
+**[SUPERSEDED — the paragraph below framed nudge-vs-strict as a decision still
+to be made. Strict was chosen, built, and has now been observed enforcing. Kept
+per §17.16, not rewritten.]**
 
 **Next — checkpoint 5, the last piece of Phase 6:** the PreToolUse enforcement
 hook, so the graph is consulted *before* a read rather than only when asked.
@@ -507,6 +588,163 @@ external held here — is that repo-wide, or a property of this file?**" Those
 need different investigations, and the second is much cheaper to run: classify
 the unresolved specifiers repo-wide against a known-external list rather than
 re-deriving reachability. **Worth doing later; blocking nothing.**
+
+### 9.1 Two findings from the first live-use session (2026-09-01)
+
+Recorded from `docs/live-observations/session-01.md` — a real Superset
+investigation task (trace connection handling, name the config flag, assess blast
+radius) run with the MCP tool live. Both findings fell out of a session whose
+stated purpose was testing the hook, and neither was measured by checkpoint 3.
+
+**A. The graph answered a task with NO CHECKOUT PRESENT. This may be the
+strongest form of the pitch, and checkpoint 3 did not measure it.**
+
+Checkpoint 3 measured *the graph is cheaper than reading the files* — a ratio
+against a baseline that assumes you have the files. In this session **there was no
+Superset on the disk at all** (searched `/` to depth 8; zero files). The task still
+got a defensible answer: **five `neighborhood` calls plus six SQL queries, and zero
+source reads — because zero were possible.** The alternative was not "read 560,768
+tokens of Superset"; it was **clone 6,584 files first**.
+
+That is a different capability from a token saving, and a stronger claim: **the
+graph is a queryable substitute for a repository you do not have, for structural
+questions.** Onboarding, blast-radius assessment, and "what would this change
+break" are exactly that class. The 219.7x pooled figure understates this case
+rather than describing it, because its denominator presumes local source.
+
+**Stated as evidence, not as a result.** One session, one repo, one task, and the
+answer to sub-question (b) was the weakest of the three precisely because it needed
+something the graph cannot hold (see B). What it justifies is **an investigation**:
+does the no-checkout case hold across repos and question classes, and where does it
+break? It does not yet justify the claim in marketing voice. Worth designing a
+measurement for — it would be a new benchmark, not a re-run of checkpoint 3's.
+
+**B. `neighborhood` answers "what depends on this FILE" when the real question is
+often "what depends on this SYMBOL" — and the data to answer it is already in
+`athena.db`.**
+
+The session's target, `superset/utils/core.py`, reports **`fan_in: 346`**. Read as
+blast radius, that is misleading to the point of being harmful: it says "enormous,
+tread carefully." The file's *connection-handling* has a production fan-in of
+**one** — `pessimistic_connection_handling` is imported by
+`superset/initialization/__init__.py:84` and nowhere else in production — plus two
+single-caller SSL helpers (`parse_ssl_cert` -> `databases/schemas.py:61`,
+`create_ssl_cert_file` -> `db_engine_specs/trino.py:53`). File-level fan-in
+answered a question that was not being asked, and pointed the opposite way from the
+truth.
+
+The correct answer came from **`code_imports.imported_names`** and
+**`code_symbols` (name, kind, signature, docstring, line_start/end)** — both
+already persisted, neither exposed by `neighborhood`. The split was **5 tool calls
+for orientation, 6 raw SQL queries for the answer**: half the useful information
+came from outside the API.
+
+Two sub-gaps worth separating:
+
+- **Symbol-level neighbourhood is a real, cheap, additive feature** — "what imports
+  `X` specifically, from which file and line" — sitting on data the schema already
+  holds. Same shape as the deferred `path` and `explain` primitives.
+- **Module-level constants are not captured as symbols at all** (`superset/config.py`
+  yields 15 symbols for a file reaching line 3,323), so **config-flag questions are
+  unanswerable from the graph on any Flask-`current_app.config` codebase.** Flag
+  consumption also leaves no import edge — `config.py` has a total fan-in of 10.
+  This one may be a legitimate scope boundary rather than a gap; it should be
+  *named* either way, so the next session does not rediscover it.
+
+**Not urgent, blocking nothing, and not a bug** — the tool returns what checkpoint 2
+built and checkpoint 3 measured. It is a finding about **the shape of the query the
+tool must answer to be useful**, which is the thing real use surfaces and a
+benchmark cannot.
+
+
+---
+
+### 9.2 DECISION — the hook covers the `Read` tool only; Bash source reads stay out of scope
+
+**Decided 2026-09-01. This is a decision, not a description of a state**, and it
+closes the "what do we do about the Bash gap" question rather than leaving it open.
+
+**The decision.** Do **not** extend the hook to intercept `cat`/`head`/`sed` or any
+other Bash-mediated source read. The matcher stays on `Read`. Four options were
+weighed — PostToolUse on Bash (coverage without redirect), a Bash matcher that
+analyses shell commands (redirect at high cost), Read-only with the boundary
+documented, and Read-only with the boundary unstated. **Read-only with the boundary
+documented is chosen.**
+
+**The reasoning, recorded so it can be argued with later:**
+
+- **Audience.** The immediate audience is interactive Claude Code use on real work,
+  where source files are opened with `Read`. That is where the hook is meant to fire.
+- **A precise partial boundary beats a fuzzy fuller one.** "`Read` source reads are
+  in scope; Bash source reads are not" is a sentence that can be stated accurately
+  and checked. Shell-command analysis would replace it with "Bash is mostly covered,
+  depending on the command shape" — softer, harder to state, easier to drift on.
+  **This is §17.33/§17.36's own logic applied to a coverage claim rather than a
+  number:** a front-door claim must match reality, and a claim that is precise and
+  partial matches reality better than one that is broad and approximate.
+- **Cost.** Bash-command analysis is checkpoint-sized, not a patch: `cat`, `head`,
+  `sed -n`, `grep`, pipes, redirects, `find | xargs cat`, quoted and globbed paths.
+  It should be built from observed need, not from speculation.
+- **The problem it solves is not a current problem.** Automatic redirect during
+  autonomous Bash-first agentic sessions matters if the tool sees widespread agentic
+  use. It does not yet.
+
+**The signal that reverses this decision.** Real use accumulating type-**B** entries
+in `docs/live-observations/` — *wanted the hook to fire and it did not* — specifically
+on `cat`-routed source reads, where the missed coverage demonstrably cost something.
+That is a countable signal in a place that already exists, and it should be the
+trigger, not a fresh opinion. If it accumulates, build PostToolUse-on-Bash or the
+Bash matcher **informed by which reads were actually missed**.
+
+**[STATUS, per §17.16 — the scope statement and the confirmation are separate
+things, and BOTH are now settled.]** The scope above is decided. **The `Read` half is
+CONFIRMED on this machine as of 2026-09-01.**
+
+**The observation.** A cold session — no prior conversation, session id
+`0d024641-c814-4d5d-9d23-dfe72f513721` — issued a single real `Read` of
+`backend/app/services/codebase/ranking.py`. The harness **denied it**, returning the
+checkpoint-5 strict-mode message naming the `mcp__athena-graph__neighborhood` call to
+make first (`repo="Anshu10pal/Athena-OS"`, `file_path="backend/app/services/codebase/ranking.py"`),
+carrying the ingest-staleness note (graph ingested 8 commits before HEAD
+`5155f6ceb9f6`) and the `BYPASS_ONCE` / `DISABLED` escape hatches. The marker
+`~/.cache/athena-read-hook/session-0d024641-c814-4d5d-9d23-dfe72f513721.fired` was
+written, containing the attempted path. **The session id embedded in the marker
+filename matches the observing session**, which is the check that distinguishes a real
+fire from a stale artifact.
+
+**The cause of the three earlier non-fires, now proven rather than hypothesised.**
+The `/hooks`-registration-postdates-session-start hypothesis recorded above was
+**wrong**. The actual cause is path resolution: **Claude Code is spawned from
+`/home/hack-t36/Athena`, while the repo root is `/home/hack-t36/Athena/Athena/athena-os`
+— one directory deeper.** The old `settings.json` gave the interpreter and script as
+relative paths, and from the spawn cwd every candidate form resolves to a missing
+file — `.venv/bin/python`, `venv/bin/python`, `backend/venv/bin/python` and
+`backend/scripts/athena_read_hook.py` were each verified **MISSING** this session,
+while the absolute forms now in `settings.json`
+(`/home/hack-t36/Athena/Athena/athena-os/backend/venv/bin/python` and
+`…/backend/scripts/athena_read_hook.py`) were verified **EXISTS**. **A hook whose
+command cannot be resolved fails silently** — no error reaches the session, and the
+`Read` simply returns contents, which is exactly the symptom the three non-fires
+recorded. That silent-failure mode is the reason the wrong hypothesis survived three
+observations.
+
+**Why this is a mechanism and not a second anecdote.** The only prior marker in the
+cache directory is `session-DIAG-manual.fired` — a hand-triggered invocation under a
+synthetic id, which established that the hook *script* worked but not that the
+*harness* would ever spawn it. This session's fire required no manual priming and was
+taken from the very cwd where the old relative paths do not resolve. **The fire is
+therefore independent of the circumstances of the earlier one-off**, and that
+independence is what upgrades the record from a single observation to an established
+mechanism. Checkpoint 5 is closed at the extension layer.
+
+**One behavioural detail worth keeping.** The session's *first* `Read` used the
+repo-relative path as written (`backend/app/services/codebase/ranking.py`), which from
+the spawn cwd resolves to a nonexistent file; it returned a plain "File does not
+exist" error, **did not fire the hook, and did not consume the once-per-session
+fire** — the marker appeared only on the subsequent `Read` of the real absolute path.
+So a mistyped or wrongly-rooted path is not a way to silently spend the session's
+single interception, but it is also **not** evidence of a non-fire. Any future
+non-fire report must confirm the path actually existed before it counts as type-**B**.
 
 ---
 

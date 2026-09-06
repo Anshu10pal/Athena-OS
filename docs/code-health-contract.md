@@ -3291,3 +3291,121 @@ temporarily inverted and observed to fail for the right reason before being
 reverted. Full account: `backend/tests/test_mcp_graph_server.py`.
 
 
+
+---
+
+### 17.36 A front door that restates what it does not re-derive
+
+**Four instances, all in the same direction, all from one mechanism.** The
+README restates figures and statuses that are *owned* by
+`docs/decisions.md` and `docs/phase6-graph-as-context.md`. Restating is a
+copy, and a copy has no link back to its source — so when the source moves,
+the copy does not. Nothing errors, because nothing is checked: the front door
+is prose, and prose cannot fail a test.
+
+**The drift has a direction, and the direction is not an accident.** Every
+instance **understates** progress. That follows from the mechanism rather than
+from luck: work moves forward while the copy stays where it was written, so
+the gap that opens can only ever have the record behind the code. A front door
+that drifts is therefore not randomly wrong — it is *systematically
+pessimistic*, which is the more dangerous failure here, because a session that
+trusts it re-does work that is already done, or re-opens a decision that was
+already made.
+
+| # | instance | date | what the front door said | what was true |
+|---|---|---|---|---|
+| 1 | checkpoint 4a closure | 2026-08-26 | "close 4a, then build 4b" | both already done |
+| 2 | resume-section drift | 2026-08-26 | next action already completed | superseded by the build |
+| 3 | Playwright count | 2026-08-26 | "6 Playwright tests" | 8, across 7 files — a 2-test file landed the next day and the count was never re-counted |
+| 4 | checkpoint 4b closure | 2026-09-01 | "awaiting one extension-level confirmation" | confirmed, field for field |
+
+Instance 3 is the clearest specimen, because it is a *number* and so the
+mechanism is undeniable: the figure was accurate the day it was written, a
+file landed the next day, and nothing re-counted. There was no error of
+reasoning to catch. That is the whole point — **this class of defect is not
+produced by getting something wrong, it is produced by not looking again.**
+
+**Why this is §17.33's shape and not a housekeeping note.** §17.33 says the
+same instrument error three times belongs in the tool rather than in your
+memory. Four instances of "re-verify the front door before trusting it" is
+exactly a constraint being held in memory, and it has failed every time it
+was relied on. Resolving to be more careful is the thing that demonstrably
+does not work.
+
+**Two candidate structural fixes. Neither is chosen here, deliberately.**
+
+- **(a) Re-derive rather than restate.** Front-door figures become generated
+  or checked at read time against the detailed docs that own them, so a stale
+  copy is a failure rather than a sentence. Keeps the README useful standalone;
+  costs a generator or a test that must itself be maintained.
+- **(b) Move live state out entirely.** The README becomes a *pure pointer* —
+  what the project is, and where the current state is written — with every
+  figure and status living only in `decisions.md`. Nothing to drift, because
+  nothing is duplicated; costs the front door's standalone readability, which
+  is most of why anyone opens it first.
+
+**Which is cheaper to maintain is a design pass, not a judgement to make
+inside the commit that names the pattern.** Recorded now so the choice is made
+against both options rather than defaulted into whichever one is nearer to
+hand. What is settled is the diagnosis: the README's figures are copies, and
+copies do not follow their sources.
+
+---
+
+### 17.37 A perceptual property cannot be discharged by a test of structural presence
+
+**The instrument was working. It could not perceive the property it existed to
+check.** That is the distinguishing feature, and it is what separates this from
+an ordinary gap in coverage.
+
+**The instance, from Phase 8 checkpoint 3b-2.** The Context view's binding
+constraint was legibility: someone landing on the tab has to understand what
+they are seeing without explanation. Four Playwright assertions and nineteen
+unit tests passed. The render they passed against had **unreadable labels** — a
+star roughly 800px tall fitted into a 560px container, scaled down until the
+folder names were illegible.
+
+**Nothing was broken.** `runElkLayout` called `cy.fit(undefined, 40)` exactly as
+written, and fitting an 800px graph into a 560px box by scaling it down is the
+correct behaviour of a correct function. The defect existed only in what a
+person could read, and every test asserted something else:
+
+- `expect(graph).toBeVisible()` — it was visible.
+- `canvases.count() > 0` — the canvas mounted.
+- `box.height > 400` — the container was 900px.
+- the nineteen unit tests — the *data* was right, and it was.
+
+Each assertion was true. Their conjunction was taken as evidence for a claim
+none of them addressed.
+
+**Why this is §17.30's shape rather than a testing oversight.** §17.30 is about
+an instrument reporting the absence of what it cannot see. Here the instrument
+reports the presence of structure and is read as reporting the presence of
+*legibility* — a property it has no access to. A canvas element and a readable
+diagram are indistinguishable to `toBeVisible()`, exactly as a mid-render canvas
+and a settled one were indistinguishable to a pixel-stability poll (§17.30's own
+fourth instance). **The failure is not that the test was weak; it is that the
+test answered a different question and the answer was accepted for the question
+asked.**
+
+**The rule.** A property that exists in perception — legibility, whether a
+layout reads as two sides, whether a distinction is noticeable at render scale,
+whether a stranger can interpret a view without being told — **requires
+observation, and the observation is the evidence.** It is not discharged by:
+
+- structural presence (an element exists, has non-zero size, contains text);
+- data correctness (the numbers behind the pixels are right);
+- a passing test suite of any size that asserts only the two above.
+
+**And the observation must be recorded as the evidence, not as a note.** "Opened
+it and it looked fine" is worth nothing later; what it looked like, at what
+scale, with what visible, is the record. The 3b-2 entry in `decisions.md` names
+the specific defect, the container and content dimensions, and the fact that all
+twenty-three tests passed against the broken render — because the next person to
+add a visual constraint needs to know that the suite will not catch it.
+
+**A corollary worth stating, because it is the tempting move.** The fix is not to
+write a pixel-diff test and treat that as discharge. A screenshot comparison
+detects *change*, not *legibility*, and it will happily lock in an unreadable
+baseline — which is the same substitution one level up. Where a perceptual
+property is load-bearing, someone looks, and says what they saw.

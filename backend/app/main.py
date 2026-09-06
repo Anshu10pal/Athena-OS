@@ -1,7 +1,6 @@
 import logging
 import os
 import sys
-import socket
 from pathlib import Path
 
 from alembic import command
@@ -19,47 +18,30 @@ from app.db import models  # noqa: F401  (register models)
 # (Replaces the old create_all() + hand-written ALTER TABLE list.)
 command.upgrade(AlembicConfig(str(BACKEND_DIR / "alembic.ini")), "head")
 
-# Dev-environment tripwire, same fail-loudly-at-boot category as the clone-
-# root-safety check below: this project's local dev backend always binds
-# 127.0.0.1:8000. Found live during Phase H1.5 -- two independent
-# `uvicorn --reload` processes had been left running from different points
-# in one long session (a stray instance never killed, a new one started on
-# top of it), which produced several minutes of requests that appeared to
-# hang with no error anywhere, because they landed on whichever process's
-# worker happened to still be alive and busy. A plain TCP connect attempt
-# to the port BEFORE this process tries to bind it: if something already
-# answers, refuse to start rather than silently create a second,
-# conflicting listener. A normal `--reload` restart is unaffected -- that
-# reloader kills the old worker and waits for it to exit before spawning a
-# new one, so the port is genuinely free by the time this check runs again.
-def _fail_loudly_if_port_already_bound(port: int) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.settimeout(0.5)
-        if probe.connect_ex(("127.0.0.1", port)) == 0:
-            raise RuntimeError(
-                f"127.0.0.1:{port} is already answering -- another backend instance is "
-                "still running (or never fully stopped). Kill it before starting a new "
-                "one; two overlapping dev servers silently share the port and requests "
-                "hang unpredictably instead of failing clearly."
-            )
-
-
-# Not under pytest. The guard answers "am I about to become a SECOND dev server
-# on this port"; importing the app to drive it with TestClient binds nothing, so
-# the question does not apply -- and answering it anyway made every
-# TestClient-based test fail whenever a dev server happened to be running, which
-# is most of the time on this machine.
+# THE PORT GUARD LIVES IN run.py NOW. Do not reintroduce it here.
 #
-# Narrowed rather than removed: the failure it catches is real (two overlapping
-# `--reload` workers produced minutes of hanging requests with no error anywhere)
-# and it still runs for every non-test start.
+# Moved 2026-09-04 (17.16 -- the reasoning is kept, because the reasoning is
+# the record). The guard itself was never wrong; it was in the wrong PROCESS.
+# `uvicorn.run(reload=True)` has the RELOADER PARENT bind the listening socket,
+# and the worker inherits fd 3 -- so a connect_ex probe run at worker-import
+# time is STRUCTURALLY GUARANTEED to find its own parent answering, and to kill
+# the worker it was meant to protect. The parent keeps the port, so the result
+# is a port that LISTENS and never replies: a server that reads as hung rather
+# than dead, which is the hardest failure of the three to diagnose.
 #
-# `sys.modules`, not PYTEST_CURRENT_TEST: that variable is set per TEST, and this
-# module is imported during COLLECTION, before any test runs. Using it failed
-# exactly the same way as no guard change at all -- which is the sort of check
-# that looks right and is evaluated at the wrong moment.
-if "pytest" not in sys.modules:
-    _fail_loudly_if_port_already_bound(int(os.environ.get("PORT", "8000")))
+# The old comment here asserted the opposite in so many words -- "A normal
+# `--reload` restart is unaffected -- that reloader kills the old worker and
+# waits for it to exit before spawning a new one, so the port is genuinely free
+# by the time this check runs again." False: the parent holds it. 22 "already
+# answering" entries accumulated in .devlogs/backend.log before anyone noticed,
+# because every one of them presented as a hanging request.
+#
+# It had also already been narrowed once, with `if "pytest" not in sys.modules`,
+# because otherwise it failed every TestClient test whenever a dev server was
+# running. That narrowing was a symptom of the same misplacement: a check that
+# needs excluding from one caller after another is answering its question in the
+# wrong place. In run.py it runs ONCE, in the parent, before anything binds --
+# and needs no exclusions at all.
 
 # Codebase agent: refuse to start rather than silently ingest the clone cache
 # as part of a registered repo's own code. Must run after the migration above

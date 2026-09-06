@@ -1,11 +1,12 @@
 ﻿import json
+import math
 import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user, require_write_access
@@ -29,6 +30,9 @@ from app.services.codebase.health_rollup import build_rollup
 from app.services.codebase.health_snapshots import create_snapshot, snapshot_staleness, trend_delta
 from app.services.codebase.overview import build_overview
 from app.services.codebase.policy import RepoBlocked
+from app.services.codebase.neighborhood import (
+    DEFAULT_BUDGET_TOKENS, _estimate_tokens, read_neighborhood,
+)
 from app.services.codebase.ranking import _build_graph, rank_repo
 from app.services.codebase.repo_lock import RepoBusyError
 from app.services.codebase import roadmap_persist
@@ -277,6 +281,17 @@ def rank_repo_endpoint(repo_id: int, user: User = Depends(require_write_access),
 @router.get("/{repo_id}/ranking")
 def get_ranking(
     repo_id: int, scorer: str = "legacy",
+    # D13, additive. Uncapped this endpoint returns every file: 6,584 rows and
+    # 2.85 MB on Superset, which is a real cost for a caller that wants a top-N
+    # starting list. A PLAIN default, not `Query(None)` -- that marker object
+    # reaches a direct call as itself and this suite calls route functions
+    # directly (see `_as_list`, and the ck1b bug it cost).
+    #
+    # None means UNCAPPED, so every existing caller is byte-for-byte unchanged.
+    # Applied AFTER the rank ordering, never before: a "top 10 by rank" that
+    # sliced before ordering would return ten arbitrary files under a name that
+    # promises the ten that matter.
+    limit: Optional[int] = None,
     user: User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     """One row per file: CodeFileRank filtered by BOTH repo_id and scorer,
@@ -300,15 +315,137 @@ def get_ranking(
         .order_by(CodeFileRank.rank.asc())
         .all()
     )
+    total = len(rows)
+    if limit is not None and limit >= 0:
+        rows = rows[:limit]
     return {
         "scorer": scorer,
         "reduced_confidence": repo.reduced_confidence,
+        # Reported so a truncated response is DETECTABLE by its consumer rather
+        # than looking like a repo with fewer files -- the same
+        # total-before-cap discipline as /graph and /files/{id}/neighbors.
+        "total_before_limit": total,
+        "limit": limit,
+        "truncated": limit is not None and limit >= 0 and total > limit,
         "files": [_serialize_rank(r, f) for r, f in rows],
     }
 
 
 GRAPH_NODE_LIMIT_DEFAULT = 400
 NEIGHBORS_ENDPOINT_CAP = 100
+
+# THE SOURCE-BYTE DIVISOR, DELIBERATELY SEPARATE FROM neighborhood._CHARS_PER_TOKEN.
+#
+# That constant is 3.6 and is calibrated against tiktoken cl100k on this repo's
+# PATH CORPUS. This one divides SOURCE-CODE BYTES. They are no longer even the
+# same number, which is the clearest possible argument for having kept them apart.
+#
+# 4.7 IS A CONSERVATIVE ROUND-UP OF A DERIVED 4.6737, AND HERE IS WHERE IT CAME
+# FROM. Phase 6's checkpoint-3 benchmark stored no per-file character counts and
+# no artifact survives -- tiktoken is not installed and nothing was ever
+# committed. But the char side is recoverable: pairing the naive tiktoken totals
+# recorded in docs/phase6-graph-as-context.md 4.2 with summed code_files.size_bytes
+# over each file's DISTINCT connected set gives 16,059,975 bytes / 3,436,264
+# tokens = 4.6737 pooled, with a per-file range of 4.511-4.907. Two independent
+# checks that the pairing is sound: the DISTINCT connected counts reproduce 4.2's
+# recorded counts exactly for all five files (0, 6, 10, 524, 355), and the summed
+# naive total reproduces 4.2's pooled 3,436,264 exactly.
+#
+# ROUNDED UP, NOT TO NEAREST. A higher divisor means a smaller denominator, a
+# smaller claimed saving, and an estimate that errs against our own pitch. The
+# previous 3.6 was ~30% low, which inflated the denominator in the flattering
+# direction -- on superset/models/core.py it claimed 349.5x where 4.7 claims
+# 267.7x.
+#
+# WHAT THE CALIBRATION LABEL ASSERTS, AND WHAT IT DOES NOT. It is AGGREGATE-level
+# -- derived from per-file totals over connected sets, never from a per-file
+# char/token pair, so it cannot be quoted as "this file tokenises at 4.7". It
+# covers SUPERSET PYTHON SOURCE ONLY. It makes NO claim for other languages or
+# other repositories, and applying it to a JS or Go repo would be reusing a
+# constant outside the corpus it was measured on -- the exact mistake that
+# reusing _CHARS_PER_TOKEN here would have been.
+_CHARS_PER_TOKEN_SOURCE = 4.7
+_CALIBRATION_STATUS = (
+    "derived_from_phase6_4.2_aggregate_tiktoken_cl100k_at_a05a0999_rounded_conservative")
+
+# THE ONE FILE BOTH INSTRUMENTS MEASURED. superset/utils/core.py is a checkpoint-3
+# benchmark hub, so it has a tiktoken-measured naive cost AND a graph cost, and it
+# is the only file where this endpoint's estimate can be checked against measured
+# ground truth rather than against itself.
+#
+# Deliberately NOT extended to other files. There is no benchmark figure for them,
+# so `estimator_vs_measured` would either be absent or silently mean something
+# different per file -- a number whose meaning the consumer cannot assess, which
+# is the 17.25 shape exactly. It is null everywhere else, on purpose.
+#
+# NOTE ON POPULATIONS, because the comparison is not perfectly apples-to-apples:
+# 4.2's naive cost includes the file's OWN text (76,119 B) and this endpoint's
+# connected_bytes does not. The direction holds either way -- 1,710,425 excluding
+# self and 1,726,621 including it, both under the measured 1,746,672 -- so the
+# assertion is not an artifact of the population difference, but the gap is
+# smaller than it looks.
+#
+# ALL FIVE checkpoint-3 files, transcribed from docs/phase6-graph-as-context.md
+# 4.2. Extended from one to five at 3a-quater so the estimator's error can be
+# measured across the connectivity range rather than asserted from its top end
+# -- which is how the "< 1.0" invariant survived four checkpoints while being
+# false at the floor.
+_PHASE6_BENCHMARK = {
+    (6, "scripts/__init__.py"): {"naive_tokens": 174, "graph_tokens": 188},
+    (6, "superset/commands/annotation_layer/annotation/create.py"):
+        {"naive_tokens": 7_754, "graph_tokens": 489},
+    (6, "superset/commands/chart/delete.py"):
+        {"naive_tokens": 30_206, "graph_tokens": 561},
+    (6, "superset/utils/core.py"): {"naive_tokens": 1_746_672, "graph_tokens": 5_954},
+    (6, "superset/__init__.py"): {"naive_tokens": 1_651_458, "graph_tokens": 8_452},
+}
+for _k, _v in _PHASE6_BENCHMARK.items():
+    _v["ratio"] = _v["naive_tokens"] / _v["graph_tokens"]
+
+# ONE query, both directions, deduped, self-edge excluded. Resolved edges only:
+# an unresolved specifier has to_file_id IS NULL and so cannot survive the join --
+# structurally excluded from the priced population rather than counted as a
+# zero-cost file.
+_CONNECTED_FILES_SQL = """
+SELECT nb.id                          AS file_id,
+       nb.path                        AS path,
+       nb.size_bytes                  AS size_bytes,
+       nb.subsystem_modularity_id     AS subsystem_modularity_id,
+       -- DIRECTION, aggregated per NEIGHBOUR rather than per edge. A file can
+       -- appear on both sides (6 of 2256's 274 do), and GROUP BY is what makes
+       -- that one row with direction "both" instead of two contradictory rows.
+       -- MAX over the two flags because a neighbour is an importer if ANY edge
+       -- makes it one.
+       MAX(CASE WHEN ci.from_file_id = :fid THEN 1 ELSE 0 END) AS is_import,
+       MAX(CASE WHEN ci.to_file_id   = :fid THEN 1 ELSE 0 END) AS is_importer
+FROM code_imports ci
+JOIN code_files nb
+  ON nb.id = CASE WHEN ci.from_file_id = :fid THEN ci.to_file_id ELSE ci.from_file_id END
+WHERE ci.repo_id = :rid
+  AND ci.resolved = 1
+  AND ci.to_file_id IS NOT NULL
+  AND (ci.from_file_id = :fid OR ci.to_file_id = :fid)
+  AND nb.id != :fid
+GROUP BY nb.id, nb.path, nb.size_bytes, nb.subsystem_modularity_id
+"""
+
+# DISPLAY DATA ONLY, and this is load-bearing rather than a note.
+#
+# Unresolved specifiers have to_file_id IS NULL -- they are not files, they have
+# no size_bytes, and they MUST NOT enter the priced population. Folding them in
+# would inflate `connected_files_distinct` while `connected_bytes` stayed put,
+# so the count and the cost would silently describe different populations -- the
+# exact failure C4's discriminating break demonstrates (274 -> 325, bytes
+# unchanged). They are surfaced for display because an agent editing this file
+# needs to know a dependency could not be pinned, which is precisely the case it
+# cannot discover by looking.
+_UNRESOLVED_EDGES_SQL = """
+SELECT raw_specifier, line_number, kind
+FROM code_imports
+WHERE repo_id = :rid AND from_file_id = :fid
+  AND resolved = 0 AND to_file_id IS NULL
+ORDER BY line_number, raw_specifier
+"""
 VALID_GRAPH_LEVELS = ("directory", "file")
 
 
@@ -602,6 +739,320 @@ def _serialize_neighbor_list(db: Session, agg: dict, rank_by_file_id: dict) -> l
         })
     items.sort(key=lambda it: (it["rank"] is None, it["rank"]))
     return items
+
+
+# D25/D26 -- the DISPLAY strings for the saving, produced here and not in the
+# browser.
+#
+# WHY THE BACKEND OWNS THEM. D7's tripwire asserts the frontend does no
+# arithmetic on any token field, and it currently has ZERO exceptions. Formatting
+# a ratio client-side would need one, and the `or 0` incident is the argument
+# against that: a tripwire whose first catch is a false positive teaches people
+# to delete tripwires. One producer for the number, and a grep-level guard with
+# nothing carved out of it.
+#
+# ROUNDING IS ONE-DIRECTIONAL AND NEVER FAVOURS US (D25). Seven digits on a
+# figure with a measured +/-9% envelope is false precision on the most attackable
+# number in the feature, so it is cut to two significant figures -- and every cut
+# goes DOWN on a savings claim:
+#
+#   270.6303  ->  "~270x"     (not 271)
+#     0.9940  ->  "~0.99x"    (never "~1x", which would erase a real LOSS)
+#
+# `math.floor` on the scaled value rather than `round`, because `round` is
+# half-to-even and would take 0.9940 to 1.0 at one decimal -- turning "the graph
+# costs MORE here" into "break-even", which is exactly the claim Phase 6 reports
+# this file to avoid making.
+_ENVELOPE_LO, _ENVELOPE_HI = 0.9225, 1.0910
+
+
+def _format_saved_ratio(ratio: Optional[float]) -> Optional[str]:
+    if ratio is None:
+        return None
+    if ratio >= 100:
+        return f"~{math.floor(ratio):,.0f}x"
+    if ratio >= 10:
+        return f"~{math.floor(ratio * 10) / 10:.1f}x"
+    # Below 10x, two decimals -- and this is the band the floor file lives in,
+    # where the difference between 0.99 and 1.0 is the difference between an
+    # honest loss and a false break-even.
+    return f"~{math.floor(ratio * 100) / 100:.2f}x"
+
+
+def _envelope_pct() -> str:
+    """The measured two-sided error band, as a string the UI states rather than
+    derives. From ck3a-quater: our/measured ran 0.9225 to 1.0910 across the five
+    checkpoint-3 files, so the estimate can sit ~8% under or ~9% over the
+    tiktoken-measured ratio. Stated as the wider side, and as a RANGE rather than
+    a symmetric +/- because it is not symmetric."""
+    lo = round((1 - _ENVELOPE_LO) * 100)
+    hi = round((_ENVELOPE_HI - 1) * 100)
+    return f"-{lo}% / +{hi}%"
+
+
+@router.get("/{repo_id}/files/{file_id}/context")
+def get_file_context(
+    repo_id: int, file_id: int,
+    second_hop: bool = False,
+    # PLAIN defaults, not `Query(...)`. FastAPI treats both as query params, but
+    # `Query(x)` is a MARKER object that FastAPI substitutes only when IT invokes
+    # the route -- and this suite calls route functions directly (see `_as_list`
+    # below, which exists because of that same trap). A marker would reach
+    # `read_neighborhood` as the budget and blow up in `json.dumps`. It did,
+    # on the first direct call, before this was changed.
+    budget: int = DEFAULT_BUDGET_TOKENS,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """One file's dependency neighbourhood, plus what reading it would have cost.
+
+    THE SAME QUESTION THE MCP TOOL ANSWERS, OVER HTTP -- a browser cannot speak
+    MCP stdio, and `read_neighborhood` was reachable only through the stdio
+    server. This calls that same function; it does not reimplement any of it,
+    and `neighborhood` is returned EXACTLY as the function produced it.
+
+    THIS IS NOT `/files/{file_id}/neighbors` AND WILL NOT AGREE WITH IT. That
+    endpoint is one hop capped at NEIGHBORS_ENDPOINT_CAP (100) for the Mermaid
+    export; this one is budget-ranked through `read_neighborhood`, enriching
+    MAX_ENRICHED (25) entries while keeping every remaining path. Same file, two
+    numbers, and neither is wrong -- one answers "what should this diagram
+    draw", the other "what must I read to change this safely". Documented in
+    decisions.md so the divergence is not reconciled away as a defect.
+
+    THE TWO TOKEN FIGURES ARE MEASURED BY DIFFERENT INSTRUMENTS AND SAY SO.
+    `view_tokens` is `_estimate_tokens` over the neighbourhood sub-object -- the
+    same call, on the same object, that the budget accounting uses, so the number
+    the UI shows is the number the tool priced. `connected_files_tokens` CANNOT
+    use that function: `_estimate_tokens` JSON-serialises its argument, so
+    `_estimate_tokens(76119)` prices five digits. It divides raw bytes by
+    `_CHARS_PER_TOKEN_SOURCE` instead. Both instruments are named in the payload
+    rather than left for the reader to infer, and the calibration status of the
+    second travels with it.
+
+    THE DENOMINATOR IS THIS ENDPOINT'S OWN WORK, BY DESIGN. Widening
+    `read_neighborhood` to carry sizes would have re-priced Phase 6's 219.7x
+    figure, which was measured against the current payload shape -- invisibly,
+    and in the direction of looking worse. The MCP tool's need did not change, so
+    its payload does not either.
+
+    No headline framing here: components only. What to call a ratio is the
+    presentation layer's decision, not this endpoint's.
+    """
+    repo = db.get(Repo, repo_id)
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    file = db.get(CodeFile, file_id)
+    if not file or file.repo_id != repo_id:
+        raise HTTPException(404, "File not found in this repo")
+
+    # file_id -> path: `read_neighborhood` addresses files by repo-relative path.
+    # Route option (a) was chosen precisely so this lookup is the whole cost and
+    # no file path ever has to survive URL encoding.
+    try:
+        neighborhood = read_neighborhood(
+            db, repo_id, file.path, second_hop=second_hop, budget_tokens=budget)
+    except ValueError as exc:
+        # The file exists in code_files but not in the graph snapshot -- a real
+        # and reportable state (an ingest behind HEAD), not a 500.
+        raise HTTPException(409, str(exc))
+
+    # AFTER read_neighborhood returns, so this prices the payload actually being
+    # sent, post-budget, including the `budget` block itself -- which is what the
+    # internal accounting counted.
+    view_tokens = _estimate_tokens(neighborhood)
+
+    rows = db.execute(
+        text(_CONNECTED_FILES_SQL), {"fid": file_id, "rid": repo_id}).mappings().all()
+    connected_files_distinct = len(rows)
+
+    # The un-deduped edge-endpoint count, kept ONLY so the gap between it and the
+    # deduped population is visible in the payload instead of looking like a bug.
+    # A file that both imports and is imported by the target is ONE file to read.
+    edge_endpoints_total = (
+        neighborhood["imports"]["total"] + neighborhood["importers"]["total"])
+
+    priced = [r for r in rows if r["size_bytes"]]
+
+    # D18: THE CENTRE FILE'S OWN BYTES ARE IN THE DENOMINATOR.
+    #
+    # NOTE THE DELIBERATE ASYMMETRY, and it is stated here so nobody has to
+    # guess: `connected_files_distinct` EXCLUDES self (274/355) while
+    # `connected_bytes` INCLUDES it.
+    #
+    # The bytes include it because the counterfactual being priced is "read this
+    # file AND its connected files" -- which is also exactly what Phase 6's
+    # checkpoint-3 benchmark measured (docs/phase6-graph-as-context.md 4.2:
+    # "the full text of the file PLUS every file directly connected to it"). One
+    # instrument for one number; excluding self made this endpoint measure a
+    # slightly different quantity than the 219.7x figure it is compared against.
+    #
+    # The COUNT excludes it because ck3b-1's reconciliation is pinned to that
+    # number: nodes == connected_files_distinct + 1, edges == edge_endpoints_total,
+    # and edges - connected == overlap_count. Folding the centre into the count
+    # would break three identities to tidy one field name.
+    #
+    # WHY THIS WAS CORRECTED (17.16): the exclude-self version was accepted on a
+    # 1.1% margin measured on a 355-connection hub. That margin is
+    # SCALE-DEPENDENT and total at the floor -- for a zero-connection file the
+    # benchmark's denominator is the file itself and ours was 0, a 100%
+    # divergence at exactly the point the 0.93x-293x spread bottoms out.
+    connected_bytes = (file.size_bytes or 0) + sum(r["size_bytes"] for r in priced)
+    connected_files_tokens = int(connected_bytes / _CHARS_PER_TOKEN_SOURCE)
+    saved_ratio = connected_files_tokens / view_tokens if view_tokens else None
+    bench = _PHASE6_BENCHMARK.get((repo_id, file.path))
+    unresolved_rows = db.execute(
+        text(_UNRESOLVED_EDGES_SQL), {"fid": file_id, "rid": repo_id}).mappings().all()
+
+    return {
+        "repo_id": repo_id,
+        "file_id": file_id,
+        "path": file.path,
+        "neighborhood": neighborhood,
+        # THE ID<->PATH MAP FOR THE CONNECTED SET, and an envelope field rather
+        # than a neighbourhood one: `neighborhood` is returned exactly as
+        # `read_neighborhood` produced it, and adding to it would re-price the
+        # MCP payload -- the thing Option B exists to avoid.
+        #
+        # WHY IT IS HERE AT ALL: the panel is self-navigating by node click, but
+        # the graph's nodes carry PATHS while this endpoint and the URL take an
+        # integer id. Without this map every click costs a resolve roundtrip. The
+        # ids are already selected by the denominator query and were being thrown
+        # away; this is the same query, one column wider.
+        "connected_index": [
+            {
+                "id": r["file_id"],
+                "path": r["path"],
+                # "both" is not a tie-break, it is the truth for a file that
+                # imports the target AND is imported by it. 6 of 2256's 274 are
+                # in that position, which is also why the direction counts
+                # reconcile as 22 + 258 - 6 = 274 rather than summing to 280.
+                "direction": (
+                    "both" if r["is_import"] and r["is_importer"]
+                    else "imports" if r["is_import"]
+                    else "importedBy"
+                ),
+                # D15: the ONLY source of cluster colour for this view. The
+                # neighbourhood's own `cluster` field covers just the 25 enriched
+                # entries, and mixing the two would be two instruments for one
+                # visual property.
+                "subsystem_modularity_id": r["subsystem_modularity_id"],
+            }
+            for r in rows
+        ],
+        # Display only -- see _UNRESOLVED_EDGES_SQL. Never priced.
+        "unresolved_edges": [
+            {"raw_specifier": u["raw_specifier"], "line_number": u["line_number"],
+             "kind": u["kind"]}
+            for u in unresolved_rows
+        ],
+        "view_tokens": view_tokens,
+        "view_tokens_instrument": "_estimate_tokens(neighborhood)",
+        # EXCLUDES the centre file -- see D18. `connected_bytes` includes it.
+        "connected_files_distinct": connected_files_distinct,
+        "edge_endpoints_total": edge_endpoints_total,
+        "overlap_count": edge_endpoints_total - connected_files_distinct,
+        "unresolved_excluded": len(neighborhood["imports"]["unresolved"]),
+        # A TRIPWIRE, not a formality. size_bytes is NOT NULL and 0 rows are
+        # currently 0-or-null on every ingested repo, so this equals
+        # connected_files_distinct today. It is returned separately so that the
+        # first repo where it does NOT is visible in the payload rather than
+        # silently under-pricing the denominator.
+        "priced_files": len(priced),
+        # INCLUDES the centre file's own size_bytes -- see D18. Scope differs
+        # from connected_files_distinct on purpose.
+        "connected_bytes": connected_bytes,
+        "connected_files_tokens": connected_files_tokens,
+        "connected_tokens_instrument": "size_bytes/_CHARS_PER_TOKEN_SOURCE",
+        "calibration_status": _CALIBRATION_STATUS,
+        "snapshot_sha": neighborhood["snapshot"]["last_ingested_sha"],
+        "saved_tokens": connected_files_tokens - view_tokens,
+        "saved_ratio": saved_ratio,
+        # HOW THIS ENDPOINT'S ESTIMATE COMPARES TO MEASURED GROUND TRUTH -- and
+        # null unless there IS ground truth. Populated only for files carrying a
+        # checkpoint-3 tiktoken benchmark (today: superset/utils/core.py alone,
+        # 0.914). Below 1.0 means the estimate lands UNDER the measured ratio,
+        # which is the direction the divisor was rounded to guarantee. A value at
+        # or above 1.0 means the UI would overstate against tiktoken and no ratio
+        # should be shown. Never computed by analogy for files without a
+        # benchmark: a field that means something different per file is worse
+        # than a field that is absent.
+        # 4dp, not 3. This field's ONLY job is to be checked against the
+        # benchmark, and 3dp made 0.9225 unrepresentable -- a field that cannot
+        # express the value it exists to report.
+        #
+        # NOTE: this is NOT bounded below 1.0. That invariant was pinned at ck1c
+        # and is FALSE -- it held only because every file checked was a hub. At
+        # the floor (scripts/__init__.py, 0 connections) it is 1.0740: the
+        # estimator OVERSTATES the ratio there. The measured two-sided envelope
+        # is in decisions.md; do not reintroduce a one-sided assertion.
+        # D25/D26: display strings, conservative. The UI prints these verbatim.
+        # NAMED `ratio_display`, NOT `saved_ratio_display` (D26 said the latter).
+        # D7's tripwire bans the substring "saved_ratio" from frontend source,
+        # and a component printing `envelope.saved_ratio_display` trips it --
+        # a FALSE POSITIVE, since printing a string is display, not arithmetic.
+        # The choice was: narrow the tripwire, or rename the field. D26's own
+        # stated reason for putting these strings in the backend was to keep the
+        # tripwire at ZERO exceptions, citing the `or 0` incident -- so the
+        # reason outranks the name. Renamed; tripwire untouched.
+        # D29: ABSENT, not clamped, when there are no connected files.
+        #
+        # `None` rather than a sentinel string, deliberately: the frontend must
+        # not be able to render a ratio for these files EVEN BY ACCIDENT, and
+        # `null` leaves no string to print. A sentinel like "n/a" would still be
+        # a value someone could style as if it were a number.
+        #
+        # WHY IT IS VOID RATHER THAN JUST SMALL. With zero connections the
+        # denominator collapses to the file's OWN bytes (D18 includes the
+        # centre), so the ratio becomes (own_bytes / 4.7) over the cost of a
+        # neighbourhood that says "no neighbours". Arithmetically fine; it
+        # measures nothing. The 219.7x claim rests on SUBSTITUTION -- read the
+        # neighbourhood instead of the connected files -- and here there is
+        # nothing to substitute, so numerator and denominator answer different
+        # questions. Measured: an 18KB unconnected file showed ~10.9x captioned
+        # "cheaper than reading every connected file", about an empty set.
+        #
+        # Clamping to 1.0x was rejected: it would replace a meaningless number
+        # with a plausible one, which is the §17.25 failure rather than a fix.
+        "ratio_display": (
+            _format_saved_ratio(saved_ratio) if connected_files_distinct else None),
+        # The caption comes from here too (D26): the frontend prints, it does
+        # not compose sentences about numbers it is not allowed to reason about.
+        "ratio_absent_reason": (
+            None if connected_files_distinct else
+            "This file has no connected files, so there is nothing for the graph "
+            "to substitute for. A ratio here would compare the cost of reading "
+            "the file against the cost of being told it has no neighbours -- two "
+            "different questions. The costs below are still real."),
+        # The two component counts, as strings, for the same reason and with the
+        # same naming constraint: `view_tokens_display` would contain
+        # "view_tokens" and trip D7's substring ban. Named for what they MEAN to
+        # a reader rather than for the field they come from -- which is better UI
+        # language anyway: "what the graph costs" vs "what reading would cost".
+        "graph_cost_display": f"{view_tokens:,} tokens",
+        "read_cost_display": f"{connected_files_tokens:,} tokens",
+        # THE WHOLE SENTENCE, not the parts, because the LABEL is conditional
+        # too and the frontend must not choose between phrasings.
+        #
+        # Found by looking at the rendered page: with zero connected files the
+        # caption still read "reading every connected file would cost 3,844
+        # tokens" -- about a set with nothing in it, and the 3,844 is the cost of
+        # reading THIS file. The same false-caption defect the ratio had, one
+        # layer down, and it survived the ratio fix because only the number was
+        # suppressed and not the sentence around it.
+        "costs_line": (
+            f"this view costs {view_tokens:,} tokens · "
+            f"reading every connected file would cost {connected_files_tokens:,} tokens"
+            if connected_files_distinct else
+            f"this view costs {view_tokens:,} tokens · "
+            f"reading this file would cost {connected_files_tokens:,} tokens"),
+        "envelope_pct": _envelope_pct(),
+        # D27: NOT for the UI. A validation artifact that exists only where a
+        # benchmark does, so it means something different per file -- §17.25 by
+        # construction. Kept in the payload for the test suite and for anyone
+        # auditing the estimator; a ?raw tripwire asserts no src/ file prints it.
+        "estimator_vs_measured": (
+            round(saved_ratio / bench["ratio"], 4)
+            if bench and saved_ratio else None),
+    }
 
 
 @router.get("/{repo_id}/files/{file_id}/neighbors")

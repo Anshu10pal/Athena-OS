@@ -11,14 +11,14 @@ Git repository to find out how that code is actually put together.
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C180%20passing-3fb950)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1%2C196%20passing-3fb950)](#testing)
 [![Cost](https://img.shields.io/badge/running%20cost-%240%2Fmonth-3fb950)](#cost)
 
 </div>
 
 ---
 
-# RESUME HERE — session entry point (updated 2026-09-01)
+# RESUME HERE — session entry point (updated 2026-09-03)
 
 **Correction, 2026-09-01 (§17.16 — marked, not silently fixed):** this
 section said 4b was "BUILT and COMMITTED, awaiting one extension-level
@@ -33,21 +33,28 @@ and 4b built and committed 2026-08-24 (`6ae89c8`). The text below is
 corrected to match `docs/decisions.md` and `docs/phase6-graph-as-context.md`,
 which were already accurate; only this front-door section had drifted.
 
-**Pattern-in-formation, noted 2026-09-01 — not yet a §17 subsection.** That
-is now **three** instances of this front door understating progress, all in
-the same direction and from the same cause — a figure copied forward without
-being re-verified against the thing it describes:
+**PROMOTED 2026-09-03 to contract §17.36 — "A front door that restates what it
+does not re-derive."** The fourth instance arrived as predicted, so the pattern
+is now named in
+[`docs/code-health-contract.md`](docs/code-health-contract.md) §17.36 rather
+than tracked here. The four:
 
-1. the resume section still saying "build 4b" after 4b was built (2026-08-26);
-2. the Playwright count still saying 6 after a 2-test file landed (2026-08-26);
-3. this line still saying "awaiting confirmation" after it was confirmed.
+1. checkpoint 4a closure — "close 4a, then build 4b" after both were done (2026-08-26);
+2. the resume section's next action, already superseded by the build (2026-08-26);
+3. the Playwright count still saying 6 after a 2-test file landed (2026-08-26);
+4. checkpoint 4b "awaiting confirmation" after it was confirmed field-for-field (2026-09-01).
 
-Three instances is where §17.33 says to stop trusting memory and encode the
-constraint in the tool. It is recorded here rather than promoted because the
-fix is not yet obvious — the honest options are a check that re-derives these
-figures rather than restating them, or accepting the README as a pointer and
-moving live state entirely into `decisions.md`. **If this recurs, that is a
-fourth instance and it warrants proper naming.**
+**The mechanism, and why the direction is not luck:** this file *restates*
+figures owned by `decisions.md` and `phase6-graph-as-context.md`. A restatement
+is a copy with no link back to its source, so when the source moves the copy
+does not — and since work only moves forward, the drift can only ever
+**understate** progress. That makes this front door systematically pessimistic,
+which is the dangerous direction: a session that trusts it re-does finished work
+or re-opens a settled decision. §17.36 records two candidate structural fixes —
+**(a)** re-derive these figures at read time instead of restating them, or
+**(b)** move live state entirely into `decisions.md` and let this file be a pure
+pointer — and deliberately picks neither. Which is cheaper to maintain is a
+design pass, not a call to make in the commit that names the pattern.
 
 **What this is.** A local-first workspace with two halves: a learning/practice
 side, and a **codebase agent** that ingests any Git repo and builds a queryable
@@ -62,8 +69,83 @@ LLM calls in the graph path.
 (the real MCP server) is CLOSED at both layers as of 2026-09-01** — the
 extension-layer confirmation ran on the Linux VM and every field matched the
 protocol proof exactly (258 importers, 22 imports, 51 unresolved, 25 enriched
-+ 233 additional paths, `a05a0999`, budget 9,000 not applied). **Checkpoint 5
-— the PreToolUse enforcement hook — is the last piece of Phase 6.**
++ 233 additional paths, `a05a0999`, budget 9,000 not applied); and **checkpoint
+5 (the PreToolUse enforcement hook) is CLOSED at both layers.**
+
+**PHASE 6 IS DONE END TO END as of 2026-09-03.** All five pieces are in place
+and were exercised together: the **graph is exported**, the **read boundary** is
+defined, the **neighbourhood is queryable**, the **MCP server exposes it**, and
+the **hook enforces it**. Full detail in
+[`docs/phase6-graph-as-context.md`](docs/phase6-graph-as-context.md) §9 and
+[`docs/decisions.md`](docs/decisions.md).
+
+**Independently re-confirmed 2026-09-03**, session
+`da076d61-e756-4ee6-a3d9-829343a342cc`, on a different day and a different
+session from the first fire — the loop was closed all the way through, which the
+first confirmation did not do. A `Read` of
+`backend/app/services/codebase/health_scoring.py` was **denied by the harness**;
+the redirect was then **followed**, and `mcp__athena-graph__neighborhood`
+answered from the real graph (rank 31, fan_in 7, fan_out 0, 7 importers all
+enriched and same-subsystem, snapshot `5155f6ceb9f6`, budget 9,000 not applied).
+Receipt written by the hook itself:
+`~/.cache/athena-read-hook/session-da076d61-e756-4ee6-a3d9-829343a342cc.fired`.
+**Deny → query → usable answer, no step simulated.**
+
+**One honest residual, recorded rather than smoothed over (§15.1).** What is
+proven is that the hook fires, denies, and its redirect is answerable. What is
+**not** proven at the extension layer is that it fires on the *first* raw source
+read of a session: the first `Read` of that session (`ranking.py`, equally
+qualifying) went through un-intercepted, because the cwd settings file was
+observed *appearing* mid-session. That ordering rests on the 15 script-layer
+tests alone.
+
+**Checkpoint 5 scope, decided 2026-09-01 — the hook covers the `Read` tool;
+Bash-mediated source reads (`cat`/`head`/`sed`) are deliberately OUT OF SCOPE.**
+A precise partial boundary was preferred to a broader fuzzy one, and shell-command
+analysis was judged checkpoint-sized work to be built from observed need rather than
+speculation — reasoning in [`docs/phase6-graph-as-context.md`](docs/phase6-graph-as-context.md) §9.2.
+**The `Read`-tool confirmation is CONFIRMED (2026-09-01) — checkpoint 5 is closed at
+the extension layer.** A cold session, id `0d024641-c814-4d5d-9d23-dfe72f513721`,
+issued one real `Read` of `backend/app/services/codebase/ranking.py`. The harness
+**denied it** with the checkpoint-5 strict-mode message, and the marker
+`~/.cache/athena-read-hook/session-0d024641-c814-4d5d-9d23-dfe72f513721.fired`
+appeared, containing the attempted path. **The session id in the marker filename
+matches the observing session**, so the fire belongs to this session and is not a
+leftover from an earlier one.
+
+**The three earlier non-fires had one cause, now proven: relative paths in
+`settings.json` resolved against the wrong directory.** Claude Code is spawned from
+`/home/hack-t36/Athena`, but the repo root is `/home/hack-t36/Athena/Athena/athena-os`
+— one level deeper. Every relative interpreter/script path resolves to a **missing**
+file from that cwd (`.venv/bin/python`, `venv/bin/python`, `backend/venv/bin/python`,
+`backend/scripts/athena_read_hook.py` — all four verified missing), so the harness had
+nothing to spawn and failed silently, with no error surfaced to the session. The
+absolute paths now in `settings.json` both exist and were verified this session.
+
+**Correction, 2026-09-03 (§17.16 — marked, not silently fixed).** The paragraph
+above records the relative-path account as "now proven". **It is not supported by
+what is on disk.** `/home/hack-t36/Athena/.claude/settings.json` is
+**byte-identical** to the committed `athena-os/.claude/settings.json` (`diff`
+clean) and shares its mtime to the nanosecond (`13:06:05.628374302`), while the
+`.claude/` directory containing it is stamped `15:44` — so the cwd file is a
+**mtime-preserving copy** of the committed one, and it has carried **absolute**
+paths throughout. No relative-path version of it exists on disk at any point.
+**Two changes were made and only one was credited:** the file was rewritten *and*
+placed at the cwd, the fire followed, and the rewrite was recorded as the proven
+cause. The evidence points at **location** — the copy fired 8 minutes after it
+appeared, and the same file had sat un-loaded two levels below the cwd until
+then. The file did not need rewriting; it needed to be somewhere the client
+looks. This is 4b's own lesson repeating: 4b closed only once `.mcp.json` was
+moved **to** the workspace root.
+
+**Why this observation establishes a mechanism rather than another single data
+point.** The only prior fire in the cache dir is `session-DIAG-manual.fired` — a
+hand-triggered invocation, not a genuine session id, so it proved the hook *script*
+worked but not that the *harness* would spawn it. This session's fire was taken cold,
+from the spawn cwd where the old relative paths demonstrably do not resolve, with no
+manual priming — and it fired anyway. **That independence from the earlier
+circumstances is what converts the confirmation from one observation into an
+established mechanism.**
 
 **The number Phase 6 exists to produce** (checkpoint 3, measured on
 apache/superset at SHA `a05a0999` with tiktoken cl100k): to understand a file's
@@ -80,9 +162,14 @@ distribution is the deliverable, not the pooled figure.
 and the one that decides whether any of it is real in practice: it makes the
 graph get consulted *before* a read rather than only when someone remembers to
 ask. Without it the saving is theoretical — a tool nobody invokes saves
-nothing. **Open design decision, deliberately not defaulted into: nudge (soft
-suggestion, overridable) vs strict (blocks the first raw source read of a
-session and redirects it to the graph).** Decide that before building.
+nothing. **[SUPERSEDED 2026-09-01, kept per §17.16 — the record trailed the code.] The
+design decision below was already taken and BUILT when this paragraph still asked
+for it: `backend/scripts/athena_read_hook.py` exists, **strict** was chosen, and it
+carries 15 tests (suite 1,181 -> 1,196). What remains is not the choice but the
+extension-layer confirmation — see the scope note above.** ~~Open design decision,
+deliberately not defaulted into: nudge (soft suggestion, overridable) vs strict
+(blocks the first raw source read of a session and redirects it to the graph).
+Decide that before building.~~
 
 **If you are on a new machine**, `.mcp.json` is not in the repo and must be
 recreated first — it lives at the VSCode workspace root, outside the repo. On
@@ -114,7 +201,7 @@ loses its first half hour rediscovering them.
 | **MCP registration is config-file based** | The `claude` CLI is **not installed**; this is the VSCode extension. Register via `.mcp.json` at the workspace root. Write it with `json.dump`, **not a bash heredoc** — heredocs collapse escaped backslashes in Windows paths and produce invalid JSON that fails silently. |
 | **Vite binds IPv6 only** | `localhost:5173` works; `127.0.0.1:5173` is **refused**. |
 | **Dev servers are started by hand** | backend `:8000` (uvicorn `--reload`), frontend `:5173` (vite). |
-| **Working directory** | `D:\Athena\Athenathena-os` (the git repo). The VSCode workspace root is `d:\Athena`, one level up — that is where `.mcp.json` lives, outside the repo. |
+| **Working directory** | **On this Linux VM the git repo is `/home/hack-t36/Athena/Athena/athena-os`, and the VSCode workspace root — the cwd Claude Code is spawned from — is `/home/hack-t36/Athena`, TWO levels up.** Both `.mcp.json` **and** `.claude/settings.json` must live at that workspace root to be loaded; a `.claude/` inside the repo is **never read**, which is what kept checkpoint 5's hook dormant. Keep the committed copy in the repo and mirror it up. *(Historical, Windows — superseded by the Linux move: `D:\Athena\Athenathena-os` (the git repo). The VSCode workspace root is `d:\Athena`, one level up — that is where `.mcp.json` lives, outside the repo.)* |
 
 ---
 
@@ -153,7 +240,7 @@ re-verify before trusting it.
 |---|---|
 | **Branch** | `codebase-agent/phase4-5-and-682` |
 | **HEAD before this handoff commit** | `106e90b` — "Give comprehension cards their first user surface" |
-| **Backend suite** | **1,180 passed / 1 skipped / 0 failed**, full run 2026-08-24 (18m27s), against superset at `a05a0999`. Green. |
+| **Backend suite** | **1,196 recorded** = the 1,180 passed / 1 skipped run of 2026-08-24 (18m27s, superset `a05a0999`) plus checkpoint 5's 15 `test_read_hook.py` tests; the Linux column reconciles at 1,181 before those. **[§17.36 stamp: CARRIED from the checkpoint 5 row in `decisions.md`, NOT re-measured. The last figure actually observed end-to-end is 1,181.]** |
 | **Frontend** | 231 vitest across 18 files + 8 Playwright across 7 files; `npx tsc --noEmit` clean |
 | **Migrations** | 37, chain intact, head `d9f014c8a26b` |
 | **Superset graph** | re-ingested to `a05a0999`, **6,584 files / 61,559 imports** (was `e2bb33b1`, 6,523 / 60,873) |

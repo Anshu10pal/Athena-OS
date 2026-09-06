@@ -1,10 +1,11 @@
 import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import {
-  api, DirGraphResponseT, GraphResponseT, RankedFileT, RankingResponseT, RepoJobT, RepoT, ScorerT,
+import { api, DirGraphResponseT, GraphResponseT, RankedFileT, RankingResponseT, RepoJobT, RepoT, ScorerT,
   SubsystemAlgorithmT, SubsystemsResponseT, OverviewT, HealthResponseT, HealthDirectoriesT,
-  FindingsResponseT, streamJobProgress, timeAgo,
-} from "../lib/api";
+  FindingsResponseT, streamJobProgress, timeAgo, fetchContext } from "../lib/api";
+import { ContextStateT, fileIdFromParams, loadContext } from "../lib/contextLoad";
+import { contextParams, verifyFingerprint } from "../lib/contextNav";
+import NeighborhoodView from "../components/NeighborhoodView";
 import {
   applyFilterStateToSearchParams,
   deriveLanguages,
@@ -65,7 +66,7 @@ type SortKey = keyof Pick<
 // where the full graph exists only behind an explicit opt-in that warns
 // about exactly the failure H5 recorded. Different default, different
 // layout, different question answered -- see components/DependencyGraph.tsx.
-type ViewT = "overview" | "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph" | "findings";
+type ViewT = "overview" | "reading" | "architecture" | "matrix" | "focus" | "layers" | "subsystems" | "depgraph" | "findings" | "context";
 
 const COLUMNS: { key: SortKey; label: string; align?: "left" | "center" | "right" }[] = [
   { key: "score", label: "Score" },
@@ -112,6 +113,13 @@ const VIEWS: { value: ViewT; label: string; keyedOnFiles: boolean }[] = [
   // filters nor the file detail panel has anything to act on.
   { value: "findings", label: "Findings", keyedOnFiles: false },
   { value: "focus", label: "Focus", keyedOnFiles: true },
+  // D11: FALSE, and the flag's own test is why -- "could a file filter
+  // meaningfully apply to what this view renders" answers no for a view that
+  // renders ONE file's neighbourhood. Losing the DetailPanel with it is
+  // intended: Context is its own detail surface. The flag conflates the filter
+  // bar and the panel; it is deliberately NOT split here, because splitting on
+  // speculation is the wrong order. If ck3 needs the panel, split then.
+  { value: "context", label: "Context", keyedOnFiles: false },
 ];
 
 const FILE_KEYED_VIEWS = new Set<ViewT>(VIEWS.filter((v) => v.keyedOnFiles).map((v) => v.value));
@@ -338,6 +346,7 @@ export default function RepoDetail() {
   const [sortDesc, setSortDesc] = useState(true);
   const [showGlossary, setShowGlossary] = useState(false);
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
+  const [contextState, setContextState] = useState<ContextStateT>({ status: "idle" });
   const [mermaidFileId, setMermaidFileId] = useState<number | null>(null);
   // Phase H4: set by clicking a Matrix cell, consumed by the Architecture
   // map to isolate that pair -- shared selection state, same seam used
@@ -462,6 +471,31 @@ export default function RepoDetail() {
       .catch(() => setDirectories(null));
   };
 
+  // D9: the URL carries an INTEGER file id, not a path. A path has nothing to
+  // resolve against on a cold load, and translating one through /ranking costs
+  // 2.85 MB on Superset. The PATH is what gets displayed -- the endpoint
+  // returns it -- so the encoding never reaches the user.
+  const contextFileId = fileIdFromParams(searchParams);
+  const contextFp = searchParams.get("fp");
+
+  // ONE builder for the query string (lib/contextNav.ts), so a link made by a
+  // node click and one made by the empty state cannot disagree about format.
+  const navigateToContext = (fileId: number, path: string) => {
+    const next = new URLSearchParams(searchParams);
+    for (const [k, v] of contextParams(fileId, path)) next.set(k, v);
+    setSearchParams(next, { replace: false });
+  };
+
+  // D10: NOT `loadRanking`'s `.catch(() => setX(null))`. That shape cannot tell
+  // "not in the graph snapshot" (409) from "no file selected", and the two need
+  // different actions from the user. The discrimination itself lives in
+  // lib/contextLoad.ts so it can be tested without mounting anything.
+  const loadContextView = (fileId: number | null) => {
+    if (fileId !== null) setContextState({ status: "loading" });
+    loadContext(id!, fileId, { fetchContext: (r, f) => fetchContext(r, f) })
+      .then(setContextState);
+  };
+
   const loadRanking = (activeScorer: ScorerT) => {
     api<RankingResponseT>(`/api/repos/${id}/ranking?scorer=${activeScorer}`)
       .then(setRanking)
@@ -552,6 +586,14 @@ export default function RepoDetail() {
     loadDirGraph(scorer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, scorer]);
+
+  // Keyed on the URL's file id, so a shared /context link cold-loads correctly
+  // and a selection change refetches. Not keyed on `view`: leaving the tab and
+  // coming back should not re-request data that has not changed.
+  useEffect(() => {
+    loadContextView(contextFileId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, contextFileId]);
 
   // Phase G2/G4: filter state, the active scorer, and the active view all
   // round-trip through the URL, so a filtered/selected view is reloadable
@@ -1476,6 +1518,135 @@ export default function RepoDetail() {
             onColorModeChange={setColorMode}
           />
         </ViewBoundary>
+      )}
+
+      {/* ck2: a definition list proving the data arrives. NO chart, no badge
+          design, no ratio framing -- ck4 decides labelling, and the divisor
+          band recorded at ck1d means the honest label differs by neighbourhood
+          size. Raw values only, so nothing here has to be unlearned later. */}
+      {view === "context" && (
+        <div className="card p-5 space-y-3">
+          <div className="flex items-baseline gap-3">
+            <h2 className="text-sm font-semibold">Context</h2>
+            <span className="font-mono text-[10px] uppercase tracking-widest text-fog">
+              one file&rsquo;s dependency neighbourhood
+            </span>
+          </div>
+
+          {contextState.status === "idle" && (
+            <div className="space-y-3" data-testid="ctx-empty">
+              <p className="text-sm text-fog">
+                Pick a file to see what it depends on, what depends on it, and which
+                subsystems that crosses.
+              </p>
+
+              <div className="space-y-1">
+                <h3 className="font-mono text-[10px] uppercase tracking-widest text-fog">
+                  Most connected files
+                </h3>
+                {(ranking?.files ?? []).slice(0, 8).map((f) => (
+                  <button key={f.file_id} data-testid="ctx-empty-top"
+                          className="block font-mono text-[11px] text-left underline decoration-dotted"
+                          onClick={() => navigateToContext(f.file_id, f.path)}>
+                    <span className="text-fog">#{f.rank}</span> {f.path}
+                  </button>
+                ))}
+              </div>
+
+              {/* D23. Rank ordering reaches ONLY the flattering end:
+                  superset/__init__.py (524 connections) and utils/core.py (355)
+                  sit at ranks 1 and 3, while the honest floor --
+                  scripts/__init__.py, 0 connections -- is rank 3,736 of 6,584
+                  and can never appear in a top-N list. A starting point that can
+                  only reach hubs misrepresents the feature by construction, by a
+                  mechanism that looks neutral. So the floor is offered
+                  explicitly, and labelled as what it is. */}
+              <div className="space-y-1 pt-1">
+                <h3 className="font-mono text-[10px] uppercase tracking-widest text-fog">
+                  A barely-connected file — the other end of the range
+                </h3>
+                <button data-testid="ctx-empty-floor"
+                        className="block font-mono text-[11px] text-left underline decoration-dotted"
+                        onClick={() => navigateToContext(1107, "scripts/__init__.py")}>
+                  scripts/__init__.py
+                </button>
+                <p className="text-[11px] text-fog max-w-prose">
+                  Ranked 3,736 of 6,584, with no resolved connections. Worth opening
+                  before trusting the view on a hub: the graph is not always cheaper
+                  than reading the file, and this is where it is not.
+                </p>
+              </div>
+            </div>
+          )}
+          {contextState.status === "loading" && <p className="text-sm text-fog">Loading&hellip;</p>}
+
+          {/* D10: three DISTINCT failure states. 404 means the id is wrong and
+              re-ingesting will not help; 409 means the id is right and the
+              graph is behind, where re-ingesting is exactly what helps. */}
+          {contextState.status === "notFound" && (
+            <p className="text-sm">
+              <strong>No such file in this repo.</strong> The id may be from a link made
+              against an earlier ingest. {contextState.message}
+            </p>
+          )}
+          {contextState.status === "notInSnapshot" && (
+            <p className="text-sm">
+              <strong>This file is not in the graph snapshot.</strong> It exists in the repo
+              but the ingest is behind it &mdash; re-ingest to include it. {contextState.message}
+            </p>
+          )}
+          {contextState.status === "error" && (
+            <p className="text-sm"><strong>Could not load context.</strong> {contextState.message}</p>
+          )}
+
+          {contextState.status === "ready" && (() => {
+            const data = contextState.data as unknown as {
+              path: string; file_id: number;
+            };
+            const verdict = verifyFingerprint(contextFp, data.path);
+            // D14: NEVER a silent substitution. A reassigned id renders a
+            // different file's neighbourhood, correctly computed and entirely
+            // plausible, and the fingerprint is the only signal.
+            if (verdict.status === "mismatch") {
+              return (
+                <div className="card p-4 space-y-2" data-testid="ctx-fp-mismatch">
+                  <h3 className="text-sm font-semibold">
+                    This link points at a file that has changed
+                  </h3>
+                  <p className="text-sm text-fog">
+                    The link was made for a different path than the one this id now
+                    resolves to. File ids are reassigned when a repository is
+                    re-ingested, so a saved link can end up pointing somewhere else.
+                    Nothing is being shown for it, because a plausible
+                    neighbourhood for the wrong file is worse than none.
+                  </p>
+                  <dl className="font-mono text-[11px] grid grid-cols-[10rem_1fr] gap-x-3">
+                    <dt className="text-fog">link fingerprint</dt><dd>{verdict.expected}</dd>
+                    <dt className="text-fog">id now resolves to</dt><dd className="break-all">{verdict.actualPath}</dd>
+                    <dt className="text-fog">its fingerprint</dt><dd>{verdict.actual}</dd>
+                  </dl>
+                  <button className="font-mono text-[11px] underline"
+                          onClick={() => navigateToContext(data.file_id, data.path)}>
+                    show {verdict.actualPath} anyway
+                  </button>
+                </div>
+              );
+            }
+            return (
+              <NeighborhoodView
+                envelope={contextState.data as never}
+                onNavigate={navigateToContext}
+              />
+            );
+          })()}
+
+          {/* ck2's raw definition list is REMOVED at ck3b-2, not hidden.
+              It showed view_tokens / connected_files_tokens / saved_tokens /
+              saved_ratio, and ck3b-2 binds "NO token numbers on screen -- that
+              is ck4". It was a scaffold to prove the data arrived; the graph
+              now does that job. ck4 reintroduces token figures deliberately,
+              with a label the ck3a-quater envelope (0.92-1.09) can support. */}
+        </div>
       )}
 
       {files.length > 0 && view === "focus" && id && (
